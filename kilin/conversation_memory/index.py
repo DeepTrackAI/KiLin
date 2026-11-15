@@ -47,6 +47,7 @@ True
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
@@ -79,6 +80,15 @@ _MAX_CONVERSATION_BYTES: Final[int] = 128 * 1024 * 1024
 _MAX_MESSAGE_CHARS: Final[int] = 12_000
 _BATCH_SIZE: Final[int] = 24
 _WORDS: Final[re.Pattern[str]] = re.compile(r"\s+")
+# A diagnostics-only checkpoint edit changes file metadata but not memory.
+# Cache only that verified observation, never records or source text. A new
+# process may recheck once; no persistent sidecar or index rewrite is needed.
+_OBSERVED_MANIFESTS: OrderedDict[
+    tuple[str, str], tuple[
+        tuple[tuple[str, int, int], ...], str, str, tuple[int, int]
+    ]
+] = OrderedDict()
+_MAX_OBSERVED_PROJECTS: Final[int] = 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,7 +285,7 @@ def _eligible(
     if policy is None or policy.memory_indexing == "never":
         return False, 0
     rating = feedback.get(turn_uuid, role)
-    if rating.reaction == "disliked":
+    if rating.reaction == "disliked" or rating.excluded:
         return False, 0
     selected = rating.selected
     if role == "assistant" and config.conversation_memory.answers == "none":
@@ -530,12 +540,26 @@ def synchronize_memory(
         _decode(saved, model_identity, manifest, digest, feedback.revision)
         if saved is not None else None
     )
+    cache_key = (str(root), model_identity)
+    index_stat = path.stat() if path.is_file() else None
+    index_signature = (
+        (index_stat.st_size, index_stat.st_mtime_ns)
+        if index_stat is not None else (-1, -1)
+    )
     if (
         saved is not None and previous is not None
         and saved["manifest"] == [list(item) for item in manifest]
         and saved["policy_digest"] == digest
         and saved["feedback_revision"] == feedback.revision
     ):
+        return previous
+    if (
+        previous is not None
+        and _OBSERVED_MANIFESTS.get(cache_key) == (
+            manifest, digest, feedback.revision, index_signature
+        )
+    ):
+        _OBSERVED_MANIFESTS.move_to_end(cache_key)
         return previous
     records = _read_records(root, manifest, config, feedback)
     # Detailed traces share the conversation JSON. An unrelated progress
@@ -548,7 +572,14 @@ def synchronize_memory(
         and saved["policy_digest"] == digest
         and saved["feedback_revision"] == feedback.revision
     ):
+        _OBSERVED_MANIFESTS[cache_key] = (
+            manifest, digest, feedback.revision, index_signature
+        )
+        _OBSERVED_MANIFESTS.move_to_end(cache_key)
+        if len(_OBSERVED_MANIFESTS) > _MAX_OBSERVED_PROJECTS:
+            _OBSERVED_MANIFESTS.popitem(last=False)
         return previous
+    _OBSERVED_MANIFESTS.pop(cache_key, None)
     text_by_fingerprint = {
         item.fingerprint: item.text for item in records
     }

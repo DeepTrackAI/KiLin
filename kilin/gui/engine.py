@@ -166,6 +166,7 @@ from kilin.project_files import (
 )
 from kilin.conversation_format import conversation_state
 from kilin.conversation_memory.feedback import FeedbackStore
+from kilin.conversation_memory.inspection import inspect_memory_messages
 from kilin.conversation_memory.persistence import (
     memory_index_path,
     read_memory_index,
@@ -402,6 +403,10 @@ class ChatEngine:
         Return a revisioned snapshot of user feedback for a project.
     save_message_feedback(request)
         Update one saved question or answer with revision checking.
+    memory_messages(project, offset=0)
+        Inspect saved messages and their current memory eligibility.
+    set_memory_exclusion(request)
+        Exclude or restore one memory without changing its rating.
     memory_status(project)
         Report persisted memory-index counts without loading models.
     sync_memory_index(project)
@@ -2470,7 +2475,11 @@ class ChatEngine:
 
         return {
             turn_uuid: {
-                role: asdict(value) for role, value in ratings.items()
+                role: {
+                    "saved": value.saved, "reaction": value.reaction,
+                    **({"excluded": True} if value.excluded else {}),
+                }
+                for role, value in ratings.items()
             }
             for turn_uuid, ratings in snapshot.entries.items()
         }
@@ -2525,6 +2534,88 @@ class ChatEngine:
             self.memory_status(project)
         except Exception as error:
             self._send("message_feedback", **response, error=str(error))
+
+    def memory_messages(
+        self, project: str, offset: int = 0
+    ) -> None:
+        """Inspect active saved messages without indexing or model calls.
+
+        Parameters
+        ----------
+        project: str
+            Active workspace identity supplied by the frontend.
+        offset: int, optional
+            Starting offset in the bounded, newest-first inventory.
+
+        """
+
+        try:
+            root = self._memory_project(project)
+            page = inspect_memory_messages(
+                root, effective_project_type(root), offset=offset
+            )
+            self._send(
+                "memory_messages", project=str(root), offset=offset,
+                total=page.total, revision=page.revision,
+                messages=page.messages,
+            )
+        except Exception as error:
+            self._send(
+                "memory_messages", project=project, offset=offset,
+                error=str(error),
+            )
+
+    def set_memory_exclusion(self, request: object) -> None:
+        """Change explicit exclusion with project and revision guards.
+
+        Parameters
+        ----------
+        request: object
+            Validated workspace, conversation, UUID, role, boolean state,
+            feedback revision and correlated request identifier.
+
+        Notes
+        -----
+        An exclusion is kept in the authoritative feedback file. Existing
+        Save/Like/Dislike selections are preserved under the same file lock.
+        The next ordinary memory sync removes excluded index records.
+
+        """
+
+        data = request if isinstance(request, dict) else {}
+        response = {
+            "project": data.get("project"),
+            "turn_uuid": data.get("turn_uuid"),
+            "role": data.get("role"),
+            "request_id": data.get("request_id"),
+        }
+        try:
+            if set(data) != {
+                "project", "conversation_id", "turn_uuid", "role",
+                "excluded", "revision", "request_id",
+            }:
+                raise ValueError("Invalid memory exclusion request.")
+            if (type(data["request_id"]) is not int
+                    or data["request_id"] < 1
+                    or type(data["excluded"]) is not bool):
+                raise ValueError("Invalid memory exclusion request.")
+            if self._answering:
+                raise RuntimeError("Finish the current answer first.")
+            root = self._memory_project(data["project"])
+            snapshot = FeedbackStore(root).update(
+                data["conversation_id"], data["turn_uuid"],
+                data["role"], saved=None, reaction=None,
+                excluded=data["excluded"],
+                expected_revision=data["revision"],
+            )
+            self._send(
+                "memory_exclusion", **response,
+                revision=snapshot.revision,
+                entries=self._feedback_entries(snapshot),
+            )
+            self.memory_status(data["project"])
+        except Exception as error:
+            self._send("memory_exclusion", **response, error=str(error))
 
     def memory_status(self, project: str) -> None:
         """Read lightweight derived memory-index counts without embedding.
@@ -5121,6 +5212,12 @@ def main() -> None:
                         engine.conversation_feedback(command.get("project"))
                     elif action == "save_message_feedback":
                         engine.save_message_feedback(command.get("request"))
+                    elif action == "memory_messages":
+                        engine.memory_messages(
+                            command.get("project"), command.get("offset", 0)
+                        )
+                    elif action == "set_memory_exclusion":
+                        engine.set_memory_exclusion(command.get("request"))
                     elif action == "memory_status":
                         engine.memory_status(command.get("project"))
                     elif action == "sync_memory_index":

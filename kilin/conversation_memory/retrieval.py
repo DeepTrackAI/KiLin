@@ -46,7 +46,7 @@ Examples
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import sqrt
+from math import log1p, sqrt
 import re
 from typing import Final
 
@@ -62,8 +62,10 @@ _STOP: Final[frozenset[str]] = frozenset((
     "then", "your", "their", "also", "when", "does", "there", "are",
     "for", "you", "how", "can", "our", "was", "has", "its", "not",
 ))
-_MIN_SEMANTIC: Final[float] = 0.16
-_MIN_LEXICAL: Final[float] = 0.20
+# Weak semantic similarity alone is especially noisy for small local models.
+# An exact historical lookup instead requires distinctive lexical overlap.
+_MIN_SEMANTIC: Final[float] = 0.48
+_MIN_LEXICAL: Final[float] = 0.38
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +190,7 @@ def search_memory(
     max_tokens: int,
     excluded_uuids: frozenset[str] = frozenset(),
     query_text: str | None = None,
+    recall_topic: str | None = None,
 ) -> tuple[MemoryHit, ...]:
     """Search and budget an independent conversation-memory index.
 
@@ -207,6 +210,9 @@ def search_memory(
         Recent/related turns already supplied as live chat context.
     query_text: str | None, optional
         Embedding-model-formatted query. Defaults to the raw question.
+    recall_topic: str | None, optional
+        Explicit historical-lookup topic. When set, verify occurrences
+        lexically against saved records without calling the embedder.
 
     Returns
     -------
@@ -228,32 +234,88 @@ def search_memory(
     ]
     if not candidates:
         return ()
-    query_vector = embedding_session.embed_query(
-        question if query_text is None else query_text
-    )
-    terms = _terms(question)
     ranked: list[tuple[float, float, MemoryRecord]] = []
-    for record in candidates:
-        vector = index.vectors.get(record.fingerprint)
-        if vector is None:
-            continue
-        semantic = max(0.0, _similarity(query_vector, vector))
-        record_terms = _terms(record.text)
-        lexical = (
-            len(terms & record_terms) / len(terms)
-            if terms and record_terms else 0.0
+    if recall_topic is not None:
+        # The question itself is not evidence that a discussion occurred.
+        # Only actual saved-message terms can establish a match.
+        topic_terms = _terms(recall_topic)
+        if not topic_terms:
+            return ()
+        for record in candidates:
+            found = _terms(record.text) & topic_terms
+            required = max(1, (3 * len(topic_terms) + 3) // 4)
+            if len(found) >= required:
+                relevance = len(found) / len(topic_terms)
+                ranked.append((relevance, relevance, record))
+        # A matching question establishes that the researcher asked it.
+        # Its eligible answer may supply context, but is never a verified
+        # scientific conclusion. A disliked/excluded answer is absent.
+        matched_questions = {
+            record.turn_uuid for _, _, record in ranked
+            if record.role == "user"
+        }
+        for record in candidates:
+            if (record.role == "assistant"
+                    and record.turn_uuid in matched_questions
+                    and not any(item[2] == record for item in ranked)):
+                ranked.append((0.01, 0.01, record))
+        ranked.sort(key=lambda item: (
+            -int(item[2].role == "user"), -item[0],
+            item[2].timestamp, item[2].turn_uuid,
+        ))
+    else:
+        query_vector = embedding_session.embed_query(
+            question if query_text is None else query_text
         )
-        if semantic < _MIN_SEMANTIC and lexical < _MIN_LEXICAL:
-            continue
-        relevance = 0.8 * semantic + 0.2 * lexical
-        priority = 0.025 if record.priority == 1 else 0.0
-        if record.priority == 2:
-            priority = 0.05
-        ranked.append((relevance + priority, relevance, record))
-    ranked.sort(key=lambda item: (
-        -item[0], -item[1], item[2].timestamp,
-        item[2].turn_uuid, item[2].role,
-    ))
+        terms = _terms(question)
+        document_terms = [_terms(item.text) for item in candidates]
+        term_frequency = {
+            term: sum(term in words for words in document_terms)
+            for term in terms
+        }
+        weights = {
+            term: log1p((len(candidates) + 1) / (count + 1))
+            for term, count in term_frequency.items()
+        }
+        denominator = sum(weights.values())
+        scored: list[tuple[
+            float, float, MemoryRecord, float, float
+        ]] = []
+        for record, record_terms in zip(candidates, document_terms):
+            vector = index.vectors.get(record.fingerprint)
+            if vector is None:
+                continue
+            semantic = max(0.0, _similarity(query_vector, vector))
+            lexical = (
+                sum(weights[term] for term in terms & record_terms)
+                / denominator if denominator else 0.0
+            )
+            if semantic < _MIN_SEMANTIC and lexical < _MIN_LEXICAL:
+                continue
+            relevance = 0.75 * semantic + 0.25 * lexical
+            priority = 0.025 if record.priority == 1 else 0.0
+            if record.priority == 2:
+                priority = 0.05
+            scored.append((
+                relevance + priority, relevance, record, semantic, lexical
+            ))
+        # If distinctive query words have a good matching candidate,
+        # avoid filling the context with high-cosine but zero-overlap
+        # distractors produced by coarse or anisotropic local embeddings.
+        lexical_anchors = [
+            item[3] for item in scored if item[4] >= 0.75
+        ]
+        anchor_semantic = max(lexical_anchors, default=None)
+        ranked = [
+            (score, relevance, record)
+            for score, relevance, record, semantic, lexical in scored
+            if (anchor_semantic is None or lexical >= 0.05
+                or semantic > anchor_semantic + 0.10)
+        ]
+        ranked.sort(key=lambda item: (
+            -item[0], -item[1], item[2].timestamp,
+            item[2].turn_uuid, item[2].role,
+        ))
     result: list[MemoryHit] = []
     displayed_fingerprints: set[str] = set()
     for score, relevance, record in ranked:
@@ -261,7 +323,8 @@ def search_memory(
             break
         # Separate feedback remains attached to each occurrence, while
         # identical text need only appear once in the answering prompt.
-        if record.fingerprint in displayed_fingerprints:
+        if (recall_topic is None
+                and record.fingerprint in displayed_fingerprints):
             continue
         # Account for the rendered header and origin metadata, not only text.
         hit = MemoryHit(record, record.text, relevance, score)

@@ -969,3 +969,17 @@ details[open]::details-content { block-size: auto; }
   pointer-events: none;
 }
 .setting-help-popup.is-visible { display: block; }
+
+/* Project memory management is deliberately subordinate to policy controls. */
+.memory-management { margin-top: 20px; border-top: 1px solid var(--line); padding-top: 12px; }
+.memory-management h4 { margin: 0 0 7px; font-size: 14px; }
+.memory-messages-list { max-height: 310px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+.memory-manage-row { display: flex; align-items: center; gap: 12px; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+.memory-manage-row:last-child { border-bottom: 0; }
+.memory-manage-details { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+.memory-manage-title, .memory-manage-preview { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.memory-manage-title { font-size: 12px; font-weight: 650; }
+.memory-manage-preview { font-size: 12px; color: var(--muted); }
+.memory-manage-state { font-size: 11px; color: var(--muted); }
+.memory-manage-action { flex: 0 0 auto; font-size: 12px; }
+.memory-messages-pages { margin-top: 8px; }

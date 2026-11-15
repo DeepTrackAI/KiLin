@@ -1375,6 +1375,7 @@ function showSettingsTab(name) {
   }
   if (name === "memory" && bridge && ready && openProjectPath) {
     bridge.requestMemoryStatus(openProjectPath);
+    requestMemoryMessages();
   }
   for (const tab of document.querySelectorAll(".settings-tab")) {
     const selected = tab.dataset.tab === name;
@@ -1714,6 +1715,9 @@ let feedbackData = { project: "", revision: "", entries: {} };
 let feedbackSave = { nextId: 0, pending: null };
 let memoryIndexState = null;
 let memorySyncPending = false;
+let memoryMessagePage = null;
+let memoryMessagesRequestedOffset = 0;
+let memoryExcludeSave = {nextId: 0, pending: null};
 let memoryNavigation = null;
 let displayedMemoryProject = "";
 let displayedMemoryRevision = "";
@@ -2516,6 +2520,7 @@ function openModels() {
   }
   if (settingsTab === "memory" && bridge && ready && openProjectPath) {
     bridge.requestMemoryStatus(openProjectPath);
+    requestMemoryMessages();
   }
   byId("models-panel").classList.remove("hidden");
   byId("close-models").focus();
@@ -5484,6 +5489,149 @@ function syncMemoryIndex() {
 }
 
 /**
+ * Load an authoritative, paged list of saved messages from the core.
+ * @param offset Starting offset, default zero.
+ */
+function requestMemoryMessages(offset = 0) {
+  if (!bridge || !ready || !openProjectPath) return;
+  memoryMessagesRequestedOffset = offset;
+  if (memoryMessagePage?.project !== openProjectPath) {
+    memoryMessagePage = null;
+    renderMemoryMessages();
+  }
+  byId("memory-messages-status").textContent = "Loading saved messages…";
+  bridge.requestMemoryMessages(openProjectPath, offset);
+}
+
+/**
+ * Render text-only, project-scoped memory rows without interpreting HTML.
+ */
+function renderMemoryMessages() {
+  const list = byId("memory-messages-list");
+  list.replaceChildren();
+  const page = memoryMessagePage?.project === openProjectPath
+    ? memoryMessagePage : null;
+  const status = byId("memory-messages-status");
+  const previous = byId("memory-previous");
+  const next = byId("memory-next");
+  const items = Array.isArray(page?.messages) ? page.messages : [];
+  previous.disabled = !page || !items.length || busy
+    || memoryExcludeSave.pending || page.offset === 0;
+  next.disabled = !page || !items.length || busy
+    || memoryExcludeSave.pending
+    || page.offset + items.length >= page.total;
+  if (!page) {
+    status.textContent = "Open a project to inspect saved messages.";
+    return;
+  }
+  if (page.error) {
+    status.textContent = page.error;
+    status.classList.add("tool-error");
+    return;
+  }
+  status.classList.remove("tool-error");
+  if (!page.total) {
+    status.textContent = "No saved messages in active conversations.";
+    return;
+  }
+  const end = page.offset + items.length;
+  status.textContent = `Showing ${page.offset + 1}–${end} of ${page.total}`;
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "memory-manage-row";
+    const details = document.createElement("div");
+    details.className = "memory-manage-details";
+    const title = document.createElement("span");
+    title.className = "memory-manage-title";
+    const role = item.role === "user" ? "Question" : "Answer";
+    title.textContent = `${item.conversation_name} · Turn `
+      + `${item.turn_number} — ${role}`;
+    title.title = title.textContent;
+    const preview = document.createElement("span");
+    preview.className = "memory-manage-preview";
+    preview.textContent = item.preview;
+    const state = document.createElement("span");
+    state.className = "memory-manage-state";
+    state.textContent = {
+      eligible: "Eligible", excluded: "Excluded",
+      disliked: "Disliked", policy: "Not indexed by policy",
+    }[item.status] || "Not indexed";
+    details.append(title, preview, state);
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "secondary memory-manage-action";
+    action.textContent = item.excluded ? "Restore" : "Exclude";
+    action.title = item.excluded
+      ? "Allow this message under current project and intent policies"
+      : "Exclude this message from future memory retrieval";
+    action.disabled = busy || Boolean(memoryExcludeSave.pending);
+    action.addEventListener("click", () => setMemoryExclusion(item));
+    row.append(details, action);
+    list.append(row);
+  }
+}
+
+/**
+ * Accept only the requested project and page, discarding stale responses.
+ * @param data Core inventory response.
+ */
+function receiveMemoryMessages(data) {
+  if (data.project !== openProjectPath
+      || data.offset !== memoryMessagesRequestedOffset) return;
+  memoryMessagePage = data;
+  renderMemoryMessages();
+}
+
+/**
+ * Request a revision-checked explicit exclusion without changing ratings.
+ * @param item Saved message from the authoritative inventory.
+ */
+function setMemoryExclusion(item) {
+  const page = memoryMessagePage;
+  if (!bridge || busy || !ready || memoryExcludeSave.pending
+      || page?.project !== openProjectPath || !page.revision) return;
+  const requestId = ++memoryExcludeSave.nextId;
+  memoryExcludeSave.pending = {
+    requestId, project: openProjectPath,
+    turnUuid: item.turn_uuid, role: item.role,
+  };
+  renderMemoryMessages();
+  byId("memory-messages-status").textContent = "Saving exclusion…";
+  bridge.setMemoryExclusion(JSON.stringify({
+    project: openProjectPath, conversation_id: item.conversation_id,
+    turn_uuid: item.turn_uuid, role: item.role,
+    excluded: !item.excluded, revision: page.revision,
+    request_id: requestId,
+  }));
+}
+
+/**
+ * Match an exclusion acknowledgement before refreshing saved memory state.
+ * @param data Correlated backend result.
+ */
+function receiveMemoryExclusion(data) {
+  const pending = memoryExcludeSave.pending;
+  if (!pending || data.project !== pending.project
+      || data.request_id !== pending.requestId
+      || data.turn_uuid !== pending.turnUuid
+      || data.role !== pending.role) return;
+  memoryExcludeSave.pending = null;
+  if (data.error) {
+    error.textContent = `Could not change memory exclusion: ${data.error}`;
+    error.classList.remove("hidden");
+    memoryMessagePage = null;
+    bridge.requestConversationFeedback(openProjectPath);
+  } else {
+    feedbackData = {
+      project: data.project, revision: data.revision,
+      entries: data.entries,
+    };
+    refreshFeedbackControls();
+  }
+  requestMemoryMessages(memoryMessagesRequestedOffset);
+}
+
+/**
  * Persist a single button action only for the matching project and turn.
  * @param button Feedback button associated with a completed turn.
  */
@@ -7270,6 +7418,9 @@ function onEvent(raw) {
       behaviorSave.pending = null;
       feedbackData = { project: "", revision: "", entries: {} };
       feedbackSave.pending = null;
+      memoryMessagePage = null;
+      memoryMessagesRequestedOffset = 0;
+      memoryExcludeSave.pending = null;
       memoryIndexState = null;
       memorySyncPending = false;
       memoryNavigation = null;
@@ -7395,6 +7546,10 @@ function onEvent(raw) {
     receiveFeedback(data);
   } else if (data.event === "message_feedback") {
     receiveFeedbackSave(data);
+  } else if (data.event === "memory_messages") {
+    receiveMemoryMessages(data);
+  } else if (data.event === "memory_exclusion") {
+    receiveMemoryExclusion(data);
   } else if (data.event === "memory_status") {
     receiveMemoryStatus(data);
   } else if (data.event === "memory_sync_started") {
@@ -7603,6 +7758,12 @@ byId("reset-memory-policy").addEventListener(
   "click", () => saveMemoryPolicy(true),
 );
 byId("sync-memory-index").addEventListener("click", syncMemoryIndex);
+byId("memory-previous").addEventListener("click", () => {
+  requestMemoryMessages(Math.max(0, memoryMessagesRequestedOffset - 100));
+});
+byId("memory-next").addEventListener("click", () => {
+  requestMemoryMessages(memoryMessagesRequestedOffset + 100);
+});
 byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
 byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
 byId("use-legacy-workspace").addEventListener(
@@ -8133,6 +8294,9 @@ function returnToLaunch() {
   feedbackSave.pending = null;
   memoryIndexState = null;
   memorySyncPending = false;
+  memoryMessagePage = null;
+  memoryMessagesRequestedOffset = 0;
+  memoryExcludeSave.pending = null;
   memoryNavigation = null;
   displayedMemoryProject = "";
   displayedMemoryRevision = "";

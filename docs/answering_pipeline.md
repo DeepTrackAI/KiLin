@@ -232,8 +232,17 @@ budget. Completed turns retain only the resulting navigation identities
 under `parameters.memory_references` (memory labels, UUID/role, and active
 conversation/one-based turn origins); source `Evidence` remains separate.
 When no memory hits are supplied, the original answer prompt is
-unchanged. Tool-owned answer generation does not receive blended memory or
-source passages. See [Conversation memory](conversation_memory.md).
+unchanged **for ordinary requests**. For explicit conversation-history
+questions (such as *"Did we discuss optical tweezers?"*), the core selects a
+non-tool, memory-reading default intent when the routed intent cannot read
+memory, and skips documentary retrieval. It checks eligible indexed saved
+messages lexically, including recent turns that already appear in chat
+context, without another model call. A matching question establishes that
+the topic was raised, not that its answer was accepted. When there is no
+match the model is instructed to report uncertainty, not to claim the topic
+was never discussed. Historical lookup remains subject to project and intent
+memory policies. Tool-owned answer generation does not receive blended
+memory or source passages. See [Conversation memory](conversation_memory.md).
 
 ## Retrieval options and evidence
 

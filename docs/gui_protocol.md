@@ -144,6 +144,8 @@ paths and source paths remain subject to downstream core validation.
 | `save_project_behavior` | `project`, `scope`, `intent_id`, `values`, `revision`, `request_id` | Save global, intent, capabilities, memory or intent_memory settings with project and revision checks; rebuild source indexes only for capabilities |
 | `conversation_feedback` | `project` | Read the active project's feedback revision and per-message ratings without changing its conversation files |
 | `save_message_feedback` | `request` | Write one saved-message selection/reaction with project, conversation ID, turn UUID, role, expected revision and positive request ID |
+| `memory_messages` | `project`, `offset` (optional, 0-based) | Inspect a page of active saved messages and current memory eligibility without an embedding call |
+| `set_memory_exclusion` | `request` | Exclude/restore one persisted message with project, turn, role, feedback revision and request ID checks |
 | `memory_status` | `project` | Read current project policy and last saved derived memory-index counts without a model call |
 | `sync_memory_index` | `project` | Synchronize independent conversation memory and emit progress/result; do not rebuild primary-source indexes |
 | `tool_settings` | None | List the open project's tools and their settings |
@@ -198,6 +200,25 @@ stored feedback. The core verifies the active project and saved turn,
 rejects stale revisions, and blocks writes while an answer is running.
 The page ignores late acknowledgements from other projects or requests;
 failed saves trigger a feedback reload. UUIDs persist across branches.
+
+`memory_messages(project, offset)` emits `memory_messages` with `project`,
+`offset`, `total`, `revision`, and up to 100 `messages`. Each message has
+`turn_uuid`, `role`, `conversation_id`, `conversation_name`, `turn_number`,
+`timestamp`, `preview`, `saved`, `reaction`, `excluded` and status (`eligible`,
+`excluded`, `disliked`, `policy`). The inventory reads the authoritative
+conversation checkpoints and feedback without embedding or modifying them.
+It includes unindexed/excluded messages and deduplicates inherited branch
+turns. Errors carry `project`, `offset`, and `error`.
+
+`set_memory_exclusion(request)` accepts exactly `project`, `conversation_id`,
+`turn_uuid`, `role`, boolean `excluded`, SHA-256 `revision`, and positive
+`request_id`. `memory_exclusion` returns matching identifiers and the new
+feedback revision/entries on success, or `error` on failure. Save and
+reaction are preserved; a stale revision is rejected. A successful update
+also triggers `memory_status`, but does not rebuild the derived index until
+next sync. Commands reject wrong projects, inactive origins, and concurrent
+answer generation. Exclusion affects long-term retrieval only, not ordinary
+chat history or original checkpoints.
 
 `memory_status(project)` emits `memory_status` with policy `enabled`,
 `indexed`, counts (`records`, `questions`, `answers`, `vectors`) and
@@ -415,7 +436,7 @@ can accompany an event.
 | Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether a saved folder is unavailable, `legacy`: previous installed-app root with candidate profiles, or empty); `projects_folder_cancelled` (native Browse dialog dismissed); `projects_folder_failed` (`message`: unable to save or old folder no longer exists) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `source_cards_applied` (validated settings and card counts), `source_cards_regenerated` (card counts); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `project_behavior` (validated project editor, defaults, revision, and correlated saved or error status); `settings_info` (validated core/tool descriptive catalog), `settings_info_failed` (metadata diagnostic only); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
-| Conversation memory | `conversation_feedback` (`project`, `revision`, `entries` or `error`); `message_feedback` (`request_id`, project, turn UUID, role, updated revision/entries or `error`); `memory_status` (last indexed counts, enabled, stale feedback); `memory_sync_started`, `memory_synced`, `memory_sync_failed` (project, embedded count or error status) |
+| Conversation memory | `conversation_feedback` (project, revision, entries or error); `message_feedback` (request ID, turn UUID/role, revision/entries or error); `memory_messages` (paged authoritative inventory); `memory_exclusion` (correlated exclusion update or error); `memory_status` (last indexed counts, enabled, stale feedback); `memory_sync_started`, `memory_synced`, `memory_sync_failed` (project, embedded count or error status) |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_activity` (`index`, `phase`, `label`, `started_ms`); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |

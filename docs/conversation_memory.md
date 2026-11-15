@@ -2,10 +2,12 @@
 
 This document describes the implemented conversation-memory core:
 **durable turn identities, authoritative feedback, disliked-answer context
-exclusion, and project-local semantic/lexical retrieval**. Project/intent
-policies are defined in [Configuration](configuration.md). The desktop GUI exposes Save/Like/Dislike for committed messages,
-project-wide and intent-specific memory settings, index status and explicit
-synchronization; the headless core provides the same underlying operations.
+exclusion, verified historical lookup, and project-local semantic/lexical
+retrieval**. Project/intent policies are defined in
+[Configuration](configuration.md). The desktop GUI exposes Save/Like/Dislike
+for committed messages, project-wide and intent-specific memory settings,
+explicit exclusion/restore, index status and synchronization; the headless
+core provides the same underlying operations.
 Source evidence and retrieved memory remain separate in answering prompts.
 
 ## Persistent turn identity
@@ -76,8 +78,15 @@ The UUID above illustrates the record shape, not a literal test fixture.
 Each message can be explicitly saved, and separately rated `neutral`,
 `liked`, or `disliked`. A Like implicitly selects the message for future
 memory indexing; a Dislike makes it ineligible even if it remains saved.
-A neutral, unsaved record is removed rather than stored. Feedback does
-not certify generated assertions as primary evidence.
+A neutral, unsaved, non-excluded record is removed rather than stored.
+An optional ``"excluded": true`` field independently forbids indexing or
+retrieval of that specific message, even when Save or Like remains selected.
+The field is omitted when false, so existing feedback files remain valid.
+Restoring an exclusion re-applies the saved project and intent policies; it
+does not necessarily force indexing. Resetting Save/Like/Dislike does not
+silently clear the exclusion, and exclusion does not delete the original
+conversation or remove that message from ordinary chat history. Feedback
+does not certify generated assertions as primary evidence.
 
 **Feedback belongs to the turn identity, not its text or conversation path.**
 When a branch retains a turn UUID, it observes the same feedback. When an
@@ -157,7 +166,7 @@ and turn UUID. Cross-project memory is never searched.
 
 Intent policies are applied to the intent originally saved with each turn.
 `never` forbids all indexing; `explicit` requires Save or Like; `automatic`
-uses the project's question and answer policy. A disliked message is never
+uses the project's question and answer policy. A disliked or explicitly excluded message is never
 indexed, even if saved. A disliked **assistant** response does not forbid
 independently indexing its paired user question. Answers marked as incomplete
 or containing only hidden thinking are not indexed. `answers = none` forbids
@@ -179,8 +188,13 @@ re-embeds. New or changed content is embedded using the **already loaded**
 embedding model and previously saved compatible vectors are reused. A model
 identity change invalidates incompatible vectors. The next eligible memory
 search catches up after a completed answer, archive, feedback edit or policy
-change; the GUI also exposes an explicit Update action when idle. Disabled memory
-does not read or embed prior conversation content.
+change; the GUI also exposes an explicit Update action when idle. A
+verified diagnostics-only edit to a conversation checkpoint is cached for
+the current process, avoiding repeated turn reads on subsequent syncs when
+policy, feedback, index and file metadata are unchanged. A process restart
+may require one new verification. Actual turn, feedback or policy changes
+invalidate this observation and are re-evaluated. Disabled memory does not
+read or embed prior conversation content.
 
 ## Strictly separate answer-prompt channels
 
@@ -188,8 +202,10 @@ does not read or embed prior conversation content.
 the current intent permits `memory.read`, and the normal answering model is
 producing the answer. Tool-owned generation retains its existing tool-context
 contract; no memory is inserted into its source evidence. Recent/relevant
-same-conversation history is a third, separately selected channel, and turns
-already shown through it are excluded from long-term memory hits.
+same-conversation history is a third, separately selected channel. For
+ordinary retrieval, turns already shown in current chat history are excluded
+from long-term memory hits; explicit historical verification includes them
+to avoid a false absence claim.
 
 The answering prompt uses **independent memory and source sections**:
 
@@ -209,11 +225,35 @@ budget (`max_hits` and estimated `max_tokens`) never reduces the source
 passage budget or renumbers citations. When no memory is returned, the
 source-only prompt remains byte-identical to the existing path.
 
-Only semantic/lexical relevance determines whether a message qualifies for
-retrieval; a bounded Save/Like boost changes the order of *relevant memory*
-hits, not source rankings. Memory query formatting has its own instruction
-instead of reusing the source-evidence retrieval instruction. There is no
-new summarizing model call. Memory is not used to validate citation claims.
+Ordinary memory retrieval combines semantic cosine similarity (75%) and
+weighted lexical overlap (25%). It requires semantic similarity of at least
+0.48 or lexical overlap of at least 0.38 before applying the small Save/Like
+priority boost. When a strong lexical anchor exists, high-cosine messages
+with no lexical overlap are suppressed unless their semantic score clearly
+exceeds the anchor's. These fixed thresholds are deterministic heuristics,
+not a calibrated probability of relevance; they need validation with the
+researcher's local embedding model and representative conversations. They do
+not modify primary-source ranking or citations.
+
+An explicit historical request such as *"Did we discuss optical tweezers?"*
+uses a separate conservative path. ``recall_topic()`` recognizes narrowly
+phrased first-person history questions; the system checks distinctive topic
+words against **eligible saved conversation messages in the synchronized
+memory index**, without performing a semantic embedding lookup. Recent saved
+turns are included even when they also appear in the current chat context.
+When a matching question is found, its eligible paired answer may also be
+shown. A previous question establishes only that the researcher *asked*, not
+that a claim was validated or a conclusion accepted. No match means that the
+available eligible project memory cannot verify a discussion, **not** that
+no discussion ever occurred. Messages hidden by policies, exclusions, or
+incomplete/archived records cannot establish a match. History lookup uses
+no source-document search and cannot turn remembered material into source
+evidence. It retains the existing memory budget and provenance navigation.
+
+For non-historical questions, memory query formatting has its own
+instruction rather than reusing the source-evidence retrieval instruction.
+There is no new summarizing model call. Memory is not used to validate
+citation claims.
 
 ## Desktop feedback and memory navigation
 
@@ -231,8 +271,17 @@ unselected controls remain outlined. This reflects confirmed feedback
 without changing the independent Save and reaction values.
 
 The dedicated **Memory** tab edits global memory policy and displays
-counts from
-the last saved derived index. **Update memory index** explicitly invokes
+counts from the last saved derived index. Its **Manage remembered messages**
+section lists active saved questions and answers in pages, including those
+not currently indexed, with short text previews and a state (Eligible,
+Excluded, Disliked, or Not indexed by policy). A per-message Exclude/Restore
+button changes only the authoritative exclusion flag using a feedback
+revision check. The list is read-only until an explicit action; inspecting
+it never loads an embedding model. Entries are shared across branches by
+turn UUID and role. An Eligible label denotes eligibility **at the next
+synchronization**, not proof that a message is present in the last index.
+The index may remain stale until the next normal retrieval or manual sync.
+**Update memory index** explicitly invokes
 ``RAGSession.sync_conversation_memory()`` through the GUI engine. It may
 embed new messages, but does not rebuild document/source indexes. The
 **Intents** tab edits each intent's indexing (`automatic`, `explicit`,
@@ -276,13 +325,19 @@ See [Security](security.md) for the local trust boundary.
 ## Tests and verification
 
 Focused deterministic tests live in
+`tests/kilin/test__conversation_memory_integrated.py`,
+`tests/kilin/test_rag__historical_recall.py`,
+`tests/kilin/conversation_memory/test_inspection.py`,
 `tests/kilin/test__conversation_memory_index.py`,
 `tests/kilin/test__conversation_memory_retrieval.py`, and
 `tests/kilin/test_rag__conversation_memory.py`, alongside the PR2 and PR3
 feedback, checkpoint and disliked-history tests. GUI protocol coverage lives
-in `tests/kilin/gui/test_engine__conversation_memory.py` and
+in `tests/kilin/gui/test_engine__conversation_memory.py`,
+`tests/kilin/gui/test_engine__memory_management.py`,
+`tests/kilin/gui/test__memory_management_frontend.py` and
 `tests/kilin/gui/test__conversation_memory_frontend.py`. They exercise branch
 identity, duplicate content, explicit/hard-never policies, edits to feedback,
-index corruption, archiving, model changes, search budgets and the four
-source/memory prompt configurations. Native model/backend and Qt tests
+index corruption, archiving, model changes, search budgets, historical
+lookups, exclusion lifecycle, and the four source/memory prompt
+configurations. Native model/backend and Qt tests
 remain necessary for end-to-end production verification.

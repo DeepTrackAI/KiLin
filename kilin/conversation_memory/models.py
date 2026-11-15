@@ -180,6 +180,8 @@ class MessageFeedback:
         Whether Save was selected independently of a Like. Defaults to False.
     reaction: FeedbackReaction, optional
         Neutral, liked, or disliked. Defaults to neutral.
+    excluded: bool, optional
+        Explicit exclusion from long-term retrieval. Defaults to False.
 
     Attributes
     ----------
@@ -187,17 +189,21 @@ class MessageFeedback:
         Persistent explicit Save selection.
     reaction: FeedbackReaction
         Persistent rating, independent of Save.
+    excluded: bool
+        Researcher-controlled exclusion, independent of feedback.
 
     Notes
     -----
-    A Like is an explicit selection even without Save. A Dislike always
-    excludes this message from memory retrieval. Feedback does not certify
+    A Like is an explicit selection even without Save. A Dislike or an
+    explicit exclusion always removes the message from memory retrieval.
+    Feedback does not certify
     the factual correctness of generated text.
 
     """
 
     saved: bool = False
     reaction: FeedbackReaction = "neutral"
+    excluded: bool = False
 
     def __post_init__(self) -> None:
         """Reject coerced or unknown feedback values immediately.
@@ -209,7 +215,7 @@ class MessageFeedback:
 
         """
 
-        if type(self.saved) is not bool or (
+        if type(self.excluded) is not bool or type(self.saved) is not bool or (
             not isinstance(self.reaction, str)
             or self.reaction not in _REACTIONS
         ):
@@ -226,6 +232,6 @@ class MessageFeedback:
 
         """
 
-        return self.reaction != "disliked" and (
+        return not self.excluded and self.reaction != "disliked" and (
             self.saved or self.reaction == "liked"
         )

@@ -409,6 +409,13 @@ The dedicated **Memory** tab contains the project-wide conversation
 memory policy and index status. Controls select automatic user-question
 and assistant-answer inclusion, bound retrieved memory hits and token budget,
 and configure exclusion of disliked answers from ordinary chat context.
+**Manage remembered messages** lists active saved messages, including
+currently excluded entries, with eligibility status and a short preview.
+Exclude/Restore updates one message without changing its saved reaction or
+removing it from the underlying conversation; restoring respects all other
+indexing policies. The inventory is read-only until a confirmed action and
+does not load embeddings or rebuild source indexes. Index changes take
+effect on the next memory synchronization.
 Memory is enabled by default for new Writing, Brainstorming and Reviewing
 projects, and disabled by default for Code and Literature. **Update memory
 index** explicitly synchronizes eligible saved discussions with the loaded

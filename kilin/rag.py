@@ -168,6 +168,7 @@ from kilin.conversation_memory.feedback import FeedbackStore
 from kilin.conversation_memory.index import (
     MemoryIndex, synchronize_memory,
 )
+from kilin.conversation_memory.recall import recall_topic
 from kilin.conversation_memory.retrieval import (
     MemoryHit, render_memory_hits, search_memory,
 )
@@ -223,6 +224,7 @@ from kilin.workspace import include_explicit_imports
 from kilin.project_type import (
     HISTORY_POLICY_RECENT,
     RETRIEVAL_MODE_DOCUMENT,
+    RETRIEVAL_MODE_NONE,
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
     RETRIEVAL_STRATEGY_SOURCE_FIRST,
@@ -1638,6 +1640,7 @@ class RAGSession:
             # Machine state "answering": route, select history, retrieve,
             # then answer. Configuration, not the router, decides behavior.
             config = self._behavior_config()
+            historical_topic = recall_topic(question)
             excluded_turn_ids = self._excluded_history_turns(
                 self.turns, config=config
             )
@@ -1670,6 +1673,26 @@ class RAGSession:
                     ),
                 )
             intent = config.intents[decision.intent]
+            if (
+                historical_topic is not None
+                and config.conversation_memory.enabled
+                and (intent.tool is not None or not intent.memory_read)
+            ):
+                # A tool-written answer cannot report conversation memory.
+                # Use the project's own default only if it permits reading.
+                fallback = config.intents[config.default_intent]
+                if fallback.tool is None and fallback.memory_read:
+                    trace.emit(
+                        "conversation_memory.routing_override",
+                        component="rag",
+                        data={
+                            "from": intent.intent_id,
+                            "to": fallback.intent_id,
+                        },
+                        turn_id=turn_id,
+                    )
+                    decision = replace(decision, intent=fallback.intent_id)
+                    intent = fallback
             # Retain this turn's historical intent semantics across edits.
             effective["intent_history_policy"] = intent.history_policy
             effective["intent_retrieval_mode"] = intent.retrieval_mode
@@ -1692,6 +1715,15 @@ class RAGSession:
             mode = intent.retrieval_mode
             if reuse_evidence:
                 mode = RETRIEVAL_MODE_REUSE
+            if (
+                historical_topic is not None
+                and config.conversation_memory.enabled
+                and intent.memory_read and intent.tool is None
+            ):
+                # Saved conversations, not project documents or reused
+                # evidence, answer an explicit question about chat history.
+                mode = RETRIEVAL_MODE_NONE
+                effective["historical_lookup"] = True
 
             with trace.span(
                 "history.selection",
@@ -2060,6 +2092,7 @@ class RAGSession:
             # Tool implementations consume their own separate context; do
             # not inject memory into a tool's documentary evidence request.
             memory_hits: tuple[MemoryHit, ...] = ()
+            memory_recall_checked = False
             if (
                 intent.tool is None
                 and config.conversation_memory.enabled
@@ -2071,6 +2104,7 @@ class RAGSession:
                     message="Retrieving conversation memories",
                 )
                 memory_index = self.sync_conversation_memory()
+                memory_recall_checked = historical_topic is not None
                 previously_shown = frozenset(
                     self.turns[number - 1].conversation_turn_uuid
                     for number in history_ids
@@ -2079,8 +2113,17 @@ class RAGSession:
                     question, memory_index, self.embedding_session,
                     max_hits=config.conversation_memory.max_hits,
                     max_tokens=config.conversation_memory.max_tokens,
-                    excluded_uuids=previously_shown,
-                    query_text=self._format_memory_query(question),
+                    # A historical check must include saved turns already
+                    # in the current chat; otherwise an existing discussion
+                    # can be falsely reported as absent from project memory.
+                    excluded_uuids=(
+                        frozenset() if memory_recall_checked
+                        else previously_shown
+                    ),
+                    query_text=self._format_memory_query(
+                        historical_topic or question
+                    ),
+                    recall_topic=historical_topic,
                 )
                 memory_count = len(memory_hits)
                 memory_turn_count = len({
@@ -2104,6 +2147,7 @@ class RAGSession:
                     message=result_label,
                     memory_hit_count=memory_count,
                     memory_turn_count=memory_turn_count,
+                    historical_lookup=memory_recall_checked,
                     duration_ms=memory_duration_ms,
                 )
                 if memory_hits:
@@ -2130,6 +2174,7 @@ class RAGSession:
                     component="rag",
                     data={
                         "memory_hit_count": memory_count,
+                        "historical_lookup": memory_recall_checked,
                         "memory_turn_count": memory_turn_count,
                         "duration_ms": memory_duration_ms,
                         "selected_memories": [
@@ -2203,7 +2248,7 @@ class RAGSession:
                 system_prompt = (
                     f"{config.system_prompt}\n\n{intent.system_prompt}"
                 )
-                if memory_hits:
+                if memory_hits or memory_recall_checked:
                     system_prompt += "\n\n" + _MEMORY_SYSTEM_POLICY
                 # The model sees only the selected turns (questions and
                 # answers, without their evidence), so the history is
@@ -2220,6 +2265,7 @@ class RAGSession:
                 prompt = _answer_prompt(
                     question, evidence, resolved_guidance,
                     memory_hits=memory_hits,
+                    memory_recall_checked=memory_recall_checked,
                 )
                 trace.emit(
                     "generation.input.prepared",
@@ -6515,6 +6561,18 @@ _MEMORY_SYSTEM_POLICY: Final[str] = (
 )
 
 
+_MEMORY_RECALL_RULES: Final[str] = (
+    "HISTORICAL LOOKUP (verified saved conversation messages only): "
+    "A prior USER question establishes that the researcher raised a topic; "
+    "it does not establish that the assistant answered well or that the "
+    "participants agreed on a conclusion. A prior ASSISTANT message is "
+    "an unverified historical reply, not an accepted decision. "
+    "If no eligible matching messages were found, do NOT state that the "
+    "topic was never discussed; say that you cannot verify a prior "
+    "discussion from the available project memory."
+)
+
+
 _MEMORY_ANSWER_RULES: Final[str] = (
     "ANSWERING RULES (source / memory separation):\n"
     "Numbered citations refer ONLY to current PROJECT SOURCE EVIDENCE. "
@@ -6533,6 +6591,7 @@ def _answer_prompt(
     guidance: object = None,
     *,
     memory_hits: tuple[MemoryHit, ...] = (),
+    memory_recall_checked: bool = False,
 ) -> str:
     """Combine a question with separate documentary and memory contexts.
 
@@ -6547,7 +6606,11 @@ def _answer_prompt(
         Defaults to ``None``.
     memory_hits: tuple[MemoryHit, ...], optional
         Independently retrieved previous messages with non-evidentiary
-        provenance. An empty tuple preserves the old prompt byte for byte.
+        provenance. An empty tuple preserves the old prompt byte for byte
+        for ordinary requests.
+    memory_recall_checked: bool, optional
+        Whether the project memory was checked for an explicit historical
+        topic; include cautious interpretation even when no match is found.
 
     Returns
     -------
@@ -6570,6 +6633,17 @@ def _answer_prompt(
 
     """
 
+    if memory_recall_checked and not memory_hits and not evidence:
+        sections = [
+            f"CURRENT REQUEST:\n{question}",
+            "HISTORICAL LOOKUP: No matching eligible saved messages "
+            "were found in this project.",
+            _MEMORY_RECALL_RULES,
+        ]
+        if isinstance(guidance, str) and guidance.strip():
+            sections.append(guidance.strip())
+        return "\n\n".join(sections)
+
     if memory_hits and not evidence:
         # There are no numbered source citations in a memory-only answer.
         # Explicitly distinguish remembered discussion from verified facts.
@@ -6577,6 +6651,8 @@ def _answer_prompt(
             f"Question:\n{question}", render_memory_hits(memory_hits),
             _MEMORY_ANSWER_RULES,
         ]
+        if memory_recall_checked:
+            sections.append(_MEMORY_RECALL_RULES)
         if isinstance(guidance, str) and guidance.strip():
             sections.append(guidance.strip())
         sections.append(f"CURRENT REQUEST:\n{question}")
@@ -6624,6 +6700,13 @@ def _answer_prompt(
         sections.extend((
             render_memory_hits(memory_hits), _MEMORY_ANSWER_RULES,
         ))
+    if memory_recall_checked:
+        if not memory_hits:
+            sections.append(
+                "HISTORICAL LOOKUP: No matching eligible saved messages "
+                "were found in this project."
+            )
+        sections.append(_MEMORY_RECALL_RULES)
     # The question again, last, so its own length or format wins.
     sections.append(
         "Answer this question as asked, including any length or format it "

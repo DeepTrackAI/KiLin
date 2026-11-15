@@ -286,6 +286,10 @@ class ChatBridge(QObject):
         Request revisioned feedback for the active project.
     saveMessageFeedback(request_json)
         Forward a validated feedback write to the backend engine.
+    requestMemoryMessages(project, offset)
+        Inspect saved messages and their current memory status.
+    setMemoryExclusion(request_json)
+        Exclude or restore one message without changing its rating.
     requestMemoryStatus(project)
         Query stored memory-index counts for the active project.
     syncConversationMemory(project)
@@ -1116,6 +1120,40 @@ class ChatBridge(QObject):
 
         self.commandRequested.emit({
             "action": "save_message_feedback",
+            "request": json.loads(request_json),
+        })
+
+    @Slot(str, int)
+    def requestMemoryMessages(self, project: str, offset: int) -> None:
+        """Inspect project memory without loading embeddings.
+
+        Parameters
+        ----------
+        project: str
+            Currently displayed project identity.
+        offset: int
+            Zero-based page offset.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "memory_messages", "project": project,
+            "offset": offset,
+        })
+
+    @Slot(str)
+    def setMemoryExclusion(self, request_json: str) -> None:
+        """Forward a revision-checked exclusion update to the core.
+
+        Parameters
+        ----------
+        request_json: str
+            Serialized exclusion envelope.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "set_memory_exclusion",
             "request": json.loads(request_json),
         })
 

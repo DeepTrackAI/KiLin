@@ -333,6 +333,16 @@
               </div>
               <p id="memory-index-status" class="hint" role="status">No memory index status available.</p>
               <button id="sync-memory-index" class="secondary" type="button" disabled>Update conversation memory</button>
+              <div class="memory-management" aria-labelledby="memory-management-title">
+                <h4 id="memory-management-title">Manage remembered messages</h4>
+                <p class="hint">Inspect saved project discussions. Exclude removes a message from future memory retrieval without deleting the conversation or changing Save, Like, or Dislike. Restoring still follows project and intent policies.</p>
+                <p id="memory-messages-status" class="hint" role="status">Open a project to inspect messages.</p>
+                <div id="memory-messages-list" class="memory-messages-list" aria-label="Saved conversation messages"></div>
+                <div class="source-card-actions memory-messages-pages">
+                  <button id="memory-previous" class="secondary" type="button" disabled>Previous</button>
+                  <button id="memory-next" class="secondary" type="button" disabled>Next</button>
+                </div>
+              </div>
             </section>
           </section>
         </div>

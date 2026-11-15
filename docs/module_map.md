@@ -36,8 +36,10 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/conversation_memory/models.py`](../kilin/conversation_memory/models.py) | Define durable turn identities and conversation feedback values. | [Conversation memory](conversation_memory.md) | [Memory tests](../tests/kilin/conversation_memory/) |
 | [`kilin/conversation_memory/feedback.py`](../kilin/conversation_memory/feedback.py) | Persist project-local conversation feedback with independent ownership. | [Conversation memory](conversation_memory.md) | [Memory tests](../tests/kilin/conversation_memory/) |
 | [`kilin/conversation_memory/index.py`](../kilin/conversation_memory/index.py) | Synchronize independently indexed project conversation messages. | [Conversation memory](conversation_memory.md) | [Memory tests](../tests/kilin/test__conversation_memory_index.py) |
+| [`kilin/conversation_memory/inspection.py`](../kilin/conversation_memory/inspection.py) | Inspect active conversation messages without embedding or indexing. | [Conversation memory](conversation_memory.md) | [Memory tests](../tests/kilin/conversation_memory/test_inspection.py) |
 | [`kilin/conversation_memory/persistence.py`](../kilin/conversation_memory/persistence.py) | Persist rebuildable conversation-memory vectors and occurrence records. | [Conversation memory](conversation_memory.md) | [Memory tests](../tests/kilin/test__conversation_memory_index.py) |
 | [`kilin/conversation_memory/retrieval.py`](../kilin/conversation_memory/retrieval.py) | Retrieve conversation memory without promoting it to source evidence. | [Conversation memory](conversation_memory.md) | [Memory tests](../tests/kilin/test__conversation_memory_retrieval.py) |
+| [`kilin/conversation_memory/recall.py`](../kilin/conversation_memory/recall.py) | Recognize narrow requests for verifiable conversation history. | [Conversation memory](conversation_memory.md) | [Recall tests](../tests/kilin/test_rag__historical_recall.py) |
 | [`kilin/conversation_ownership.py`](../kilin/conversation_ownership.py) | Provide exclusive write ownership for one conversation JSON path. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
 | [`kilin/conversations.py`](../kilin/conversations.py) | Manage named conversation records in a project's trace directory. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
 | [`kilin/defaults.py`](../kilin/defaults.py) | Load and validate KíLín's packaged configuration defaults. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
@@ -192,7 +194,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Architecture | 2 |
 | Configuration | 6 |
 | Conversation ownership | 4 |
-| Conversation memory | 6 |
+| Conversation memory | 8 |
 | GUI architecture | 10 |
 | Model management | 8 |
 | Per-tool README | 42 |
@@ -203,7 +205,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 161.**
+**Total production Python modules: 163.**
 
 ## Non-Python resources and UI assets
 

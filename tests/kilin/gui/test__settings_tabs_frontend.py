@@ -172,6 +172,7 @@ let settingsTab = "project";
 let ready = true, openProjectPath = "/workspace";
 const statusCalls = [];
 const requestProjectBehavior = () => statusCalls.push("policy");
+const requestMemoryMessages = () => statusCalls.push("messages");
 const bridge = {requestMemoryStatus: (path) =>
   statusCalls.push(`status:${path}`)};
 """
@@ -189,7 +190,7 @@ assert.deepEqual(sections.map((item) => item.classList.set.has("tab-hidden")),
   [false, true, true, true]);
 showSettingsTab("memory");
 assert.equal(settingsTab, "memory");
-assert.deepEqual(statusCalls, ["policy", "status:/workspace"]);
+assert.deepEqual(statusCalls, ["policy", "status:/workspace", "messages"]);
 assert.deepEqual(sections.map((item) =>
   item.classList.set.has("tab-hidden")), [true, true, true, false]);
 console.log("settings tabs passed");

@@ -47,7 +47,7 @@ Examples
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -213,7 +213,10 @@ class FeedbackStore:
                 require_feedback_role(role)
                 if (
                     not isinstance(data, dict)
-                    or set(data) != {"saved", "reaction"}
+                    or not {"saved", "reaction"}.issubset(data)
+                    or not set(data).issubset({
+                        "saved", "reaction", "excluded"
+                    })
                 ):
                     raise ValueError(
                         "The saved conversation feedback is invalid."
@@ -233,8 +236,9 @@ class FeedbackStore:
         turn_uuid: str,
         role: FeedbackRole,
         *,
-        saved: bool,
-        reaction: FeedbackReaction,
+        saved: bool | None,
+        reaction: FeedbackReaction | None,
+        excluded: bool | None = None,
         expected_revision: str | None = None,
     ) -> FeedbackSnapshot:
         """Persist one rating while preserving other writers' entries.
@@ -247,10 +251,12 @@ class FeedbackStore:
             Stable identifier of the completed turn to rate.
         role: FeedbackRole
             ``user`` question or ``assistant`` answer.
-        saved: bool
-            Whether the message has an explicit Save selection.
-        reaction: FeedbackReaction
-            Neutral, liked, or disliked feedback.
+        saved: bool | None
+            Explicit Save state; None preserves the saved state under lock.
+        reaction: FeedbackReaction | None
+            Rating; None preserves the current rating under lock.
+        excluded: bool | None, optional
+            Explicit memory exclusion; None preserves the current state.
         expected_revision: str | None, optional
             Revision observed by the caller; stale edits fail. None accepts
             the latest state and merges under an exclusive lock.
@@ -271,14 +277,20 @@ class FeedbackStore:
 
         Notes
         -----
-        A neutral, unsaved rating removes only this message's entry. The
+        An exclusion remains authoritative until explicitly restored. A
+        neutral, unsaved, non-excluded rating removes the entry. The
         conversation checkpoint and all other feedback entries are untouched.
 
         """
 
         identifier = require_turn_uuid(turn_uuid)
         kind = require_feedback_role(role)
-        rating = MessageFeedback(saved=saved, reaction=reaction)
+        # Reject invalid supplied values before entering the file lease.
+        MessageFeedback(
+            saved=False if saved is None else saved,
+            reaction="neutral" if reaction is None else reaction,
+            excluded=False if excluded is None else excluded,
+        )
         if not isinstance(conversation_id, str) or not conversation_id:
             raise ValueError("Feedback needs an active conversation ID.")
         if expected_revision is not None and (
@@ -319,6 +331,16 @@ class FeedbackStore:
                 key: dict(value) for key, value in current.entries.items()
             }
             ratings = entries.setdefault(identifier, {})
+            existing = ratings.get(kind, MessageFeedback())
+            rating = MessageFeedback(
+                saved=existing.saved if saved is None else saved,
+                reaction=(
+                    existing.reaction if reaction is None else reaction
+                ),
+                excluded=(
+                    existing.excluded if excluded is None else excluded
+                ),
+            )
             if rating == MessageFeedback():
                 ratings.pop(kind, None)
             else:
@@ -329,7 +351,11 @@ class FeedbackStore:
                 "format": _FORMAT,
                 "entries": {
                     key: {
-                        item: asdict(value)
+                        item: {
+                            "saved": value.saved,
+                            "reaction": value.reaction,
+                            **({"excluded": True} if value.excluded else {}),
+                        }
                         for item, value in sorted(ratings.items())
                     }
                     for key, ratings in sorted(entries.items())
@@ -351,7 +377,7 @@ class FeedbackStore:
         *,
         expected_revision: str | None = None,
     ) -> FeedbackSnapshot:
-        """Clear a message's Save and reaction without deleting history.
+        """Clear Save and reaction without lifting an explicit exclusion.
 
         Parameters
         ----------
