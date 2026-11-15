@@ -23,6 +23,10 @@ Module Structure
 
     Return natural units from one Markdown source file.
 
+- ``markdown_headings``
+
+    The ATX headings outside code fences, with their level.
+
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
 
@@ -47,6 +51,7 @@ from kilin.sources.sources import (
 
 __all__ = [
     "extract_source_units",
+    "markdown_headings",
 ]
 
 MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
@@ -103,6 +108,29 @@ def _markdown_headings(lines: list[str]) -> list[tuple[int, str]]:
             headings.append((line_number, title))
 
     return headings
+
+
+def markdown_headings(lines: list[str]) -> list[tuple[int, int, str]]:
+    """Return the ATX headings of Markdown text, with their level.
+
+    Parameters
+    ----------
+    lines: list[str]
+        Markdown source lines.
+
+    Returns
+    -------
+    list[tuple[int, int, str]]
+        One-based line, level (the number of ``#``, 1 to 6) and title of
+        each heading outside code fences, in order.
+
+    """
+
+    return [
+        (number, len(match.group(1)), title)
+        for number, title in _markdown_headings(lines)
+        if (match := MARKDOWN_HEADING.match(lines[number - 1].rstrip("\r\n")))
+    ]
 
 
 def _markdown_units(path: Path, lines: list[str]) -> list[SourceUnit]:

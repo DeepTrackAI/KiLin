@@ -104,6 +104,26 @@ class TestLatexExtraction(unittest.TestCase):
     def test_empty_file(self) -> None:
         self.assertEqual(_units(""), [])
 
+    def test_headings_with_levels_and_numbers(self) -> None:
+        first, last, headings = sources_tex.latex_headings(
+            fixture_text("sample.tex")
+        )
+        self.assertEqual((first, last), (7, 24))
+        self.assertEqual(
+            [(h.line, h.level, h.title, h.number) for h in headings],
+            [(12, 1, "Introduction", "1"),
+             (16, 2, "Graph theory measures", ""),
+             (22, 1, "Methods and materials", "2")],
+        )
+        _, _, headings = sources_tex.latex_headings(
+            "\\chapter{A}\n\\section{B}\n\\subsection{C}\n"
+            "\\chapter{D}\n\\section{E}\n\\part{P}\n"
+        )
+        self.assertEqual(
+            [h.number for h in headings], ["1", "1.1", "1.1.1", "2", "2.1", ""]
+        )
+        self.assertEqual(sources_tex.latex_headings(""), (1, 0, []))
+
     def test_title(self) -> None:
         self.assertEqual(
             sources_tex.latex_title(fixture_text("sample.tex")),

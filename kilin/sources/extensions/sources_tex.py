@@ -33,6 +33,11 @@ Module Structure
 
     The document title from ``\\title{...}``, when it has one.
 
+- ``LatexHeading`` and ``latex_headings``
+
+    The document's text lines and its sectioning commands, with their
+    level and number.
+
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
 
@@ -46,6 +51,7 @@ Examples
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import re
 from typing import Final
@@ -57,7 +63,9 @@ from kilin.sources.sources import (
 )
 
 __all__ = [
+    "LatexHeading",
     "extract_source_units",
+    "latex_headings",
     "latex_title",
 ]
 
@@ -245,6 +253,90 @@ def _headings(
             title = text[start:].split("\n", 1)[0]
         headings.append((number, _plain(title)))
     return headings
+
+
+# Sectioning commands by level; a part sits above chapters.
+_LEVELS: Final[dict[str, int]] = {
+    "part": -1, "chapter": 0, "section": 1, "subsection": 2,
+    "subsubsection": 3,
+}
+_COMMAND_NAME: Final[re.Pattern[str]] = re.compile(
+    r"^\s*\\(part|chapter|section|subsection|subsubsection)(\*?)"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LatexHeading:
+    """One sectioning command of a LaTeX document.
+
+    Attributes
+    ----------
+    line: int
+        Its one-based line.
+    level: int
+        -1 for ``\\part``, 0 ``\\chapter``, 1 ``\\section``, 2
+        ``\\subsection``, 3 ``\\subsubsection``.
+    title: str
+        The title as plain words.
+    number: str
+        The number LaTeX prints ("2.3"), counted from the document's
+        unstarred commands; ``""`` for a starred command or a part.
+
+    """
+
+    line: int
+    level: int
+    title: str
+    number: str
+
+
+def latex_headings(text: str) -> tuple[int, int, list[LatexHeading]]:
+    """Return a LaTeX document's text lines and sectioning commands.
+
+    Parameters
+    ----------
+    text: str
+        LaTeX source.
+
+    Returns
+    -------
+    tuple[int, int, list[LatexHeading]]
+        The first and last line of the document text (one-based,
+        inclusive: after ``\\begin{document}`` and before
+        ``\\end{document}`` when present), and its headings in order,
+        outside comments and verbatim environments. Numbers start at the
+        highest level used (chapters when there are any, else sections),
+        and a heading resets the counters below it.
+
+    """
+
+    lines = text.splitlines(keepends=True)
+    if not lines:
+        return 1, 0, []
+    first, last = _document_lines(lines)
+    found = []
+    for number, title in _headings(lines, first, last):
+        match = _COMMAND_NAME.match(lines[number - 1])
+        if match is not None:
+            found.append(
+                (number, _LEVELS[match.group(1)], title, not match.group(2))
+            )
+    top = min(
+        (level for _, level, _, _ in found if level >= 0), default=1
+    )
+    counters: dict[int, int] = {}
+    headings = []
+    for line, level, title, numbered in found:
+        label = ""
+        if numbered and level >= 0:
+            counters[level] = counters.get(level, 0) + 1
+            for deeper in [key for key in counters if key > level]:
+                del counters[deeper]
+            label = ".".join(
+                str(counters.get(step, 0)) for step in range(top, level + 1)
+            )
+        headings.append(LatexHeading(line, level, title, label))
+    return first, last, headings
 
 
 def latex_title(text: str) -> str | None:

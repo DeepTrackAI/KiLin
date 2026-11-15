@@ -65,6 +65,12 @@ import re
 from typing import Final
 
 from kilin.chunking import Chunk
+from kilin.tools._shared.latex_text import (
+    LATEX_CITE,
+    LATEX_COMMENT,
+    NOT_CITING,
+    readable_latex,
+)
 from kilin.tools._shared.references import ReferenceEntry
 
 __all__ = [
@@ -74,41 +80,10 @@ __all__ = [
     "parse_bib",
 ]
 
-# A citation command with its optional notes and its keys.
-_CITE: Final[re.Pattern[str]] = re.compile(
-    r"\\(?P<name>[A-Za-z]*[Cc]ite[A-Za-z]*)\*?"
-    r"(?:\s*\[[^\]]*\]){0,2}\s*\{(?P<keys>[^{}]*)\}"
-)
-# Citation-like commands that do not cite in the text.
-_NOT_CITING: Final[frozenset[str]] = frozenset({
-    "nocite", "citeauthor", "citeyear", "citeyearpar",
-})
-_COMMENT: Final[re.Pattern[str]] = re.compile(r"(?<!\\)%.*$")
-_INLINE_MATH: Final[re.Pattern[str]] = re.compile(
-    r"\$([^$]*)\$|\\\((.*?)\\\)"
-)
-# A line that starts a section: its title becomes a sentence of its own.
-_HEADING: Final[re.Pattern[str]] = re.compile(
-    r"^\s*\\(?:part|chapter|section|subsection|subsubsection|paragraph)"
-    r"(?![A-Za-z])"
-)
-_REFERENCE: Final[re.Pattern[str]] = re.compile(
-    r"\\(?:ref|eqref|autoref|cref|Cref|pageref)\*?\s*\{[^{}]*\}"
-)
-_DROPPED: Final[re.Pattern[str]] = re.compile(
-    r"\\(?:label|begin|end|includegraphics|input|include|bibliography"
-    r"|bibliographystyle|addbibresource|vspace|hspace)\*?"
-    r"(?:\s*\[[^\]]*\])?\s*\{[^{}]*\}"
-)
-_WRAPPED: Final[re.Pattern[str]] = re.compile(
-    r"\\[A-Za-z]+\*?\s*(?:\[[^\]]*\])?\{([^{}]*)\}"
-)
-_COMMAND: Final[re.Pattern[str]] = re.compile(r"\\[A-Za-z]+\*?")
-# A command that writes a character with an accent ("\'e", "\"{o}",
-# "\v{c}"); a letter accent is not the start of a longer command.
-_ACCENT: Final[re.Pattern[str]] = re.compile(
-    r"\\(?:[`'^\"~=.]|[uvHcdbtk](?![A-Za-z]))\s*\{?([A-Za-z])\}?"
-)
+# Shared with other LaTeX readers (``_shared.latex_text``).
+_CITE: Final[re.Pattern[str]] = LATEX_CITE
+_NOT_CITING: Final[frozenset[str]] = NOT_CITING
+_COMMENT: Final[re.Pattern[str]] = LATEX_COMMENT
 _BIBITEM: Final[re.Pattern[str]] = re.compile(
     r"\\bibitem\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}"
 )
@@ -833,29 +808,11 @@ def _readable_line(line: str, numbers: dict[str, int]) -> str:
         (``_citation_numbers``), math kept without brackets (so "[0, 1]"
         is not a citation), section titles ending with a full stop so
         they do not join the next sentence, cross-references as "(ref)",
-        formatting
-        commands reduced to their words, other commands and braces
-        removed.
+        formatting commands reduced to their words, other commands and
+        braces removed (``_shared.latex_text.readable_latex``).
 
     """
 
-    text = _COMMENT.sub("", line)
-    text = _CITE.sub(lambda match: _citation_numbers(match, numbers), text)
-    text = _INLINE_MATH.sub(
-        lambda match: (match.group(1) or match.group(2) or "")
-        .replace("[", "(").replace("]", ")"),
-        text,
+    return readable_latex(
+        line, lambda match: _citation_numbers(match, numbers)
     )
-    heading = _HEADING.match(text) is not None
-    text = _REFERENCE.sub("(ref)", text)
-    text = _DROPPED.sub("", text)
-    text = _ACCENT.sub(r"\1", text)
-    previous = None
-    while previous != text:
-        previous, text = text, _WRAPPED.sub(r"\1", text)
-    text = text.replace("\\%", "%").replace("\\&", "&").replace("\\\\", " ")
-    text = _COMMAND.sub("", text)
-    text = text.replace("{", "").replace("}", "").replace("~", " ")
-    if heading and text.strip() and text.rstrip()[-1] not in ".?!:":
-        text = text.rstrip() + "."
-    return text
