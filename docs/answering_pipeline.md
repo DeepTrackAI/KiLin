@@ -209,8 +209,19 @@ The prompt history contains selected prior **questions and answers**, not
 full prior evidence payloads. Related-turn evidence may be carried forward
 separately when an intent permits it. This distinction affects privacy,
 context size and the interpretation of follow-up answers. The router's
-summary is derived from saved turns; it is not an automatically generated
-long-term memory system.
+summary is derived from saved turns; it is distinct from the separate,
+project-local long-term conversation-memory index.
+
+For an enabled memory policy and an intent allowing `memory.read`, the core
+synchronizes eligible saved messages and performs independent memory
+retrieval before direct model generation. The previous conversation text
+appears under a dedicated `CONVERSATION MEMORY` heading, never within
+numbered source `Evidence`. A system-level provenance rule distinguishes
+historical assistant assertions from current documentary evidence. Search
+hits have separate relevance, preference weights and an independent token
+budget. When no memory hits are supplied, the original answer prompt is
+unchanged. Tool-owned answer generation does not receive blended memory or
+source passages. See [Conversation memory](conversation_memory.md).
 
 ## Retrieval options and evidence
 

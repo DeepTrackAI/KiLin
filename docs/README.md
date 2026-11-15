@@ -47,7 +47,7 @@ responsibility, not authority over the source implementation.
 | [GUI architecture](gui_architecture.md) | Desktop process/lifecycle integration and presentation ownership. |
 | [GUI protocol](gui_protocol.md) | Commands, events, payloads, interactive waits, cancellation and restart. |
 | [Conversation ownership](conversation_ownership.md) | Writer leases, atomic files, switching, archival and cleanup guarantees. |
-| [Conversation memory](conversation_memory.md) | Persistent turn UUIDs, project-local feedback, revisions and branch identity. |
+| [Conversation memory](conversation_memory.md) | Turn UUIDs, authoritative feedback, active branch origins, independent indexing and separate prompt provenance. |
 | [Trace recording](trace_recording.md) | Diagnostic activation/content, trace metadata, event versus checkpoint failure policy. |
 | [Security](security.md) | Trust boundaries, sensitive data, deployment responsibilities and explicit non-guarantees. |
 | [Performance](performance.md) | Trace-derived measurements, reproducible workloads and limits of timing evidence. |

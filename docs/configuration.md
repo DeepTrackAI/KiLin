@@ -104,9 +104,10 @@ project-wide conversation-memory policy and `intent_memory` for one
 intent's `indexing`/`read` pair. Existing `global` and `intent` payloads
 remain unchanged. The current core validates and persists these settings;
 turn UUIDs, feedback persistence and disliked-history filtering are
-implemented independently of the editor. Memory indexing/retrieval and
-GUI controls remain pending.
-See [Conversation memory](conversation_memory.md) for feedback storage.
+implemented independently of the editor. Conversation-memory indexing
+and retrieval are now core operations; only their GUI controls and idle-phase
+synchronization are pending. See [Conversation memory](conversation_memory.md)
+for the indexing and persistence contracts.
 
 ### Conversation memory policies
 
@@ -117,7 +118,7 @@ pipeline:
 
 | Setting | Accepted values | Purpose |
 | --- | --- | --- |
-| `enabled` | Boolean | Permits independent conversation-memory indexing and reading when runtime support is implemented |
+| `enabled` | Boolean | Enables project-local conversation-memory indexing and retrieval |
 | `questions` | `all`, `none` | Automatic indexing of eligible user questions |
 | `answers` | `none`, `selected`, `all` | Forbid answer indexing, require explicit Save/Like, or index eligible non-disliked answers automatically |
 | `max_hits` | Integer 1–20 | Maximum retrieved memory entries per answer |

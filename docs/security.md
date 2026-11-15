@@ -200,6 +200,28 @@ Start with [workspace transactions](../tests/kilin/test__project_transactions.py
 [safe generated outputs](../tests/kilin/tools/_shared/test_outputs.py).
 These are concrete boundary regressions, not a comprehensive security audit.
 
+## Conversation-memory trust and privacy
+
+Project conversation memory reads only active conversation records within
+`logs/traces/` of the opened workspace; archived entries are excluded on
+resynchronization. Source files do not automatically become conversation
+memories, and memory does not grant permission to read sources outside the
+project. Derived records and vectors are stored in the project-owned
+`indexes/conversation_memory.json`; authoritative user feedback remains in
+`memory/feedback.json`. Both contain potentially confidential information.
+Deleting a memory origin from the active index is **not secure erasure** of
+archived conversations, trace snapshots, backups, or previous index copies.
+
+Retrieved memory is untrusted earlier text, not independently validated
+scientific evidence. It is placed in a separate prompt section, with role,
+turn identity, timestamp, and conversation origin. System-level instructions
+prevent its references from being treated as documentary citations and
+preserve existing project and reviewing role boundaries. This instruction
+boundary does **not** guarantee resistance to all prompt injections. Users
+remain responsible for validating scientific statements against current
+primary sources. No cross-project memory retrieval or remote memory
+service is implemented.
+
 ## Related
 
 [Project workspaces](project_workspaces.md),

@@ -1,36 +1,45 @@
-"""Manage project-local feedback for persisted conversation messages.
+"""Keep project conversation memory distinct from research sources.
 
-This package stores deliberate user selections independently of conversation
-checkpoints and retrieved source evidence. It does not index or retrieve
-conversation content; those capabilities are introduced separately.
+Saved conversations and the independent feedback store are authoritative.
+A rebuildable memory index gives previous questions and selected answers a
+separate, bounded retrieval channel. Neither stored memories nor their
+provenance identifiers are valid primary-source evidence or citations.
 
 Key Features
 ------------
 
-- **Durable identity**
+- **Stable feedback identity**
 
-    Assign new completed turns stable UUIDs, preserved in branches.
+    Completed UUID4 turns retain per-message reactions across branches.
 
-- **Independent feedback**
+- **Project-local indexing**
 
-    Record Save, Like, Dislike, and reset in a project-owned file.
+    Embed eligible messages incrementally under intent and feedback policy.
+
+- **Separated retrieval**
+
+    Supply memory hits without changing documentary evidence indexes.
 
 Module Structure
 ----------------
 
-- ``models``
+- ``models`` and ``feedback``
 
-    Turn identity and validated feedback records.
+    Stable message identity and durable Save/Like/Dislike state.
 
-- ``feedback``
+- ``index`` and ``persistence``
 
-    Atomic, revision-checked feedback persistence.
+    Policy-aware synchronization and checksum-verified derived vectors.
+
+- ``retrieval``
+
+    Independent semantic/lexical ranking, budgets, and provenance rendering.
 
 Examples
 --------
->>> from kilin.conversation_memory.models import new_turn_uuid
->>> len(new_turn_uuid())
-32
+>>> from kilin.conversation_memory.index import memory_fingerprint
+>>> len(memory_fingerprint("user", "Earlier question"))
+64
 
 """
 

@@ -653,6 +653,35 @@ model; then restores the answering session. A warm refresh requiring no
 cards does not reload interactive models. Failure to restore the answering
 model closes the session explicitly, requiring the project to be reopened.
 
+## Independent conversation-memory retrieval
+
+Conversation memory is a separate index under
+`indexes/conversation_memory.json`, not another hybrid/source-first passage
+channel. The core indexes eligible saved questions and assistant messages
+from active conversations according to project and original-intent policy,
+user feedback, and a durable turn UUID. Fingerprints let independently
+repeated text share embedding vectors without sharing feedback. Branches
+preserve UUID identity and contribute additional active origins. A file and
+feedback manifest invalidates the derived index when changes occur, without
+calling `refresh_sources()` or changing source-card indexes.
+
+`RAGSession.sync_conversation_memory()` exposes deterministic synchronization
+for headless clients. The next eligible `RAGSession.ask()` reconciles stale
+conversation memory before searching. The memory search uses the loaded
+embedding model, a dedicated query instruction when applicable, semantic and
+lexical relevance gating, and only then a small Save/Like priority boost.
+Each result has its own identity and active conversation origin, a maximum
+hit count, and a separate estimated token budget.
+
+**Memory hits never become `Chunk` or `Evidence` records** and cannot enter
+`evidence_block()`, the numbered source citation namespace, or the
+source-evidence budget. The answer prompt renders distinct source and memory
+sections; the system instructions label historical assistant assertions as
+unverified. Current chat history is a third channel. The memory-only path can
+work with an intent's source retrieval mode set to `none`. No memory index is
+read or embedded when the project memory setting is disabled. See
+[Conversation memory](conversation_memory.md) for provenance and security.
+
 ## Related
 
 [Source pipeline](source_pipeline.md),

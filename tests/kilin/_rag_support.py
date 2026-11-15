@@ -20,6 +20,7 @@ from kilin.answering import RouteDecision
 from kilin.project_type import (
     HISTORY_POLICY_RECENT,
     Intent,
+    ConversationMemorySettings,
     RETRIEVAL_MODE_SEARCH,
 )
 from kilin.retrievals import ContextExpansionPlan
@@ -166,6 +167,10 @@ def _type_config(
         intents={intent.intent_id: intent},
         recent_turns=2,
         exclude_disliked_answers=True,
+        conversation_memory=ConversationMemorySettings(
+            enabled=False, questions="all", answers="selected",
+            max_hits=4, max_tokens=2000,
+        ),
         system_prompt="Project instruction",
         code_graph=True,
         answer_guidance=guidance,
