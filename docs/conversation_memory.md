@@ -250,6 +250,22 @@ incomplete/archived records cannot establish a match. History lookup uses
 no source-document search and cannot turn remembered material into source
 evidence. It retains the existing memory budget and provenance navigation.
 
+Historical results select **eligible question–answer pairs** by their shared
+turn UUID before selecting standalone matching messages. A paired answer is
+included immediately after its question when both fit the configured
+`max_hits` and `max_tokens` budgets. For long messages, both texts may be
+truncated to preserve the pair. If no pair fits an unusually small memory
+text budget, an eligible question may still be returned on its own to avoid
+falsely reporting that no matching saved messages exist. An unpaired question
+records that a topic was
+raised but does not imply an answer or agreement. In particular, an excluded,
+disliked, incomplete, or never-indexed reply cannot be reconstructed from
+the question. With `max_hits: 1`, only the matching question can be shown
+for a paired turn; larger paired groups are skipped rather than silently
+dropping the reply when a partial slot remains. Directly matching assistant
+messages without an eligible matching question can also appear alone, with
+their separate turn identity and unverified status.
+
 For non-historical questions, memory query formatting has its own
 instruction rather than reusing the source-evidence retrieval instruction.
 There is no new summarizing model call. Memory is not used to validate

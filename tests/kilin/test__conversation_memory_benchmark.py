@@ -12,12 +12,15 @@ claiming an empirical recall rate for a user's local embedding model.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import unittest
 
 from kilin.conversation_memory.index import (
     MemoryIndex, MemoryOrigin, MemoryRecord, memory_fingerprint,
 )
 from kilin.conversation_memory.retrieval import search_memory
+from kilin.conversation_memory.retrieval import render_memory_hits
+from kilin.retrievals.document_reading import estimate_tokens
 
 
 class _QueryEmbedding:
@@ -115,6 +118,142 @@ class TestConversationMemoryBenchmark(unittest.TestCase):
         )
         self.assertEqual(results, ())
         self.assertEqual(self.embedding.calls, 0)
+
+    def test_four_matching_questions_return_two_complete_turns(self):
+        """Do not fill the four-hit budget with questions alone."""
+
+        items = []
+        for number in range(1, 5):
+            question = self._record(
+                number, f"Did we plan optical tweezers experiment {number}?"
+            )
+            answer = self._record(
+                number, f"The proposed option was plan {number}.",
+                role="assistant",
+            )
+            items.extend(((question, (0.0, 1.0)),
+                          (answer, (0.0, 1.0))))
+        records = tuple(item[0] for item in items)
+        index = MemoryIndex("synthetic", records, {
+            record.fingerprint: vector for record, vector in items
+        })
+        hits = search_memory(
+            "What did we decide about optical tweezers?", index,
+            self.embedding, max_hits=4, max_tokens=2200,
+            recall_topic="optical tweezers",
+        )
+        self.assertEqual([hit.record.role for hit in hits], [
+            "user", "assistant", "user", "assistant",
+        ])
+        self.assertEqual(hits[0].record.turn_uuid,
+                         hits[1].record.turn_uuid)
+        self.assertEqual(hits[2].record.turn_uuid,
+                         hits[3].record.turn_uuid)
+        self.assertEqual(self.embedding.calls, 0)
+
+    def test_unavailable_replies_do_not_appear_as_decisions(self):
+        """Represent excluded and never-indexed replies as absent."""
+
+        question = self._record(
+            1, "Did we consider optical tweezers?"
+        )
+        # The reply exists in the source conversation but was omitted
+        # from the eligible memory index by the feedback/index policy.
+        unrelated = self._record(
+            2, "A different microscope discussion", role="assistant"
+        )
+        hits = self._search(
+            "What did we decide about optical tweezers?", (
+                (question, (1.0, 0.0)),
+                (unrelated, (1.0, 0.0)),
+            ), topic="optical tweezers",
+        )
+        self.assertEqual([hit.record for hit in hits], [question])
+
+    def test_historical_pairs_fit_the_hit_and_token_limits(self):
+        """Truncate lengthy content without losing the paired reply."""
+
+        question = self._record(
+            1, "Did we consider optical tweezers? " + "context " * 350
+        )
+        answer = self._record(
+            1, "We proposed calibration first. " + "details " * 350,
+            role="assistant",
+        )
+        items = ((question, (1.0, 0.0)), (answer, (1.0, 0.0)))
+        records = tuple(item[0] for item in items)
+        index = MemoryIndex("synthetic", records, {
+            record.fingerprint: vector for record, vector in items
+        })
+        hits = search_memory(
+            "What did we decide about optical tweezers?", index,
+            self.embedding, max_hits=2, max_tokens=160,
+            recall_topic="optical tweezers",
+        )
+        self.assertEqual([hit.record for hit in hits], [question, answer])
+        self.assertLessEqual(
+            estimate_tokens(render_memory_hits(hits)), 160,
+        )
+        self.assertIn("calibration", hits[1].text)
+        self.assertTrue(hits[0].text.endswith("..."))
+        self.assertTrue(hits[1].text.endswith("..."))
+        self.assertEqual(search_memory(
+            "Did we discuss optical tweezers?", index,
+            self.embedding, max_hits=2, max_tokens=10,
+            recall_topic="optical tweezers",
+        ), ())
+
+    def test_one_hit_policy_cannot_infer_a_missing_reply(self):
+        """When configured for one hit, present only the question."""
+
+        question = self._record(1, "Optical tweezers test proposal")
+        answer = self._record(
+            1, "The team did not approve it.", role="assistant"
+        )
+        index = MemoryIndex("synthetic", (question, answer), {})
+        hits = search_memory(
+            "Did we discuss optical tweezers?", index, self.embedding,
+            max_hits=1, max_tokens=700, recall_topic="optical tweezers",
+        )
+        self.assertEqual([hit.record for hit in hits], [question])
+
+    def test_tight_token_budget_still_verifies_matching_question(self):
+        """A pair too large for metadata budget must not mean no match."""
+
+        question = self._record(1, "Optical tweezers test proposal")
+        answer = self._record(
+            1, "We suggested a controlled calibration.", role="assistant"
+        )
+        long_origin = MemoryOrigin("conversation_" + "a" * 120, 1)
+        question = replace(question, origins=(long_origin,))
+        answer = replace(answer, origins=(long_origin,))
+        index = MemoryIndex("synthetic", (question, answer), {})
+        hits = search_memory(
+            "Did we discuss optical tweezers?", index, self.embedding,
+            max_hits=2, max_tokens=128,
+            recall_topic="optical tweezers",
+        )
+        self.assertEqual([hit.record for hit in hits], [question])
+        self.assertLessEqual(
+            estimate_tokens(render_memory_hits(hits)), 128,
+        )
+
+    def test_relevant_answer_without_matching_question_is_standalone(self):
+        """Do not attach a reply to a different turn's question."""
+
+        question = self._record(1, "Did we discuss optical tweezers?")
+        answer = self._record(
+            2, "Optical tweezers could help.", role="assistant"
+        )
+        hits = self._search(
+            "Did we discuss optical tweezers?", (
+                (question, (1.0, 0.0)), (answer, (1.0, 0.0)),
+            ), topic="optical tweezers",
+        )
+        self.assertEqual([hit.record for hit in hits], [question, answer])
+        self.assertNotEqual(
+            hits[0].record.turn_uuid, hits[1].record.turn_uuid,
+        )
 
 
 if __name__ == "__main__":

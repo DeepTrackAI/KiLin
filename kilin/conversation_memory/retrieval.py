@@ -20,6 +20,11 @@ Key Features
 
     Limit both total results and the complete rendered memory section.
 
+- **Paired historical recall**
+
+    Keep an eligible reply beside its matching historical question whenever
+    both fit; never turn an unanswered question into a reported decision.
+
 Module Structure
 ----------------
 
@@ -66,6 +71,9 @@ _STOP: Final[frozenset[str]] = frozenset((
 # An exact historical lookup instead requires distinctive lexical overlap.
 _MIN_SEMANTIC: Final[float] = 0.48
 _MIN_LEXICAL: Final[float] = 0.38
+_MIN_HISTORY_TEXT: Final[int] = 24
+
+_RankedRecord = tuple[float, float, MemoryRecord]
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +189,160 @@ def render_memory_hits(hits: tuple[MemoryHit, ...]) -> str:
     return "\n\n".join(parts)
 
 
+def _historical_groups(
+    records: list[MemoryRecord], topic: str,
+) -> tuple[tuple[_RankedRecord, ...], ...]:
+    """Rank matching historical turns, keeping eligible replies together.
+
+    Parameters
+    ----------
+    records: list[MemoryRecord]
+        Records surviving the caller's UUID and indexing exclusions.
+    topic: str
+        Explicitly requested historical topic.
+
+    Returns
+    -------
+    tuple[tuple[_RankedRecord, ...], ...]
+        Paired question/answer groups first, followed by single matching
+        questions or answers. Missing replies are never synthesized.
+
+    """
+
+    topic_terms = _terms(topic)
+    if not topic_terms:
+        return ()
+    required = max(1, (3 * len(topic_terms) + 3) // 4)
+    matches: list[_RankedRecord] = []
+    answers = {
+        record.turn_uuid: record for record in records
+        if record.role == "assistant"
+    }
+    for record in records:
+        overlap = len(_terms(record.text) & topic_terms)
+        if overlap >= required:
+            relevance = overlap / len(topic_terms)
+            matches.append((relevance, relevance, record))
+
+    def key(item: _RankedRecord) -> tuple[float, str, str, str]:
+        """Make relevance ties stable across index reconstruction.
+
+        Parameters
+        ----------
+        item: _RankedRecord
+            Scored historical occurrence.
+
+        Returns
+        -------
+        tuple[float, str, str, str]
+            Stable sort key preferring high relevance.
+
+        """
+
+        score, _, record = item
+        return (-score, record.timestamp, record.turn_uuid, record.role)
+
+    pairs: list[tuple[_RankedRecord, ...]] = []
+    singles: list[_RankedRecord] = []
+    paired_uuids: set[str] = set()
+    for item in sorted(matches, key=key):
+        record = item[2]
+        if record.role != "user":
+            continue
+        answer = answers.get(record.turn_uuid)
+        if answer is None:
+            singles.append(item)
+            continue
+        pairs.append((item, (0.01, 0.01, answer)))
+        paired_uuids.add(record.turn_uuid)
+    for item in matches:
+        if (item[2].role == "assistant"
+                and item[2].turn_uuid not in paired_uuids):
+            singles.append(item)
+
+    pairs.sort(key=lambda group: key(group[0]))
+    singles.sort(key=key)
+    return (*pairs, *((item,) for item in singles))
+
+
+def _fit_historical_group(
+    selected: list[MemoryHit], group: tuple[_RankedRecord, ...],
+    max_tokens: int,
+) -> tuple[MemoryHit, ...]:
+    """Fit a historical pair atomically into the rendered token budget.
+
+    Parameters
+    ----------
+    selected: list[MemoryHit]
+        Already selected historical memories.
+    group: tuple[_RankedRecord, ...]
+        One historical question/answer pair or one unpaired message.
+    max_tokens: int
+        Token limit for the entire rendered memory section.
+
+    Returns
+    -------
+    tuple[MemoryHit, ...]
+        The complete group, possibly text-truncated, or empty if neither
+        a coherent pair nor the single message can fit.
+
+    """
+
+    hits = tuple(
+        MemoryHit(record, record.text, relevance, score)
+        for score, relevance, record in group
+    )
+    prefix = tuple(selected)
+    if estimate_tokens(render_memory_hits((*prefix, *hits))) <= max_tokens:
+        return hits
+
+    empty = tuple(
+        MemoryHit(hit.record, "", hit.relevance, hit.score)
+        for hit in hits
+    )
+    available = max_tokens * 4 - len(
+        render_memory_hits((*prefix, *empty))
+    )
+    lengths = [len(hit.text) for hit in hits]
+    minimum = [min(length, _MIN_HISTORY_TEXT) for length in lengths]
+    if available < sum(minimum):
+        return ()
+
+    quotas = minimum[:]
+    if len(hits) == 2:
+        # Retain enough of the question to identify its topic, reserving
+        # most remaining space for the reply's substantive content.
+        question_cap = min(lengths[0], max(minimum[0], available // 3))
+        quotas[0] += min(
+            available - sum(quotas), question_cap - quotas[0]
+        )
+    for index in reversed(range(len(hits))):
+        quotas[index] += min(
+            available - sum(quotas), lengths[index] - quotas[index]
+        )
+
+    while True:
+        shortened = tuple(
+            MemoryHit(
+                hit.record,
+                (hit.text[:quota - 3].rstrip() + "..."
+                 if quota < len(hit.text) else hit.text),
+                hit.relevance, hit.score,
+            )
+            for hit, quota in zip(hits, quotas)
+        )
+        if (estimate_tokens(render_memory_hits((*prefix, *shortened)))
+                <= max_tokens):
+            return shortened
+        reducible = [
+            i for i, quota in enumerate(quotas) if quota > minimum[i]
+        ]
+        if not reducible:
+            return ()
+        index = max(reducible, key=lambda i: quotas[i] - minimum[i])
+        quotas[index] = max(minimum[index], quotas[index] - 8)
+
+
 def search_memory(
     question: str,
     index: MemoryIndex,
@@ -234,35 +396,36 @@ def search_memory(
     ]
     if not candidates:
         return ()
-    ranked: list[tuple[float, float, MemoryRecord]] = []
+    ranked: list[_RankedRecord] = []
     if recall_topic is not None:
         # The question itself is not evidence that a discussion occurred.
-        # Only actual saved-message terms can establish a match.
-        topic_terms = _terms(recall_topic)
-        if not topic_terms:
-            return ()
-        for record in candidates:
-            found = _terms(record.text) & topic_terms
-            required = max(1, (3 * len(topic_terms) + 3) // 4)
-            if len(found) >= required:
-                relevance = len(found) / len(topic_terms)
-                ranked.append((relevance, relevance, record))
-        # A matching question establishes that the researcher asked it.
-        # Its eligible answer may supply context, but is never a verified
-        # scientific conclusion. A disliked/excluded answer is absent.
-        matched_questions = {
-            record.turn_uuid for _, _, record in ranked
-            if record.role == "user"
-        }
-        for record in candidates:
-            if (record.role == "assistant"
-                    and record.turn_uuid in matched_questions
-                    and not any(item[2] == record for item in ranked)):
-                ranked.append((0.01, 0.01, record))
-        ranked.sort(key=lambda item: (
-            -int(item[2].role == "user"), -item[0],
-            item[2].timestamp, item[2].turn_uuid,
-        ))
+        # Pair only existing, eligible messages from the same saved turn.
+        # A missing or disliked reply cannot be recovered via its question.
+        result: list[MemoryHit] = []
+        fallback_questions: list[tuple[_RankedRecord, ...]] = []
+        for group in _historical_groups(candidates, recall_topic):
+            if len(result) + len(group) > max_hits:
+                # With a one-hit policy, show the question as evidence
+                # of having asked it, not a fabricated summary of a reply.
+                if not result and max_hits == 1:
+                    group = group[:1]
+                else:
+                    continue
+            fitted = _fit_historical_group(result, group, max_tokens)
+            if fitted:
+                result.extend(fitted)
+            elif len(group) == 2:
+                fallback_questions.append(group[:1])
+        # A tiny text budget must not turn an established question match
+        # into an incorrect "no matching memory" result. Prefer a complete
+        # pair, but show a question alone if no complete group can fit.
+        if not result:
+            for group in fallback_questions:
+                fitted = _fit_historical_group(result, group, max_tokens)
+                if fitted:
+                    result.extend(fitted)
+                    break
+        return tuple(result)
     else:
         query_vector = embedding_session.embed_query(
             question if query_text is None else query_text

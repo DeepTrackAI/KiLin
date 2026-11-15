@@ -241,7 +241,10 @@ context, without another model call. A matching question establishes that
 the topic was raised, not that its answer was accepted. When there is no
 match the model is instructed to report uncertainty, not to claim the topic
 was never discussed. Historical lookup remains subject to project and intent
-memory policies. Tool-owned answer generation does not receive blended
+memory policies. Eligible question/answer pairs stay adjacent within the
+memory hit and text budgets, so matching questions cannot fill the result
+list while crowding out all corresponding saved replies. Tool-owned answer
+generation does not receive blended
 memory or source passages. See [Conversation memory](conversation_memory.md).
 
 ## Retrieval options and evidence
