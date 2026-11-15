@@ -4,7 +4,8 @@ The tool is being built in stages; this package holds its parts so far.
 It reads a document into sections and paragraphs (``_document``) so that
 each paragraph can be checked with its section as context and each
 finding reported with its line, chooses the part a question asks to
-check (``_scope``), and runs the checks that need no model (``_checks``).
+check (``_scope``), runs the checks that need no model (``_checks``), and
+checks one paragraph at a time with the model (``_review``).
 
 Key Features
 ------------
@@ -28,6 +29,11 @@ Module Structure
 
     The checks done in code, the glossary for the model, and their
     validated word lists and limits.
+
+- ``_review``
+
+    One paragraph checked by the model for grammar or style, with every
+    suggested change checked before it is kept.
 
 Examples
 --------

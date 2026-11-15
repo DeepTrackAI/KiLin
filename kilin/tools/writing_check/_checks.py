@@ -40,6 +40,10 @@ Module Structure
 
     Every check of this module, and the glossary.
 
+- ``make_finding``
+
+    A finding placed at the source line of its words, for any check.
+
 Examples
 --------
 >>> from pathlib import Path
@@ -69,6 +73,7 @@ __all__ = [
     "Finding",
     "Glossary",
     "check_document",
+    "make_finding",
 ]
 
 LEVEL_GRAMMAR: Final[str] = "grammar"
@@ -281,7 +286,7 @@ def _acronyms(
                 if definition:
                     long_forms.setdefault(short, definition)
                     if short in defined:
-                        findings.append(_finding(
+                        findings.append(make_finding(
                             paragraphs, index, LEVEL_CONSISTENCY, "acronym",
                             f"{definition} ({short})", short,
                             f"{short} is already defined (line "
@@ -295,13 +300,13 @@ def _acronyms(
                 used.setdefault(short, (index, match.start()))
         for short, (index, offset) in used.items():
             if short not in defined:
-                findings.append(_finding(
+                findings.append(make_finding(
                     paragraphs, index, LEVEL_CONSISTENCY, "acronym", short,
                     "", f"{short} is never defined; spell it out at first "
                     "use.", offset,
                 ))
             elif (index, offset) < defined[short]:
-                findings.append(_finding(
+                findings.append(make_finding(
                     paragraphs, index, LEVEL_CONSISTENCY, "acronym", short,
                     "", f"{short} is used before its definition (line "
                     f"{_line_of(paragraphs, *defined[short], short)}); "
@@ -462,7 +467,7 @@ def _terms(
         for form, preferred in forms.items():
             pattern = rf"(?<![\w-]){re.escape(form)}(?![\w-])"
             for match in re.finditer(pattern, paragraph.text, re.IGNORECASE):
-                findings.append(_finding(
+                findings.append(make_finding(
                     paragraphs, index, LEVEL_CONSISTENCY, "term",
                     match.group(0), preferred,
                     f"the document mostly writes “{preferred}”.",
@@ -505,7 +510,7 @@ def _spelling(
         return "", []
     spelling = "US" if tally["US"] > tally["UK"] else "UK"
     findings = [
-        _finding(
+        make_finding(
             paragraphs, index, LEVEL_CONSISTENCY, "spelling",
             found.group(0), _same_case(found.group(0), other),
             f"the document uses {spelling} spelling.", found.start(),
@@ -585,7 +590,7 @@ def _promotional(paragraphs: Sequence[Paragraph]) -> list[Finding]:
     )
     pattern = re.compile(rf"(?<![\w-])(?:{words})(?![\w-])", re.IGNORECASE)
     return [
-        _finding(
+        make_finding(
             paragraphs, index, LEVEL_STYLE, "promotional word",
             match.group(0), "",
             "promotional; let the results show it, or remove it.",
@@ -613,7 +618,7 @@ def _repeated(paragraphs: Sequence[Paragraph]) -> list[Finding]:
     """
 
     return [
-        _finding(
+        make_finding(
             paragraphs, index, LEVEL_GRAMMAR, "repeated word",
             match.group(0), match["word"], "the word is written twice.",
             match.start(),
@@ -647,7 +652,7 @@ def _long_sentences(paragraphs: Sequence[Paragraph]) -> list[Finding]:
             offset = start + len(sentence) if start >= 0 else offset
             words = sentence.split()
             if len(words) > _config.LONG_SENTENCE_WORDS:
-                findings.append(_finding(
+                findings.append(make_finding(
                     paragraphs, index, LEVEL_STYLE, "long sentence",
                     " ".join(words[:_SENTENCE_START_WORDS]), "",
                     f"{len(words)} words; consider splitting it.",
@@ -656,7 +661,7 @@ def _long_sentences(paragraphs: Sequence[Paragraph]) -> list[Finding]:
     return findings
 
 
-def _finding(
+def make_finding(
     paragraphs: Sequence[Paragraph],
     index: int,
     level: str,

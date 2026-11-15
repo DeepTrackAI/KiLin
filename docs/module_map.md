@@ -186,6 +186,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/writing_check/_checks.py`](../kilin/tools/writing_check/_checks.py) | Check a document's consistency and style in code, and build its glossary. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/writing_check/_configuration.py`](../kilin/tools/writing_check/_configuration.py) | Validate the defaults owned by the writing_check tool. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/writing_check/_document.py`](../kilin/tools/writing_check/_document.py) | Read a document into sections and paragraphs of prose. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/writing_check/_review.py`](../kilin/tools/writing_check/_review.py) | Check the grammar and style of one paragraph with the model. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/writing_check/_scope.py`](../kilin/tools/writing_check/_scope.py) | Choose the part of a document a question asks to check. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tool_settings.py`](../kilin/tool_settings.py) | List and change the tool settings of one KíLín project. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
 | [`kilin/trace_logging.py`](../kilin/trace_logging.py) | Record structured execution events and resumable conversation state. | [Trace recording](trace_recording.md) | [Core tests](../tests/kilin/) |
@@ -203,7 +204,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Conversation memory | 8 |
 | GUI architecture | 10 |
 | Model management | 8 |
-| Per-tool README | 47 |
+| Per-tool README | 48 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 29 |
 | Source pipeline | 18 |
@@ -211,7 +212,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 169.**
+**Total production Python modules: 170.**
 
 ## Non-Python resources and UI assets
 

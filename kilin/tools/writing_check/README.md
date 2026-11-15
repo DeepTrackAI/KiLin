@@ -6,8 +6,9 @@ or proposal) and returns suggested edits; it never rewrites the text. It is
 being built in stages and is not registered yet.
 
 So far it reads a document into sections and paragraphs (`_document.py`),
-chooses the part of it a question asks to check (`_scope.py`), and runs the
-checks that need no model (`_checks.py`).
+chooses the part of it a question asks to check (`_scope.py`), runs the
+checks that need no model (`_checks.py`), and checks one paragraph at a
+time with the model (`_review.py`).
 
 ## Sections and paragraphs
 
@@ -77,6 +78,32 @@ in the text, a suggestion (or none when it only flags) and a one-line
 reason. The same pass builds the glossary given to every model call: the
 defined acronyms, the preferred form of each term, and the spelling
 variant.
+
+## Checks done by the model
+
+Each paragraph is sent to the answering model on its own: once for
+grammar (clear errors only: agreement, verb forms, tense, articles,
+prepositions, punctuation, spelling, missing or extra words) and, when
+asked, once for style (at most five changes that clearly improve clarity
+or concision). Each call is told:
+
+1. the document: its card's title, venue, aim, methods and findings
+   (`ToolContext.card`), or, without a card, a two- or three-sentence brief
+   written by one model call from the headings and the first paragraphs;
+2. the glossary from the code checks (acronyms, preferred terms,
+   spelling), to keep;
+3. the section, with what it is for when the title says ("methods: what
+   was done, usually in the past tense");
+4. the paragraph's readable text, with the last sentence before it and
+   the first sentence after it.
+
+The model answers with `ORIGINAL`, `SUGGESTION` and `REASON` blocks, or
+`NONE`. A suggested change is dropped, not reported, when its original
+words are not in the paragraph, when nothing changes, or when it changes
+numbers, negations, citation placeholders (`[cite]`, `(ref)`, ...), removes
+a defined acronym or preferred term, or writes a term form the document
+does not use. A failed call is reported for that paragraph and the others
+are still checked; without a brief, the paragraphs are checked without it.
 
 ### Settings (`checks.json`, section `CHECKS`)
 
