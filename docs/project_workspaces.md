@@ -181,6 +181,12 @@ plan**, and prepares the selected source snapshots and provenance. The
 `profile.ini` file is then published atomically, without replacement, as the
 final initialization step. No tool-specific resource selection occurs in the GUI.
 
+The bundled types are Code Repository, Literature Collection, Writing,
+Creative Brainstorming (`brainstorming`), Grounded Brainstorming
+(`grounded_brainstorming`), and Reviewing Assistant. The two
+brainstorming types share the same source layout but differ in
+whether ordinary ideation retrieves project evidence by default.
+
 With the current bundled project types:
 
 | Type | `templates/` contents after new project creation |

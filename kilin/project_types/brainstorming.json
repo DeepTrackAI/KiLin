@@ -1,5 +1,5 @@
 {
-  "display_name": "Brainstorming",
+  "display_name": "Creative Brainstorming",
   "description": "A creativity-first scientific brainstorming workspace for bold hypotheses, unexpected connections, radical thought experiments, and optional evidence-grounded exploration.",
   "extensions": [
     ".pdf",
@@ -57,10 +57,10 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 8,
-        "passages_per_source": 2,
-        "max_passages": 20,
-        "evidence_tokens": 12000,
+        "max_sources": 10,
+        "passages_per_source": 3,
+        "max_passages": 30,
+        "evidence_tokens": 16000,
         "coverage": "bounded",
         "include_related_evidence": true
       }
@@ -78,10 +78,10 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 6,
-        "passages_per_source": 2,
-        "max_passages": 14,
-        "evidence_tokens": 8000,
+        "max_sources": 10,
+        "passages_per_source": 3,
+        "max_passages": 30,
+        "evidence_tokens": 14000,
         "coverage": "bounded",
         "include_related_evidence": true
       }
@@ -99,10 +99,10 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 6,
-        "passages_per_source": 2,
-        "max_passages": 14,
-        "evidence_tokens": 8000,
+        "max_sources": 10,
+        "passages_per_source": 3,
+        "max_passages": 30,
+        "evidence_tokens": 14000,
         "coverage": "bounded",
         "include_related_evidence": true
       }

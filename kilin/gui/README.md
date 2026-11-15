@@ -224,8 +224,9 @@ remain the effective configuration.
 ## Project types
 
 Project types live in `kilin/project_types/`, one JSON file per type
-(currently `brainstorming.json`, `code.json`, `literature.json`,
-`reviewing.json`, and `writing.json`). The filename is the type ID; types
+(currently `brainstorming.json`, `code.json`,
+`grounded_brainstorming.json`, `literature.json`, `reviewing.json`,
+and `writing.json`). The filename is the type ID; types
 are listed in filename order. Each file sets the display name shown in the
 type menu, a one-line description (shown to the router), default file
 suffixes and size limit for new projects, the retrieval instruction added
@@ -416,8 +417,8 @@ removing it from the underlying conversation; restoring respects all other
 indexing policies. The inventory is read-only until a confirmed action and
 does not load embeddings or rebuild source indexes. Index changes take
 effect on the next memory synchronization.
-Memory is enabled by default for new Writing, Brainstorming and Reviewing
-projects, and disabled by default for Code and Literature. **Update memory
+Memory is enabled by default for new Writing, both Brainstorming types,
+and Reviewing projects, and disabled by default for Code and Literature. **Update memory
 index** explicitly synchronizes eligible saved discussions with the loaded
 embedding model; the status shows the last indexed message and embedding
 counts. This action does **not** rebuild source indexes. Saving memory policy

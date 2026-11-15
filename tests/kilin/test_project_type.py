@@ -282,7 +282,10 @@ class TestPackagedProjectTypes(unittest.TestCase):
     def test_packaged_conversation_memory_defaults(self) -> None:
         """Type defaults are explicit, including reviewing and writing."""
 
-        expected_enabled = {"writing", "brainstorming", "reviewing"}
+        expected_enabled = {
+            "writing", "brainstorming", "grounded_brainstorming",
+            "reviewing",
+        }
         for name, definition in load_project_types().items():
             with self.subTest(type_id=name):
                 self.assertIsInstance(
@@ -300,7 +303,10 @@ class TestPackagedProjectTypes(unittest.TestCase):
                     all(intent.memory_indexing in MEMORY_INDEXING_CHOICES
                         for intent in definition.intents.values())
                 )
-        for name in ("code", "literature", "brainstorming"):
+        for name in (
+            "code", "literature", "brainstorming",
+            "grounded_brainstorming",
+        ):
             intent = project_type(name).intents["small_talk"]
             self.assertEqual(intent.memory_indexing, "never")
             self.assertFalse(intent.memory_read)
@@ -1012,7 +1018,7 @@ class TestProjectTypeFields(ProjectTypeFixture):
         self.assertEqual(
             (limits.max_sources, limits.passages_per_source,
              limits.max_passages, limits.max_tokens),
-            (8, 2, 16, 9000),
+            (12, 3, 32, 16000),
         )
 
     def test_source_first_limits_are_per_intent_and_validated(self):

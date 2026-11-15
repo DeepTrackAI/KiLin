@@ -1,8 +1,8 @@
 # KíLín
 
 KíLín is a local, extensible AI assistant for scientific and technical work.
-Its project types cover code, literature, writing, brainstorming, and
-researcher-directed reviewing. Source-grounded answers cite project files;
+Its project types cover code, literature, writing, creative and
+source-grounded brainstorming, and researcher-directed reviewing. Source-grounded answers cite project files;
 conversation memory can separately recall eligible prior discussions without
 treating them as scientific evidence. Projects have customizable intents,
 tools, and memory policies.
