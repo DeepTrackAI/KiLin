@@ -109,6 +109,7 @@ from kilin.tools.writing_check._document import (
     read_document,
 )
 from kilin.tools.writing_check._review import (
+    Dropped,
     document_brief,
     document_context,
     review_paragraph,
@@ -323,7 +324,7 @@ def run(
     )
     notes = []
     failures: list[dict[str, object]] = []
-    dropped = 0
+    dropped: list[tuple[int, str, Dropped]] = []
     checked = 0
     if choice == PLAN_CHOICE_CANCEL:
         notes.append("The model checks were cancelled; only the checks "
@@ -353,7 +354,8 @@ def run(
                     context.ask_model,
                 )
                 findings += kept
-                dropped += rejected
+                line = document.paragraphs[index].start_line
+                dropped += [(line, level, item) for item in rejected]
                 if failure:
                     failures.append({
                         "item": (
@@ -366,29 +368,24 @@ def run(
                     })
     findings = _unique(findings)
     if dropped:
-        changes = (
-            "1 suggested change was" if dropped == 1
-            else f"{dropped} suggested changes were"
-        )
-        notes.append(
-            f"{changes} dropped: quoting words not in the text, or "
-            "changing numbers, negations, citations or the document's "
-            "terms."
-        )
+        notes.append(_dropped_note(dropped))
 
     counts = Counter(finding.level for finding in findings)
     saved = save_output_file(
         context.project_root,
         f"{path.stem}_writing_check.md",
-        report_markdown(document, scope, findings, notes)
+        report_markdown(document, scope, findings, notes, dropped)
         + incomplete_notice(failures),
-    ) if findings or failures else None
+    ) if findings or failures or dropped else None
     summary.update({
         "paragraphs": len(scope.paragraphs),
         "levels": list(levels),
         "card": bool(card),
         "findings": {level: counts[level] for level in _LEVEL_ORDER},
-        "dropped": dropped,
+        "dropped": len(dropped),
+        "dropped_reasons": dict(Counter(
+            _why_kind(item.why) for _, _, item in dropped
+        )),
         "model_calls": checked,
         "report": saved.as_posix() if saved else None,
     })
@@ -519,6 +516,64 @@ def _example(headings: Sequence[str]) -> str:
     return number if number[:1].isdigit() else f"“{first}”"
 
 
+def _why_kind(why: str) -> str:
+    """Return the kind of reason a suggestion was dropped.
+
+    Parameters
+    ----------
+    why: str
+        The reason (``rejection``).
+
+    Returns
+    -------
+    str
+        A short name for counting: "words not found", "no change",
+        "numbers changed", "citations changed", "negations changed" or
+        "terms changed".
+
+    """
+
+    for start, kind in (
+        ("the words are not", "words not found"),
+        ("nothing changes", "no change"),
+        ("it changes numbers", "numbers changed"),
+        ("it changes citations", "citations changed"),
+        ("it changes a negation", "negations changed"),
+    ):
+        if why.startswith(start):
+            return kind
+    return "terms changed"
+
+
+def _dropped_note(dropped: Sequence[tuple[int, str, Dropped]]) -> str:
+    """Return the note on dropped suggestions, with counts per reason.
+
+    Parameters
+    ----------
+    dropped: Sequence[tuple[int, str, Dropped]]
+        Each dropped suggestion with its paragraph's line and its level.
+
+    Returns
+    -------
+    str
+        "15 suggested changes were dropped (9 words not found, 4 numbers
+        changed, 2 terms changed); they are listed in the report."
+
+    """
+
+    kinds = Counter(_why_kind(item.why) for _, _, item in dropped)
+    reasons = ", ".join(
+        f"{count} {kind}" for kind, count in kinds.most_common()
+    )
+    changes = (
+        "1 suggested change was" if len(dropped) == 1
+        else f"{len(dropped)} suggested changes were"
+    )
+    return (
+        f"{changes} dropped ({reasons}); they are listed in the report."
+    )
+
+
 def _call_seconds() -> float:
     """Return the estimated time of one paragraph call, in seconds.
 
@@ -637,6 +692,7 @@ def report_markdown(
     scope: Scope,
     findings: Sequence[Finding],
     notes: Sequence[str],
+    dropped: Sequence[tuple[int, str, Dropped]] = (),
 ) -> str:
     """Return the full report, to save as Markdown.
 
@@ -650,12 +706,16 @@ def report_markdown(
         Every finding, in reading order.
     notes: Sequence[str]
         Notes on how the check ran.
+    dropped: Sequence[tuple[int, str, Dropped]], optional
+        Suggestions the model made that were not kept, each with its
+        paragraph's first line and its level. Defaults to ``()``.
 
     Returns
     -------
     str
-        A title, the part and the counts, the notes, and one table per
-        section: line, level, original, suggestion and reason.
+        A title, the part and the counts, the notes, one table per
+        section (line, level, original, suggestion, reason), and a table
+        of the dropped suggestions with why each was dropped.
 
     """
 
@@ -679,6 +739,19 @@ def report_markdown(
             f" | {_cell(finding.suggestion) or '—'} | "
             f"{_cell(finding.reason)} |"
         )
+    if dropped:
+        lines += [
+            "", "## Dropped suggestions", "",
+            "Suggestions the model made that were not kept. The line is "
+            "the paragraph's first line.", "",
+            "| Line | Level | Original | Suggestion | Why dropped |",
+            "| ---: | --- | --- | --- | --- |",
+        ]
+        lines += [
+            f"| {line} | {level} | {_cell(item.original)} | "
+            f"{_cell(item.suggestion) or '—'} | {_cell(item.why)} |"
+            for line, level, item in dropped
+        ]
     return "\n".join(lines) + "\n"
 
 

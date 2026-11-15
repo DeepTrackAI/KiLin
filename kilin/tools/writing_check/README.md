@@ -134,11 +134,16 @@ or concision). Each call is told:
    the first sentence after it.
 
 The model answers with `ORIGINAL`, `SUGGESTION` and `REASON` blocks, or
-`NONE`. A suggested change is dropped, not reported, when its original
+`NONE`. Its quoted words are found in the paragraph with spaces, quotation
+marks, dashes and case ignored, and without a full stop, comma or ellipsis
+it added at either end; the finding then shows the paragraph's own words.
+A suggested change is dropped, not reported, when its original
 words are not in the paragraph, when nothing changes, or when it changes
 numbers, negations, citation placeholders (`[cite]`, `(ref)`, ...), removes
 a defined acronym or preferred term, or writes a term form the document
-does not use. A failed call is reported for that paragraph and the others
+does not use. Dropped suggestions are counted by reason in the chat and
+listed in the report's "Dropped suggestions" table, with why each was
+dropped. A failed call is reported for that paragraph and the others
 are still checked; without a brief, the paragraphs are checked without it.
 
 ## Settings (`defaults.json`)

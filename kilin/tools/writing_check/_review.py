@@ -43,9 +43,14 @@ Module Structure
 
     One paragraph's prompt, and the findings in the reply.
 
-- ``rejection``
+- ``locate`` and ``rejection``
 
-    Why a suggested change cannot be kept, if it cannot.
+    The paragraph's own words for a quote, and why a suggested change
+    cannot be kept, if it cannot.
+
+- ``Dropped``
+
+    A suggested change that was not kept, and why.
 
 - ``review_paragraph``
 
@@ -64,6 +69,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 import re
 from typing import Final
 
@@ -78,9 +84,11 @@ from kilin.tools.writing_check._checks import (
 from kilin.tools.writing_check._document import Document
 
 __all__ = [
+    "Dropped",
     "brief_prompt",
     "document_brief",
     "document_context",
+    "locate",
     "paragraph_prompt",
     "parse_findings",
     "rejection",
@@ -123,6 +131,36 @@ _PLACEHOLDER: Final[re.Pattern[str]] = re.compile(
     r"\[cite\]|\[author\]|\[year\]|\(ref\)"
 )
 _SENTENCE_END: Final[re.Pattern[str]] = re.compile(r"(?<=[.!?])\s+")
+# Characters a model may write differently when it quotes the text; each
+# is replaced by one character, so positions are kept.
+_SAME: Final[dict[int, str]] = str.maketrans({
+    "‘": "'", "’": "'", "‚": "'", "′": "'", "“": '"', "”": '"', "„": '"',
+    "″": '"', "–": "-", "—": "-", "‐": "-", "‑": "-", "−": "-",
+    "\u00a0": " ",
+})
+# Ends a model may add to a quote: a full stop, a comma, an ellipsis.
+_QUOTE_ENDS: Final[re.Pattern[str]] = re.compile(r"^(?:\.\.\.|…)\s*|"
+                                                r"\s*(?:\.\.\.|…|[.,;:])$")
+
+
+@dataclass(frozen=True, slots=True)
+class Dropped:
+    """A suggested change that was not kept.
+
+    Attributes
+    ----------
+    original: str
+        The words the model quoted.
+    suggestion: str
+        The words it suggested.
+    why: str
+        Why it was dropped (``rejection``).
+
+    """
+
+    original: str
+    suggestion: str
+    why: str
 
 
 def document_context(
@@ -385,6 +423,58 @@ def _unquoted(text: str) -> str:
     return text
 
 
+def _comparable(text: str) -> str:
+    """Return text with quotes, dashes and case made alike.
+
+    Parameters
+    ----------
+    text: str
+        Text with single spaces.
+
+    Returns
+    -------
+    str
+        The same length of text: curly quotes straight, dashes as "-",
+        letters in lower case where that keeps the length.
+
+    """
+
+    text = text.translate(_SAME)
+    lowered = text.lower()
+    return lowered if len(lowered) == len(text) else text
+
+
+def locate(original: str, paragraph: str) -> tuple[str, int] | None:
+    """Return the paragraph's own words for a quote, and where they are.
+
+    Parameters
+    ----------
+    original: str
+        The words the model quotes.
+    paragraph: str
+        The paragraph's readable text.
+
+    Returns
+    -------
+    tuple[str, int] | None
+        The words as the paragraph writes them and their position, found
+        with spaces, quotation marks, dashes and case ignored, and without
+        a full stop, comma or ellipsis the model added at either end; None
+        when the words are not in the paragraph.
+
+    """
+
+    text = " ".join(paragraph.split())
+    quote = " ".join(original.split())
+    for candidate in (quote, _QUOTE_ENDS.sub("", quote).strip()):
+        if not candidate:
+            continue
+        where = _comparable(text).find(_comparable(candidate))
+        if where >= 0:
+            return text[where:where + len(candidate)], where
+    return None
+
+
 def rejection(
     original: str, suggestion: str, paragraph: str, glossary: Glossary
 ) -> str:
@@ -405,16 +495,19 @@ def rejection(
     -------
     str
         ``""`` when the change can be kept; otherwise the first reason it
-        cannot: the words are not in the paragraph, nothing changes, or
-        the suggestion changes numbers, negations, citation placeholders,
-        a defined acronym or a preferred term, or brings back a form the
-        document does not use.
+        cannot: the words are not in the paragraph (``locate``), nothing
+        changes, or the suggestion changes numbers, negations, citation
+        placeholders, a defined acronym or a preferred term, or brings back
+        a form the document does not use. The suggestion is compared with
+        the paragraph's own words.
 
     """
 
-    if " ".join(original.split()) not in " ".join(paragraph.split()):
+    found = locate(original, paragraph)
+    if found is None:
         return "the words are not in the paragraph"
-    if " ".join(suggestion.split()) == " ".join(original.split()):
+    original = found[0]
+    if " ".join(suggestion.split()) == original:
         return "nothing changes"
     for pattern, what in (
         (_NUMBER, "numbers"), (_PLACEHOLDER, "citations"),
@@ -448,7 +541,7 @@ def review_paragraph(
     context: str,
     glossary: Glossary,
     ask_model: Callable[[str, str, int | None], str],
-) -> tuple[list[Finding], int, str]:
+) -> tuple[list[Finding], list[Dropped], str]:
     """Check one paragraph at one level with the model.
 
     Parameters
@@ -468,11 +561,11 @@ def review_paragraph(
 
     Returns
     -------
-    tuple[list[Finding], int, str]
+    tuple[list[Finding], list[Dropped], str]
         The kept findings (level ``grammar`` or ``style``, check
-        ``model``), how many were dropped by ``rejection``, and why the
-        call failed (``""`` when it did not). A failed call is reported,
-        not fatal.
+        ``model``, quoting the paragraph's own words), the suggestions
+        dropped by ``rejection`` with the reason, and why the call failed
+        (``""`` when it did not). A failed call is reported, not fatal.
 
     """
 
@@ -480,22 +573,24 @@ def review_paragraph(
     try:
         reply = ask_model(system, user, None)
     except IncompleteModelResponse as error:
-        return [], 0, f"Not completed ({error.reason}): {error}"
+        return [], [], f"Not completed ({error.reason}): {error}"
     except Exception as error:  # A failed call is reported, not fatal.
-        return [], 0, f"Model error: {error}"
+        return [], [], f"Model error: {error}"
     text = document.paragraphs[index].text
     found = parse_findings(reply)
     if level == LEVEL_STYLE:
         found = found[:_STYLE_MAX]
-    kept, dropped = [], 0
+    kept: list[Finding] = []
+    dropped: list[Dropped] = []
     for original, suggestion, reason in found:
-        if rejection(original, suggestion, text, glossary):
-            dropped += 1
+        why = rejection(original, suggestion, text, glossary)
+        located = locate(original, text)
+        if why or located is None:
+            dropped.append(Dropped(original, suggestion, why))
             continue
-        squeezed = " ".join(text.split())
-        offset = squeezed.find(" ".join(original.split()))
+        words, offset = located
         kept.append(make_finding(
-            document.paragraphs, index, level, "model", original,
-            suggestion, reason, max(offset, 0),
+            document.paragraphs, index, level, "model", words,
+            suggestion, reason, offset,
         ))
     return kept, dropped, ""

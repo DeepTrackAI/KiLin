@@ -28,6 +28,7 @@ from kilin.tools.writing_check._review import (
     brief_prompt,
     document_brief,
     document_context,
+    locate,
     paragraph_prompt,
     parse_findings,
     rejection,
@@ -166,6 +167,41 @@ class TestReplies(unittest.TestCase):
                 )
 
 
+class TestLocate(unittest.TestCase):
+
+    def test_quotes_dashes_case_and_ends(self) -> None:
+        paragraph = ("We used “single-particle” tracking – a method. It is "
+                     "fast.")
+        for quote, words in (
+            ('we used "single-particle" tracking',
+             "We used “single-particle” tracking"),
+            ("tracking - a method.", "tracking – a method."),
+            ("...It is fast.", "It is fast"),
+            ("It is fast", "It is fast"),
+        ):
+            with self.subTest(quote=quote):
+                found = locate(quote, paragraph)
+                self.assertIsNotNone(found)
+                assert found is not None
+                self.assertEqual(found[0], words)
+                self.assertEqual(paragraph[found[1]:].startswith(words),
+                                 True)
+        self.assertIsNone(locate("not here", paragraph))
+
+    def test_kept_finding_quotes_the_paragraph(self) -> None:
+        document = read_document(
+            Path("a.txt"), "We used “raw” data in the the analysis."
+        )
+        reply = ('ORIGINAL: we used "raw" data\nSUGGESTION: We used the '
+                 'raw data\nREASON: article\n')
+        kept, dropped, _ = review_paragraph(
+            LEVEL_GRAMMAR, document, 0, "", Glossary(),
+            Mock(return_value=reply),
+        )
+        self.assertEqual(dropped, [])
+        self.assertEqual(kept[0].original, "We used “raw” data")
+
+
 class TestReviewParagraph(unittest.TestCase):
 
     def setUp(self) -> None:
@@ -184,7 +220,12 @@ class TestReviewParagraph(unittest.TestCase):
              (5, LEVEL_GRAMMAR, "model", "in order to estimate",
               "to estimate")],
         )
-        self.assertEqual((dropped, failure), (4, ""))
+        self.assertEqual(failure, "")
+        self.assertEqual(
+            [item.why for item in dropped],
+            ["it changes numbers", "it changes a negation",
+             "the words are not in the paragraph", "it changes citations"],
+        )
 
     def test_failed_calls(self) -> None:
         for error, start in (
@@ -197,7 +238,7 @@ class TestReviewParagraph(unittest.TestCase):
                     LEVEL_STYLE, self.document, 1, "", self.glossary,
                     Mock(side_effect=error),
                 )
-                self.assertEqual((kept, dropped), ([], 0))
+                self.assertEqual((kept, dropped), ([], []))
                 self.assertTrue(failure.startswith(start))
 
     def test_style_keeps_at_most_five(self) -> None:

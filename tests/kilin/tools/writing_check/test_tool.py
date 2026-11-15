@@ -172,7 +172,10 @@ class TestWritingCheckRun(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIn(line, answer)
         self.assertNotIn("12 particles", answer)
-        self.assertIn("1 suggested change was dropped", answer)
+        self.assertIn(
+            "1 suggested change was dropped (1 numbers changed); they are "
+            "listed in the report.", answer,
+        )
         self.assertIn("draft_writing_check.md", answer)
         # One brief call (no card), then grammar and style per paragraph.
         self.assertEqual(context.ask_model.call_count, 1 + 4 * 2)
@@ -183,6 +186,11 @@ class TestWritingCheckRun(unittest.TestCase):
                       text)
         self.assertEqual(result.summary["findings"],
                          {"grammar": 2, "consistency": 1, "style": 2})
+        self.assertEqual(result.summary["dropped_reasons"],
+                         {"numbers changed": 1})
+        self.assertIn("## Dropped suggestions", text)
+        self.assertIn("| 6 | style | particles | 12 particles | it changes "
+                      "numbers |", text)
         # Progress names each paragraph once, grammar then style.
         steps = [c.args[0] for c in context.progress.call_args_list
                  if c.args[0].startswith("Checking ") and "paragraph" in
