@@ -404,6 +404,20 @@ Each editor has **Save settings**, **Restore defaults**, and a separate
 shows the base project instructions with the intent's system instructions.
 Only project-local overrides are saved, never packaged project types.
 
+The **Indexing** tab also contains an independent **Conversation memory**
+section. Project-wide controls enable memory, select automatic user-question
+and assistant-answer inclusion, bound retrieved memory hits and token budget,
+and configure exclusion of disliked answers from ordinary chat context.
+Memory is enabled by default for new Writing, Brainstorming and Reviewing
+projects, and disabled by default for Code and Literature. **Update memory
+index** explicitly synchronizes eligible saved discussions with the loaded
+embedding model; the status shows the last indexed message and embedding
+counts. This action does **not** rebuild source indexes. Saving memory policy
+alone likewise does not trigger ordinary source reindexing. Intent panels
+add separate memory controls: automatic/explicit/never indexing, and whether
+that intent can retrieve previous conversations. The same project revision
+protects all behavior editors against simultaneous conflicting writes.
+
 Advanced Indexing lets users change code-graph policy (Automatic, Enabled,
 Disabled) and scientific-paper document-header extraction. These settings
 require confirmation and an index rebuild. If rebuilding fails, the GUI
@@ -590,6 +604,24 @@ writer. Restoration requires moving the JSON back while KíLín is closed;
 the original lock companion is reused. See
 [conversation-file ownership](../../docs/conversation_ownership.md) for the
 error and recovery contract.
+
+Completed questions and answers have independent **Save**, **Like**, and
+**Dislike** buttons beneath the message. Save explicitly selects the message
+for memory without asserting correctness; Like can increase a relevant
+memory hit's priority; Dislike excludes it from memory and, by default,
+removes its associated turn from future automatic chat context. Reactions
+and selection can be reversed. These controls save authoritative feedback
+in the project's `memory/feedback.json`, independently of conversation
+checkpoints. A stale or invalid update shows an error and reloads the saved
+feedback. Controls remain unavailable while an answer is in progress.
+
+When a generated answer uses conversation memory, **Earlier conversation
+memory** links appear beneath it. These navigate to the original saved
+conversation and highlight its turn when the conversation is still active;
+otherwise the link is unavailable. They are explicitly **not scientific
+source citations** and do not alter the evidence preview or source citation
+numbers. A branch retaining the same turn UUID can share feedback and provide
+another active memory origin.
 
 Clicking an answer selects its evidence when the side panels are visible;
 selecting text does not change the current reference. Ordinary answer clicks

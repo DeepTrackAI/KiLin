@@ -219,7 +219,10 @@ appears under a dedicated `CONVERSATION MEMORY` heading, never within
 numbered source `Evidence`. A system-level provenance rule distinguishes
 historical assistant assertions from current documentary evidence. Search
 hits have separate relevance, preference weights and an independent token
-budget. When no memory hits are supplied, the original answer prompt is
+budget. Completed turns retain only the resulting navigation identities
+under `parameters.memory_references` (memory labels, UUID/role, and active
+conversation/one-based turn origins); source `Evidence` remains separate.
+When no memory hits are supplied, the original answer prompt is
 unchanged. Tool-owned answer generation does not receive blended memory or
 source passages. See [Conversation memory](conversation_memory.md).
 

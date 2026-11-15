@@ -3,9 +3,9 @@
 This document describes the implemented conversation-memory core:
 **durable turn identities, authoritative feedback, disliked-answer context
 exclusion, and project-local semantic/lexical retrieval**. Project/intent
-policies are defined in [Configuration](configuration.md). GUI Save/Like/
-Dislike controls and idle-phase indexing integration are deferred to PR5;
-the headless core already provides feedback and explicit synchronization.
+policies are defined in [Configuration](configuration.md). The desktop GUI exposes Save/Like/Dislike for committed messages,
+project-wide and intent-specific memory settings, index status and explicit
+synchronization; the headless core provides the same underlying operations.
 Source evidence and retrieved memory remain separate in answering prompts.
 
 ## Persistent turn identity
@@ -179,7 +179,7 @@ re-embeds. New or changed content is embedded using the **already loaded**
 embedding model and previously saved compatible vectors are reused. A model
 identity change invalidates incompatible vectors. The next eligible memory
 search catches up after a completed answer, archive, feedback edit or policy
-change; a future GUI may invoke this method during idle time. Disabled memory
+change; the GUI also exposes an explicit Update action when idle. Disabled memory
 does not read or embed prior conversation content.
 
 ## Strictly separate answer-prompt channels
@@ -215,6 +215,39 @@ hits, not source rankings. Memory query formatting has its own instruction
 instead of reusing the source-evidence retrieval instruction. There is no
 new summarizing model call. Memory is not used to validate citation claims.
 
+## Desktop feedback and memory navigation
+
+The desktop page places **Save**, **Like**, and **Dislike** controls below
+both saved questions and completed answers. An explicit Save is independent
+of Like; Dislike overrides memory selection and, under the project default,
+excludes the paired turn from automatic chat context. Buttons target an
+active conversation ID, stable turn UUID and message role, and use the
+feedback store's optimistic revision. They are disabled during answer
+processing and while a write is pending. A stale write does not alter the
+checkpoint: the page reloads authoritative feedback instead. Archiving a
+conversation removes it as a new feedback target, without erasing ratings
+that remain relevant through branches.
+
+The **Indexing** tab edits global memory policy and displays counts from
+the last saved derived index. **Update memory index** explicitly invokes
+``RAGSession.sync_conversation_memory()`` through the GUI engine. It may
+embed new messages, but does not rebuild document/source indexes. The
+**Intents** tab edits each intent's indexing (`automatic`, `explicit`,
+`never`) and retrieval (`read`) policy. Memory settings use independent
+``memory`` and ``intent_memory`` project-behavior save scopes. Existing
+project revisions still protect all editor writes against stale updates.
+
+When an answer retrieves earlier conversation memory, the completed turn
+persists navigational ``parameters.memory_references`` metadata: labels,
+source turn UUIDs and active conversation/one-based-turn origins. No memory
+text is copied into this metadata. The GUI shows these links beneath the
+answer, **separately from scientific source citations**. Selecting a link
+opens the recorded conversation and highlights its turn. An archived or
+missing conversation yields an unavailable link rather than an invented
+source citation. A branch can provide another active origin of the same
+turn. Existing source citation numbering and evidence previews are
+unchanged. This metadata is derived context, not a scientific assertion.
+
 The index contains prior research discussions and embeddings, potentially
 including sensitive or speculative content. It is not encrypted or anonymized.
 See [Security](security.md) for the local trust boundary.
@@ -225,7 +258,9 @@ Focused deterministic tests live in
 `tests/kilin/test__conversation_memory_index.py`,
 `tests/kilin/test__conversation_memory_retrieval.py`, and
 `tests/kilin/test_rag__conversation_memory.py`, alongside the PR2 and PR3
-feedback, checkpoint and disliked-history tests. They exercise branch
+feedback, checkpoint and disliked-history tests. GUI protocol coverage lives
+in `tests/kilin/gui/test_engine__conversation_memory.py` and
+`tests/kilin/gui/test__conversation_memory_frontend.py`. They exercise branch
 identity, duplicate content, explicit/hard-never policies, edits to feedback,
 index corruption, archiving, model changes, search budgets and the four
 source/memory prompt configurations. Native model/backend and Qt tests

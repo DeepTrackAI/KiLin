@@ -149,6 +149,7 @@ const chooseSidePanels = (visible) => shown.push(visible);
 const selectTurn = (...args) => selected.push(args);
 const splitThinking = (answer) => ({ answer, thinking: null });
 const citationLabels = () => new Map([[4, 1]]);
+const appendMemoryProvenance = () => {};
 const turnCitationLabels = new WeakMap();
 class Element {
   constructor(tag) { this.tag = tag; this.children = []; this.events = {}; }

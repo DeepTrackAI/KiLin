@@ -282,6 +282,14 @@ class ChatBridge(QObject):
 
     requestProjectBehavior()
         Request editable project-wide and intent configuration.
+    requestConversationFeedback(project)
+        Request revisioned feedback for the active project.
+    saveMessageFeedback(request_json)
+        Forward a validated feedback write to the backend engine.
+    requestMemoryStatus(project)
+        Query stored memory-index counts for the active project.
+    syncConversationMemory(project)
+        Request manual synchronization of the derived memory index.
     saveProjectBehavior(project, scope, intent_id, ...)
         Submit one revision-checked project behavior editor.
 
@@ -1080,6 +1088,67 @@ class ChatBridge(QObject):
 
         self.commandRequested.emit({"action": "project_behavior"})
 
+    @Slot(str)
+    def requestConversationFeedback(self, project: str) -> None:
+        """Request feedback for one explicitly named open project.
+
+        Parameters
+        ----------
+        project: str
+            Frontend's currently displayed workspace identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "conversation_feedback", "project": project,
+        })
+
+    @Slot(str)
+    def saveMessageFeedback(self, request_json: str) -> None:
+        """Forward a message rating to the validated core store.
+
+        Parameters
+        ----------
+        request_json: str
+            Serialized feedback request with revision and target identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "save_message_feedback",
+            "request": json.loads(request_json),
+        })
+
+    @Slot(str)
+    def requestMemoryStatus(self, project: str) -> None:
+        """Read stored memory-index counts without running embeddings.
+
+        Parameters
+        ----------
+        project: str
+            Frontend's currently displayed workspace identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "memory_status", "project": project,
+        })
+
+    @Slot(str)
+    def syncConversationMemory(self, project: str) -> None:
+        """Request explicit project-local memory synchronization.
+
+        Parameters
+        ----------
+        project: str
+            Frontend's currently displayed workspace identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "sync_memory_index", "project": project,
+        })
+
     @Slot(str, str, str, str, str, int)
     def saveProjectBehavior(
         self, project: str, scope: str, intent_id: str,
@@ -1092,7 +1161,8 @@ class ChatBridge(QObject):
         project: str
             Open project path captured by the page.
         scope: str
-            ``global``, ``intent``, or ``capabilities`` editor.
+            ``global``, ``intent``, ``capabilities``, ``memory``, or
+            ``intent_memory`` editor.
         intent_id: str
             Intent ID, empty for global or indexing settings.
         values_json: str

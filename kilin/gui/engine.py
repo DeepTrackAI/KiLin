@@ -165,6 +165,11 @@ from kilin.project_files import (
     replace_project_file,
 )
 from kilin.conversation_format import conversation_state
+from kilin.conversation_memory.feedback import FeedbackStore
+from kilin.conversation_memory.persistence import (
+    memory_index_path,
+    read_memory_index,
+)
 from kilin.conversation_ownership import ConversationFileLock
 from kilin.conversations import ConversationInfo, ConversationStore
 from kilin.huggingface import download_model
@@ -393,6 +398,14 @@ class ChatEngine:
 
     behavior_settings()
         Send the project-wide and intent editors for the open project.
+    conversation_feedback(project)
+        Return a revisioned snapshot of user feedback for a project.
+    save_message_feedback(request)
+        Update one saved question or answer with revision checking.
+    memory_status(project)
+        Report persisted memory-index counts without loading models.
+    sync_memory_index(project)
+        Update the project's derived memory index without source indexing.
     save_behavior_settings(project, scope, intent_id, ...)
         Save validated behavior overrides with revision checking.
 
@@ -2378,6 +2391,210 @@ class ChatEngine:
             self._report_error(
                 "gui.project_behavior.read.failed", error,
                 f"Could not read the project behavior: {error}",
+            )
+
+    def conversation_feedback(self, project: str) -> None:
+        """Report feedback for the requested active project.
+
+        Parameters
+        ----------
+        project: str
+            Workspace identity supplied by the frontend.
+
+        Notes
+        -----
+        The response is project-scoped. No conversation checkpoint or
+        model state is modified by reading feedback.
+
+        """
+
+        try:
+            root = self._memory_project(project)
+            snapshot = FeedbackStore(root).load()
+            self._send(
+                "conversation_feedback", project=str(root),
+                revision=snapshot.revision,
+                entries=self._feedback_entries(snapshot),
+            )
+        except Exception as error:
+            self._send(
+                "conversation_feedback", project=project,
+                error=str(error),
+            )
+
+    def _memory_project(self, project: str) -> Path:
+        """Validate the active workspace of a memory-related command.
+
+        Parameters
+        ----------
+        project: str
+            Project identity captured by the GUI.
+
+        Returns
+        -------
+        pathlib.Path
+            Resolved root of the currently active project.
+
+        Raises
+        ------
+        ValueError
+            If the project has changed or its identity is invalid.
+
+        """
+
+        if (
+            self.session is None or not isinstance(project, str)
+            or not project
+        ):
+            raise ValueError("Open the requested project first.")
+        root = self.session.project.root
+        if Path(project).expanduser().resolve() != root:
+            raise ValueError("The active project has changed.")
+        return root
+
+    @staticmethod
+    def _feedback_entries(snapshot: object) -> dict[str, dict[str, dict]]:
+        """Convert a validated feedback snapshot to a JSON object.
+
+        Parameters
+        ----------
+        snapshot: FeedbackSnapshot
+            Core-owned immutable feedback snapshot.
+
+        Returns
+        -------
+        dict[str, dict[str, dict]]
+            Feedback by UUID and message role.
+
+        """
+
+        return {
+            turn_uuid: {
+                role: asdict(value) for role, value in ratings.items()
+            }
+            for turn_uuid, ratings in snapshot.entries.items()
+        }
+
+    def save_message_feedback(self, request: object) -> None:
+        """Save one message rating with project and revision guards.
+
+        Parameters
+        ----------
+        request: object
+            JSON-decoded project, conversation, UUID, role, rating, revision,
+            and request ID supplied by the frontend.
+
+        Notes
+        -----
+        The core FeedbackStore owns authorization, locking and persistence.
+        An invalid or stale write leaves conversation history unchanged.
+
+        """
+
+        identity = request if isinstance(request, dict) else {}
+        project = identity.get("project")
+        request_id = identity.get("request_id")
+        response = {
+            "project": project,
+            "request_id": request_id,
+            "turn_uuid": identity.get("turn_uuid"),
+            "role": identity.get("role"),
+        }
+        try:
+            if set(identity) != {
+                "project", "conversation_id", "turn_uuid", "role",
+                "saved", "reaction", "revision", "request_id",
+            }:
+                raise ValueError("Invalid message feedback request.")
+            if type(request_id) is not int or request_id < 1:
+                raise ValueError("Invalid message feedback request ID.")
+            if self._answering:
+                raise RuntimeError("Finish the current answer first.")
+            root = self._memory_project(project)
+            snapshot = FeedbackStore(root).update(
+                identity["conversation_id"], identity["turn_uuid"],
+                identity["role"], saved=identity["saved"],
+                reaction=identity["reaction"],
+                expected_revision=identity["revision"],
+            )
+            self._send(
+                "message_feedback", **response,
+                revision=snapshot.revision,
+                entries=self._feedback_entries(snapshot),
+            )
+            self.memory_status(project)
+        except Exception as error:
+            self._send("message_feedback", **response, error=str(error))
+
+    def memory_status(self, project: str) -> None:
+        """Read lightweight derived memory-index counts without embedding.
+
+        Parameters
+        ----------
+        project: str
+            Identity of the requested active project.
+
+        Notes
+        -----
+        The index may be behind recent edits. Counts describe its last
+        successful build, not necessarily every newly completed turn.
+
+        """
+
+        try:
+            root = self._memory_project(project)
+            enabled = effective_project_type(root).conversation_memory.enabled
+            snapshot = FeedbackStore(root).load()
+            index = read_memory_index(memory_index_path(root))
+            records = index["records"] if index is not None else []
+            self._send(
+                "memory_status", project=str(root), enabled=enabled,
+                indexed=index is not None,
+                records=len(records),
+                questions=sum(
+                    item["role"] == "user" for item in records
+                ),
+                answers=sum(
+                    item["role"] == "assistant" for item in records
+                ),
+                vectors=len(index["vectors"]) if index else 0,
+                feedback_stale=bool(
+                    index and index["feedback_revision"] != snapshot.revision
+                ),
+            )
+        except Exception as error:
+            self._send("memory_status", project=project, error=str(error))
+
+    def sync_memory_index(self, project: str) -> None:
+        """Update derived conversation memory without touching source indexes.
+
+        Parameters
+        ----------
+        project: str
+            Identity of the active project selected by the frontend.
+
+        Notes
+        -----
+        This optional explicit update can embed new texts. Ordinary query
+        processing already synchronizes memory when needed.
+
+        """
+
+        try:
+            self._memory_project(project)
+            if self._answering:
+                raise RuntimeError("Finish the current answer first.")
+            self._send("memory_sync_started", project=project)
+            index = self.session.sync_conversation_memory()
+            self._send(
+                "memory_synced", project=project,
+                embedded_count=index.embedded_count,
+                changed=index.changed,
+            )
+            self.memory_status(project)
+        except Exception as error:
+            self._send(
+                "memory_sync_failed", project=project, message=str(error)
             )
 
     def save_behavior_settings(
@@ -4900,6 +5117,14 @@ def main() -> None:
                             command.get("revision"),
                             command.get("request_id"),
                         )
+                    elif action == "conversation_feedback":
+                        engine.conversation_feedback(command.get("project"))
+                    elif action == "save_message_feedback":
+                        engine.save_message_feedback(command.get("request"))
+                    elif action == "memory_status":
+                        engine.memory_status(command.get("project"))
+                    elif action == "sync_memory_index":
+                        engine.sync_memory_index(command.get("project"))
                     elif action == "tool_settings":
                         engine.tool_settings()
                     elif action == "save_tool_settings":

@@ -135,7 +135,11 @@ paths and source paths remain subject to downstream core validation.
 | `save_answer_settings` | None at dispatcher | `settings` is forwarded (default `None`); the handler requires an object and an open project. Accepted updates are `temperature`, `thinking`, and `max_new_tokens`; other keys are ignored. The GUI additionally sends `request_id` (positive integer) and canonical `project` path to correlate the result. |
 | `settings_info` | None | Fetch descriptive core and registered tool metadata without opening a project; returns `settings_info` or `settings_info_failed` |
 | `project_behavior` | None | Read project-wide, capability and intent editors, defaults, identity and revision |
-| `save_project_behavior` | `project`, `scope`, `intent_id`, `values`, `revision`, `request_id` | Save global, intent or capability settings with project and revision checks; rebuild indexes for capabilities |
+| `save_project_behavior` | `project`, `scope`, `intent_id`, `values`, `revision`, `request_id` | Save global, intent, capabilities, memory or intent_memory settings with project and revision checks; rebuild source indexes only for capabilities |
+| `conversation_feedback` | `project` | Read the active project's feedback revision and per-message ratings without changing its conversation files |
+| `save_message_feedback` | `request` | Write one saved-message selection/reaction with project, conversation ID, turn UUID, role, expected revision and positive request ID |
+| `memory_status` | `project` | Read current project policy and last saved derived memory-index counts without a model call |
+| `sync_memory_index` | `project` | Synchronize independent conversation memory and emit progress/result; do not rebuild primary-source indexes |
 | `tool_settings` | None | List the open project's tools and their settings |
 | `save_tool_settings` | `tool` | `settings` (object of the tool's changeable settings) saved for the open project |
 | `reset` | None | Start a new conversation; do not erase the previous trace |
@@ -157,18 +161,55 @@ and dynamic Settings fields, without embedding the explanatory strings.
 ### Project behavior editor
 
 The `project_behavior` command emits an event with the canonical project
-path, `project_type_id`, SHA-256 `revision`, global and capability editors
-(each with `values` and `defaults`), and ordered intents (`id`, fixed
-`tool`, `values`, `defaults`, `source_first_defaults`). The editor resolves
+path, `project_type_id`, SHA-256 `revision`, global, capability and memory
+editors (each with `values` and `defaults`), and ordered intents (`id`,
+fixed `tool`, `values`, `defaults`, `source_first_defaults`, `memory`).
+The editor resolves
 packaged definitions with sparse project-local overrides.
 
 `save_project_behavior` accepts the project path, scope (`global`, `intent`,
-or `capabilities`), optional `intent_id`, complete editor values, revision
-and positive `request_id`. The core rejects different projects, stale
+`capabilities`, `memory`, or `intent_memory`), optional `intent_id`, complete
+editor values, revision and positive `request_id`. The core rejects different projects, stale
 revisions, invalid configurations and tool changes. On success it emits
 `project_behavior` with `saved: true` and the new revision; on error it
 returns a correlated error. Indexing capability edits trigger a rebuild,
 with configuration restoration and index recovery on failure.
+
+### Conversation-memory feedback and index status
+
+`conversation_feedback(project)` emits `conversation_feedback` with
+`project`, SHA-256 `revision`, and `entries` keyed by saved turn UUID and
+`user`/`assistant` role. Each rating has independent `saved` and `reaction`
+(`neutral`, `liked`, `disliked`) fields. Read errors carry `project` and
+`error`. The read does not load a model or rewrite saved conversations.
+
+`save_message_feedback(request)` accepts exactly `project`,
+`conversation_id`, `turn_uuid`, `role`, `saved`, `reaction`, `revision`, and
+positive `request_id`. On success `message_feedback` returns the same
+identifiers plus the new feedback `revision` and complete `entries`.
+Failure returns the matching identifiers and `error`, without changing
+stored feedback. The core verifies the active project and saved turn,
+rejects stale revisions, and blocks writes while an answer is running.
+The page ignores late acknowledgements from other projects or requests;
+failed saves trigger a feedback reload. UUIDs persist across branches.
+
+`memory_status(project)` emits `memory_status` with policy `enabled`,
+`indexed`, counts (`records`, `questions`, `answers`, `vectors`) and
+`feedback_stale`. Counts describe the **last derived index**, not a
+real-time guarantee of freshness. `sync_memory_index(project)` emits
+`memory_sync_started`, then `memory_synced` with `changed` and
+`embedded_count` followed by `memory_status`, or `memory_sync_failed`
+with a diagnostic `message`. It requires an idle answer state. These
+commands never call ordinary source indexing or modify source citations.
+
+Completed `answered`, `opened` and `conversation_opened` turn objects may
+contain `parameters.memory_references`: ordered labels `M1`, `M2`, etc.,
+retrieved turn UUID/role and active conversation/one-based turn origins.
+The GUI uses these only for navigation to earlier discussions. This
+metadata contains no retrieved memory text and must not be interpreted
+as the numbered, independently validated documentary `evidence` list.
+Links to archived origins are disabled. The source-reference preview
+contract is unchanged.
 
 `opened.behavior_presentation` contains the project's effective welcome
 prompts and suggestions. The editable intent and project behavior settings
@@ -364,6 +405,7 @@ can accompany an event.
 | Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether a saved folder is unavailable, `legacy`: previous installed-app root with candidate profiles, or empty); `projects_folder_cancelled` (native Browse dialog dismissed); `projects_folder_failed` (`message`: unable to save or old folder no longer exists) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `source_cards_applied` (validated settings and card counts), `source_cards_regenerated` (card counts); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `project_behavior` (validated project editor, defaults, revision, and correlated saved or error status); `settings_info` (validated core/tool descriptive catalog), `settings_info_failed` (metadata diagnostic only); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
+| Conversation memory | `conversation_feedback` (`project`, `revision`, `entries` or `error`); `message_feedback` (`request_id`, project, turn UUID, role, updated revision/entries or `error`); `memory_status` (last indexed counts, enabled, stale feedback); `memory_sync_started`, `memory_synced`, `memory_sync_failed` (project, embedded count or error status) |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_activity` (`index`, `phase`, `label`, `started_ms`); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |

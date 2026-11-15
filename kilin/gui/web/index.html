@@ -303,6 +303,34 @@
                 </div>
               </section>
             </div>
+            <section class="source-card-settings conversation-memory-settings" aria-labelledby="conversation-memory-title">
+              <h4 id="conversation-memory-title">Conversation memory</h4>
+              <p class="hint">Use previous project discussions for continuity. Conversation memory is separate from source evidence and cannot supply scientific citations.</p>
+              <label class="check-row" for="memory-enabled" data-settings-key="project_behavior.memory.enabled"><input id="memory-enabled" type="checkbox"> Enable conversation memory</label>
+              <div class="settings-grid">
+                <label for="memory-questions" data-settings-key="project_behavior.memory.questions">Index questions
+                  <select id="memory-questions"><option value="all">All eligible questions</option><option value="none">None</option></select>
+                </label>
+                <label for="memory-answers" data-settings-key="project_behavior.memory.answers">Index answers
+                  <select id="memory-answers"><option value="none">None</option><option value="selected">Saved or liked only</option><option value="all">All eligible answers</option></select>
+                </label>
+                <label for="memory-max-hits" data-settings-key="project_behavior.memory.max_hits">Maximum memory hits
+                  <input id="memory-max-hits" type="number" min="1" step="1">
+                </label>
+                <label for="memory-max-tokens" data-settings-key="project_behavior.memory.max_tokens">Memory token budget
+                  <input id="memory-max-tokens" type="number" min="1" step="1">
+                </label>
+              </div>
+              <label class="check-row" for="memory-exclude-disliked" data-settings-key="project_behavior.memory.exclude_disliked_answers"><input id="memory-exclude-disliked" type="checkbox"> Exclude disliked answers and their questions from chat context</label>
+              <p class="hint">The history setting applies even when long-term memory is disabled. Intent-specific exclusions are configured under Intents.</p>
+              <p id="memory-policy-status" class="hint" role="status">Open a project to configure memory.</p>
+              <div class="source-card-actions">
+                <button id="save-memory-policy" class="secondary" type="button" disabled>Save memory settings</button>
+                <button id="reset-memory-policy" class="secondary" type="button" disabled>Restore defaults</button>
+              </div>
+              <p id="memory-index-status" class="hint" role="status">No memory index status available.</p>
+              <button id="sync-memory-index" class="secondary" type="button" disabled>Update conversation memory</button>
+            </section>
           </section>
         </div>
         <!-- Below the tabs, so messages from Close show on every tab. -->

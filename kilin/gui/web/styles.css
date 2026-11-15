@@ -476,6 +476,7 @@ button:disabled { opacity: .62; cursor: default; }
 .turn.failed .answer-message { color: #9c3936; }
 @keyframes typing-caret { 50% { opacity: 0; } }
 .message-actions { display: flex; align-items: center; gap: 6px; min-height: 26px; margin-top: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; opacity: 0; transition: opacity .12s; }
+.message-actions.feedback-selected { opacity: 1; }
 .message-actions.user-actions { justify-content: flex-end; }
 .answer-message + .message-actions { margin-top: -4px; }
 .user-message:hover + .message-actions, .answer-message:hover + .message-actions, .message-actions:hover, .message-actions:focus-within { opacity: 1; }
@@ -483,6 +484,15 @@ button:disabled { opacity: .62; cursor: default; }
 .message-action:hover, .message-action:focus-visible { color: var(--text); background: var(--hover); }
 .message-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .message-action.copied { color: var(--citation); }
+.message-action.feedback-active { color: var(--citation); background: var(--highlight); }
+.message-action.feedback-disliked { color: var(--danger, #ad4242); background: var(--highlight); }
+.message-action:disabled { opacity: 0.45; cursor: default; }
+.message-feedback-status { margin-left: 4px; font-size: 11px; color: var(--muted); }
+.memory-provenance { margin: 9px 0; padding: 8px 10px; border-left: 2px solid var(--line); font-size: 12px; }
+.memory-provenance p { margin: 0 0 5px; color: var(--muted); }
+.memory-provenance button { min-height: 25px; margin: 2px 5px 2px 0; padding: 3px 7px; font-size: 11px; border: 1px solid var(--line); background: var(--surface-soft); color: var(--text); }
+.memory-provenance button:disabled { opacity: 0.6; }
+.memory-origin-highlight { outline: 2px solid var(--focus); outline-offset: 5px; }
 .answer-message:focus-visible, .turn.selected .answer-message { outline: 2px solid var(--answer-outline); outline-offset: 5px; border-radius: 2px; }
 /* Fonts with maths tables (macOS, Windows), so big operators and fractions
    draw at full size; "math" is the system fallback. */
@@ -865,6 +875,11 @@ details[open]::details-content { block-size: auto; }
 .behavior-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .behavior-actions button { min-height: 32px; font-size: 12px; }
 .behavior-status { margin: 0; font-size: 12px; }
+.intent-memory-editor { display: grid; gap: 10px; margin: 8px 0 20px; padding: 12px; border: 1px solid var(--line); border-radius: 9px; }
+.intent-memory-editor > h5 { margin: 0; font-size: 13px; }
+.intent-memory-editor .behavior-field { max-width: 360px; }
+.conversation-memory-settings { margin-top: 20px; }
+.conversation-memory-settings .settings-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 540px) {
   .behavior-source-limits { grid-template-columns: 1fr; }
   .settings-tab { padding-inline: 5px; font-size: 12px; }

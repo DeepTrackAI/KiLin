@@ -149,7 +149,7 @@
     "project_behavior.memory.exclude_disliked_answers": {
       "title": "Exclude disliked answers from chat context",
       "summary": "Controls whether previously rejected answers are supplied as conversation history.",
-      "description": "Enabled by default. A Dislike will exclude the rejected answer from automatic conversation context once feedback and filtering are implemented; the saved original turn remains untouched. This policy is independent of long-term memory indexing."
+      "description": "Enabled by default. A Dislike will exclude the rejected answer from automatic conversation context and its question from automatic context; the saved original turn remains untouched. This policy is independent of long-term memory indexing."
     },
     "project_behavior.global.default_intent": {
       "title": "Default intent",

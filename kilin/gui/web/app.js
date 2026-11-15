@@ -1703,6 +1703,13 @@ function renderToolSettings(data) {
 let projectBehaviorData = null;
 let behaviorSave = { nextId: 0, pending: null };
 let projectPresentation = null;
+let feedbackData = { project: "", revision: "", entries: {} };
+let feedbackSave = { nextId: 0, pending: null };
+let memoryIndexState = null;
+let memorySyncPending = false;
+let memoryNavigation = null;
+let displayedMemoryProject = "";
+let displayedMemoryRevision = "";
 
 /**
  * Request the currently opened project's saved behavior configuration.
@@ -1714,11 +1721,15 @@ function requestProjectBehavior(force = false) {
     holder.textContent = "Open a project to customize its intents.";
     projectBehaviorData = null;
     showIndexingCapabilities();
+    showMemoryPolicy();
     return;
   }
   if (!force && projectBehaviorData?.project === openProjectPath) return;
   if (behaviorSave.pending) return;
-  if (force) projectBehaviorData = null;
+  if (force) {
+    projectBehaviorData = null;
+    displayedMemoryRevision = "";
+  }
   holder.textContent = "Loading project behavior…";
   bridge.requestProjectBehavior();
 }
@@ -1882,6 +1893,158 @@ function behaviorDrafts() {
     }
   }
   return drafts;
+}
+
+/**
+ * Save an independent behavior scope using the core's revision contract.
+ * @param scope Memory or intent_memory.
+ * @param intentId The owning intent ID, empty for project memory.
+ * @param values Complete scope values.
+ * @param status Result element for validation and confirmation.
+ */
+function saveMemoryBehavior(scope, intentId, values, status) {
+  if (!bridge || !ready || !projectBehaviorData
+      || projectBehaviorData.project !== openProjectPath) return;
+  if (busy || behaviorSave.pending) {
+    status.textContent = "Complete the current operation before saving.";
+    return;
+  }
+  const requestId = ++behaviorSave.nextId;
+  behaviorSave.pending = {
+    requestId, project: openProjectPath, scope, intentId,
+  };
+  status.textContent = "Saving…";
+  status.classList.remove("tool-error");
+  bridge.saveProjectBehavior(openProjectPath, scope, intentId,
+    JSON.stringify(values), projectBehaviorData.revision, requestId);
+}
+
+/**
+ * Return the memory policy currently shown in Settings.
+ * @returns Full project-level policy object.
+ */
+function memoryPolicyValues() {
+  const limits = ["max-hits", "max-tokens"].map((name) => {
+    const field = byId(`memory-${name}`);
+    if (!field.value.trim() || !field.checkValidity()
+        || !Number.isSafeInteger(Number(field.value))) {
+      throw new Error("Memory limits must be positive whole numbers.");
+    }
+    return Number(field.value);
+  });
+  return {
+    enabled: byId("memory-enabled").checked,
+    questions: byId("memory-questions").value,
+    answers: byId("memory-answers").value,
+    max_hits: limits[0], max_tokens: limits[1],
+    exclude_disliked_answers: byId("memory-exclude-disliked").checked,
+  };
+}
+
+/**
+ * Present the saved memory policy without discarding unrelated draft edits.
+ * @param draft Current unsaved settings, or null to render saved settings.
+ */
+function showMemoryPolicy(draft = null) {
+  const data = projectBehaviorData?.project === openProjectPath
+    ? projectBehaviorData.memory : null;
+  const enabled = Boolean(ready && data);
+  const ids = ["enabled", "questions", "answers", "max-hits", "max-tokens",
+    "exclude-disliked"];
+  const values = draft || data?.values;
+  const changed = displayedMemoryProject !== openProjectPath
+    || displayedMemoryRevision !== projectBehaviorData?.revision;
+  if (values && (draft || changed)) {
+    byId("memory-enabled").checked = values.enabled;
+    byId("memory-questions").value = values.questions;
+    byId("memory-answers").value = values.answers;
+    byId("memory-max-hits").value = values.max_hits;
+    byId("memory-max-tokens").value = values.max_tokens;
+    byId("memory-exclude-disliked").checked = values.exclude_disliked_answers;
+  }
+  if (data) {
+    displayedMemoryProject = openProjectPath;
+    displayedMemoryRevision = projectBehaviorData.revision;
+  }
+  for (const name of ids) byId(`memory-${name}`).disabled = !enabled || busy;
+  byId("save-memory-policy").disabled = !enabled || busy;
+  byId("reset-memory-policy").disabled = !enabled || busy
+    || JSON.stringify(data.values) === JSON.stringify(data.defaults);
+  byId("sync-memory-index").disabled = !enabled || busy
+    || !data.values.enabled || memorySyncPending;
+  if (!enabled) byId("memory-policy-status").textContent =
+    "Open a project to configure conversation memory.";
+}
+
+/**
+ * Submit project memory settings, or restore the type's packaged defaults.
+ * @param restore Whether the user selected Restore defaults.
+ */
+function saveMemoryPolicy(restore = false) {
+  const data = projectBehaviorData?.memory;
+  const status = byId("memory-policy-status");
+  if (!data) return;
+  try {
+    const values = restore ? data.defaults : memoryPolicyValues();
+    if (JSON.stringify(values) === JSON.stringify(data.values)) {
+      status.textContent = "These memory settings are already saved.";
+      return;
+    }
+    saveMemoryBehavior("memory", "", values, status);
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add("tool-error");
+  }
+}
+
+/**
+ * Construct per-intent memory controls with independent Save and Restore.
+ * @param item Validated intent editor payload.
+ * @returns Editable policy panel.
+ */
+function createIntentMemoryEditor(item) {
+  const panel = document.createElement("section");
+  panel.className = "intent-memory-editor";
+  panel.dataset.intentId = item.id;
+  panel.dataset.initial = JSON.stringify(item.memory.values);
+  const heading = document.createElement("h5");
+  heading.textContent = "Conversation memory";
+  const mode = behaviorField("indexing", "Index this intent", item.memory.values.indexing,
+    "select", { choices: [["automatic", "Use project policy"],
+      ["explicit", "Only when saved or liked"], ["never", "Never"]] });
+  const read = behaviorField("read", "Retrieve earlier memory for this intent",
+    item.memory.values.read, "checkbox");
+  const actions = document.createElement("div");
+  actions.className = "behavior-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "secondary";
+  save.textContent = "Save memory policy";
+  const restore = document.createElement("button");
+  restore.type = "button";
+  restore.className = "secondary";
+  restore.textContent = "Restore defaults";
+  restore.disabled = JSON.stringify(item.memory.values)
+    === JSON.stringify(item.memory.defaults);
+  const status = document.createElement("p");
+  status.className = "hint behavior-status";
+  status.setAttribute("role", "status");
+  const current = () => ({
+    indexing: mode.querySelector("select").value,
+    read: read.querySelector("input").checked,
+  });
+  save.addEventListener("click", () => saveMemoryBehavior(
+    "intent_memory", item.id, current(), status));
+  restore.addEventListener("click", () => saveMemoryBehavior(
+    "intent_memory", item.id, item.memory.defaults, status));
+  actions.append(save, restore);
+  panel.append(heading, mode, read, actions, status);
+  for (const field of panel.querySelectorAll("[data-behavior-path]")) {
+    field.closest("label").dataset.settingsKey =
+      `project_behavior.intents.memory.${field.dataset.behaviorPath}`;
+  }
+  applySettingsHelp(panel);
+  return panel;
 }
 
 /**
@@ -2090,6 +2253,19 @@ function renderProjectBehavior(data) {
       showIndexingCapabilities();
       return;
     }
+    if (data.scope === "memory" || data.scope === "intent_memory") {
+      const status = data.scope === "memory"
+        ? byId("memory-policy-status")
+        : [...byId("intent-settings").querySelectorAll(
+          ".intent-memory-editor")].find((item) =>
+          item.dataset.intentId === data.intent_id)?.querySelector(
+            ".behavior-status");
+      if (status) {
+        status.textContent = data.error;
+        status.classList.add("tool-error");
+      }
+      return;
+    }
     const editor = [...byId("intent-settings").querySelectorAll(
       ".behavior-editor")].find((item) =>
         item.dataset.behaviorScope === data.scope
@@ -2104,6 +2280,28 @@ function renderProjectBehavior(data) {
   if (!data.behavior) return;
   const previous = projectBehaviorData?.project === openProjectPath
     ? behaviorDrafts() : new Map();
+  let memoryDraft = null;
+  if (projectBehaviorData?.project === openProjectPath
+      && !(data.saved && data.scope === "memory")) {
+    try {
+      const current = memoryPolicyValues();
+      if (JSON.stringify(current)
+          !== JSON.stringify(projectBehaviorData.memory.values)) {
+        memoryDraft = current;
+      }
+    } catch { /* Invalid numeric drafts remain until the next valid save. */ }
+  }
+  const previousIntentMemory = new Map();
+  for (const editor of byId("intent-settings").querySelectorAll(
+    ".intent-memory-editor")) {
+    const fields = [...editor.querySelectorAll("[data-behavior-path]")].map(
+      (field) => ({ path: field.dataset.behaviorPath,
+        value: field.type === "checkbox" ? field.checked : field.value }));
+    if (JSON.stringify(Object.fromEntries(fields.map((field) =>
+      [field.path, field.value]))) !== editor.dataset.initial) {
+      previousIntentMemory.set(editor.dataset.intentId, fields);
+    }
+  }
   const prior = projectBehaviorData;
   projectBehaviorData = data.behavior;
   if (data.scope === "capabilities" && data.saved) {
@@ -2114,6 +2312,13 @@ function renderProjectBehavior(data) {
     status.classList.remove("tool-error");
   }
   showIndexingCapabilities();
+  showMemoryPolicy(memoryDraft);
+  if (data.saved && data.scope === "memory") {
+    byId("memory-policy-status").textContent =
+      "Saved. Memory updates on the next eligible answer or manual update.";
+    byId("memory-policy-status").classList.remove("tool-error");
+    bridge?.requestMemoryStatus(openProjectPath);
+  }
   const holder = byId("intent-settings");
   const opened = new Set([...holder.querySelectorAll(
     "details.behavior-intent[open]")].map((item) => item.dataset.intentId));
@@ -2135,13 +2340,27 @@ function renderProjectBehavior(data) {
     section.dataset.intentId = item.id;
     section.open = opened.has(item.id)
       || Boolean(data.saved && data.scope === "intent"
+        && data.intent_id === item.id)
+      || Boolean(data.saved && data.scope === "intent_memory"
         && data.intent_id === item.id);
     const summary = document.createElement("summary");
     const code = document.createElement("code");
     code.textContent = item.id;
     summary.append(code, ` — ${item.values.description}`);
     section.append(summary, createBehaviorEditor("intent", item, item.id));
+    section.append(createIntentMemoryEditor(item));
     holder.append(section);
+  }
+  for (const editor of holder.querySelectorAll(".intent-memory-editor")) {
+    if (data.saved && data.scope === "intent_memory"
+        && data.intent_id === editor.dataset.intentId) continue;
+    for (const field of previousIntentMemory.get(editor.dataset.intentId) || []) {
+      const control = [...editor.querySelectorAll("[data-behavior-path]")]
+        .find((item) => item.dataset.behaviorPath === field.path);
+      if (!control) continue;
+      if (control.type === "checkbox") control.checked = field.value;
+      else control.value = field.value;
+    }
   }
   if (prior?.project === openProjectPath) {
     for (const editor of holder.querySelectorAll(".behavior-editor")) {
@@ -2169,6 +2388,14 @@ function renderProjectBehavior(data) {
       .find((item) => item.dataset.behaviorScope === data.scope
         && item.dataset.intentId === (data.intent_id || ""));
     if (editor) editor.querySelector(".behavior-status").textContent = "Saved.";
+    if (data.scope === "intent_memory") {
+      const memoryEditor = [...holder.querySelectorAll(
+        ".intent-memory-editor")].find((item) =>
+          item.dataset.intentId === data.intent_id);
+      if (memoryEditor) memoryEditor.querySelector(".behavior-status")
+        .textContent = "Saved. Index updates on next use.";
+      bridge?.requestMemoryStatus(openProjectPath);
+    }
     if (data.scope === "global") {
       projectPresentation = {
         welcome_prompts: data.behavior.global.values.welcome_prompts,
@@ -2178,6 +2405,7 @@ function renderProjectBehavior(data) {
         renderConversationEmpty();
     }
   }
+  refreshFeedbackControls();
 }
 
 /**
@@ -2872,6 +3100,7 @@ function showIndexingFields() {
     byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
   }
   showIndexingCapabilities();
+  showMemoryPolicy();
 }
 
 /**
@@ -4140,6 +4369,8 @@ function setBusy(value, message = "") {
   document.querySelectorAll(".conversation-item").forEach((item) => { item.disabled = (value && !answering) || !ready; });
   syncGeneratingConversations();
   document.querySelectorAll(".conversation-delete, .project-item, .project-settings, .message-branch").forEach((item) => { item.disabled = value || !ready; });
+  refreshFeedbackControls();
+  showMemoryPolicy();
   byId("home-logo").disabled = value;
   byId("new-project").disabled = value;
   byId("stop").disabled = !value;
@@ -4526,6 +4757,7 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
     return superscript;
   });
   answer.append(body);
+  appendMemoryProvenance(answer, turn);
   if (turn.parameters?.finish_reason === "length") {
     const notice = document.createElement("p");
     notice.className = "answer-limit-notice";
@@ -4533,6 +4765,85 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
     notice.textContent = "This answer reached the token limit and may be incomplete. Ask for a shorter answer, or raise Maximum answer tokens in Settings and retry.";
     answer.append(notice);
   }
+}
+
+/**
+ * Highlight the destination saved turn after a referenced chat opens.
+ */
+function highlightMemoryOrigin() {
+  if (!memoryNavigation) return;
+  const shown = reading?.id || activeConversationId;
+  if (shown !== memoryNavigation.conversationId) return;
+  const target = [...conversation.querySelectorAll(".turn:not(.pending)")]
+    [memoryNavigation.turnNumber - 1];
+  if (target) {
+    conversation.querySelectorAll(".memory-origin-highlight").forEach(
+      (item) => item.classList.remove("memory-origin-highlight"));
+    target.classList.add("memory-origin-highlight");
+    target.scrollIntoView({ block: "center" });
+  }
+  memoryNavigation = null;
+}
+
+/**
+ * Navigate to one currently active origin of a retrieved memory.
+ * @param origin Saved conversation ID and one-based turn number.
+ */
+function openMemoryOrigin(origin) {
+  if (!bridge || !origin || !Number.isSafeInteger(origin.turn_number)
+      || origin.turn_number < 1) return;
+  const candidate = lastConversationData?.conversations?.find((item) =>
+    item.conversation_id === origin.conversation_id);
+  if (!candidate) return;
+  memoryNavigation = {
+    conversationId: origin.conversation_id,
+    turnNumber: origin.turn_number,
+  };
+  if (origin.conversation_id === (reading?.id || activeConversationId)) {
+    highlightMemoryOrigin();
+  } else if (busy && answeringConversationId) {
+    readConversation(candidate);
+  } else if (!busy) {
+    setBusy(true, "Opening remembered conversation…");
+    bridge.selectConversation(origin.conversation_id);
+  } else {
+    memoryNavigation = null;
+  }
+}
+
+/**
+ * Render memory origins separately from documentary source citations.
+ * @param answer Completed answer container.
+ * @param turn Saved turn including optional memory references.
+ */
+function appendMemoryProvenance(answer, turn) {
+  const references = turn.parameters?.memory_references;
+  if (!Array.isArray(references) || !references.length) return;
+  const panel = document.createElement("div");
+  panel.className = "memory-provenance";
+  const heading = document.createElement("p");
+  heading.textContent = "Earlier conversation memory (not source evidence)";
+  panel.append(heading);
+  for (const reference of references) {
+    const origins = Array.isArray(reference.origins) ? reference.origins : [];
+    const origin = origins.find((item) => lastConversationData?.conversations
+      ?.some((entry) => entry.conversation_id === item.conversation_id));
+    const details = lastConversationData?.conversations?.find((item) =>
+      item.conversation_id === origin?.conversation_id);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = origin
+      ? `${reference.label} · ${details.name} · turn ${origin.turn_number}`
+      : `${reference.label} · conversation unavailable`;
+    button.title = "Open the earlier conversation; this is not a source citation.";
+    button.disabled = !origin;
+    if (origin) button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openMemoryOrigin(origin);
+    });
+    panel.append(button);
+  }
+  answer.append(panel);
 }
 
 // Markdown blocks the renderer recognizes at the start of a line.
@@ -4941,6 +5252,220 @@ function messageActions(text, timestamp, label, onBranch) {
 }
 
 /**
+ * Return user feedback for a saved message, or its neutral default.
+ * @param turnUuid UUID of the committed conversation turn.
+ * @param role Message role: user or assistant.
+ * @returns Save state and reaction.
+ */
+function messageFeedback(turnUuid, role) {
+  return feedbackData.entries?.[turnUuid]?.[role]
+    || { saved: false, reaction: "neutral" };
+}
+
+/**
+ * Determine whether an intent forbids indexing regardless of feedback.
+ * @param intentId Saved intent identifier.
+ * @returns True if project-owned intent policy is never.
+ */
+function memoryIntentNever(intentId) {
+  const record = projectBehaviorData?.intents?.find((item) =>
+    item.id === intentId);
+  return record?.memory?.values?.indexing === "never";
+}
+
+/**
+ * Repaint button state after feedback, policy, or busy-state changes.
+ */
+function refreshFeedbackControls() {
+  for (const button of conversation.querySelectorAll(".message-feedback")) {
+    const { turnUuid, feedbackRole: role, feedbackAction: action } = button.dataset;
+    const state = messageFeedback(turnUuid, role);
+    const active = action === "save" ? state.saved
+      : state.reaction === action;
+    const loaded = feedbackData.project === openProjectPath
+      && Boolean(feedbackData.revision);
+    button.disabled = !ready || busy || !loaded || Boolean(feedbackSave.pending)
+      || !turnUuid || !button.closest(".turn")?.dataset.conversationId;
+    button.classList.toggle("feedback-active", active);
+    button.classList.toggle("feedback-disliked", active && action === "disliked");
+    button.setAttribute("aria-pressed", String(active));
+    const forbidden = memoryIntentNever(button.closest(".turn")?.dataset.intentId);
+    button.title = forbidden && action !== "disliked"
+      ? "This intent cannot be indexed, even when saved or liked."
+      : action === "save" ? (active ? "Remove from memory" : "Save to memory")
+        : action === "liked" ? "Like this message"
+          : role === "assistant"
+            ? "Dislike this answer (exclude from memory and, when enabled, context)"
+            : "Dislike this question (exclude from memory indexing)";
+  }
+  for (const row of conversation.querySelectorAll(".message-actions")) {
+    row.classList.toggle("feedback-selected", Boolean(row.querySelector(
+      ".message-feedback.feedback-active")));
+  }
+}
+
+/**
+ * Load the active project's feedback and last memory-index status.
+ */
+function requestMemoryState() {
+  if (!bridge || !ready || !openProjectPath) return;
+  bridge.requestConversationFeedback(openProjectPath);
+  bridge.requestMemoryStatus(openProjectPath);
+}
+
+/**
+ * Accept a feedback snapshot only if it belongs to the current project.
+ * @param data Response from the core.
+ */
+function receiveFeedback(data) {
+  if (data.project !== openProjectPath) return;
+  if (data.error) {
+    feedbackData = { project: "", revision: "", entries: {} };
+    refreshFeedbackControls();
+    error.textContent = `Could not read conversation feedback: ${data.error}`;
+    error.classList.remove("hidden");
+    return;
+  }
+  if (feedbackSave.pending) return;
+  feedbackData = {
+    project: data.project, revision: data.revision, entries: data.entries,
+  };
+  refreshFeedbackControls();
+}
+
+/**
+ * Match a feedback save response and restore controls on failure.
+ * @param data Correlated save result.
+ */
+function receiveFeedbackSave(data) {
+  const pending = feedbackSave.pending;
+  if (!pending || pending.project !== data.project
+      || pending.requestId !== data.request_id
+      || pending.turnUuid !== data.turn_uuid
+      || pending.role !== data.role) return;
+  feedbackSave.pending = null;
+  const row = [...conversation.querySelectorAll(".message-actions")].find(
+    (item) => [...item.querySelectorAll(".message-feedback")].some(
+      (button) => button.dataset.turnUuid === data.turn_uuid
+        && button.dataset.feedbackRole === data.role));
+  const status = row?.querySelector(".message-feedback-status");
+  if (data.error) {
+    if (status) status.textContent = data.error;
+    bridge.requestConversationFeedback(openProjectPath);
+  } else {
+    feedbackData = {
+      project: data.project, revision: data.revision, entries: data.entries,
+    };
+    if (status) status.textContent = "Saved.";
+  }
+  refreshFeedbackControls();
+}
+
+/**
+ * Describe the last built index without treating cached counts as current.
+ * @param data Read-only index status from the core.
+ */
+function receiveMemoryStatus(data) {
+  if (data.project !== openProjectPath) return;
+  memoryIndexState = data;
+  const status = byId("memory-index-status");
+  if (data.error) {
+    status.textContent = data.error;
+    status.classList.add("tool-error");
+  } else if (!data.enabled) {
+    status.textContent = "Conversation memory is disabled. Feedback remains saved.";
+    status.classList.remove("tool-error");
+  } else if (!data.indexed) {
+    status.textContent = "No memory index yet. It updates when needed, or use Update.";
+    status.classList.remove("tool-error");
+  } else {
+    status.textContent = `Last index: ${data.records} messages `
+      + `(${data.questions} questions, ${data.answers} answers), `
+      + `${data.vectors} unique embeddings.`
+      + (data.feedback_stale ? " Feedback changed; update pending." : "");
+    status.classList.remove("tool-error");
+  }
+  showMemoryPolicy();
+}
+
+/**
+ * Request an explicit memory update without reindexing scientific sources.
+ */
+function syncMemoryIndex() {
+  if (!bridge || busy || !ready || memorySyncPending
+      || projectBehaviorData?.project !== openProjectPath
+      || !projectBehaviorData.memory.values.enabled) return;
+  memorySyncPending = true;
+  setBusy(true, "Updating conversation memory…");
+  byId("memory-index-status").textContent =
+    "Updating project memory; embedding new messages if needed…";
+  bridge.syncConversationMemory(openProjectPath);
+}
+
+/**
+ * Persist a single button action only for the matching project and turn.
+ * @param button Feedback button associated with a completed turn.
+ */
+function setMessageFeedback(button) {
+  if (!bridge || busy || feedbackSave.pending || !ready
+      || feedbackData.project !== openProjectPath) return;
+  const { turnUuid, feedbackRole: role, feedbackAction: action } = button.dataset;
+  const conversationId = button.closest(".turn")?.dataset.conversationId;
+  if (!turnUuid || !conversationId || !feedbackData.revision) return;
+  const previous = messageFeedback(turnUuid, role);
+  const next = { ...previous };
+  if (action === "save") next.saved = !next.saved;
+  else next.reaction = next.reaction === action ? "neutral" : action;
+  const requestId = ++feedbackSave.nextId;
+  feedbackSave.pending = {
+    requestId, project: openProjectPath, turnUuid, role,
+  };
+  const status = button.closest(".message-actions")?.querySelector(
+    ".message-feedback-status");
+  if (status) status.textContent = "Saving…";
+  refreshFeedbackControls();
+  bridge.saveMessageFeedback(JSON.stringify({
+    project: openProjectPath, conversation_id: conversationId,
+    turn_uuid: turnUuid, role, saved: next.saved, reaction: next.reaction,
+    revision: feedbackData.revision, request_id: requestId,
+  }));
+}
+
+/**
+ * Attach Save, Like, and Dislike to one committed message.
+ * @param row Existing Copy and Branch action row.
+ * @param turn Saved turn including a durable UUID.
+ * @param role User question or assistant answer.
+ */
+function appendFeedbackActions(row, turn, role) {
+  if (!/^[0-9a-f]{32}$/.test(turn.conversation_turn_uuid || "")) return;
+  for (const [action, label, icon] of [
+    ["save", "Save", '<path d="M5 4h14v17l-7-5-7 5z"/>'],
+    ["liked", "Like", '<path d="M7 10v11H4V10h3zm3 11h8l3-10-2-2h-5l1-6-2-1-5 9v10z"/>'],
+    ["disliked", "Dislike", '<path d="M7 14V3H4v11h3zm3-11h8l3 10-2 2h-5l1 6-2 1-5-9V3z"/>'],
+  ]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "message-action message-feedback";
+    button.dataset.turnUuid = turn.conversation_turn_uuid;
+    button.dataset.feedbackRole = role;
+    button.dataset.feedbackAction = action;
+    button.setAttribute("aria-label", `${label} ${role === "user" ? "question" : "answer"}`);
+    button.innerHTML = `<svg aria-hidden="true" viewBox="0 0 24 24">${icon}</svg>`;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setMessageFeedback(button);
+    });
+    row.append(button);
+  }
+  const status = document.createElement("span");
+  status.className = "message-feedback-status";
+  status.setAttribute("role", "status");
+  row.append(status);
+  refreshFeedbackControls();
+}
+
+/**
  * Add Copy, Branch from here, and time rows under a turn's question and
  * answer.
  *
@@ -4954,9 +5479,15 @@ function addMessageActions(item, turn) {
   if (question) {
     const row = messageActions(asked, turn.timestamp, "question", () => branchFromMessage(item, false, asked));
     row.classList.add("user-actions");
+    appendFeedbackActions(row, turn, "user");
     question.after(row);
   }
-  if (answer) answer.after(messageActions(answerCopyText(turn), turn.timestamp, "answer", () => branchFromMessage(item, true, "")));
+  if (answer) {
+    const row = messageActions(answerCopyText(turn), turn.timestamp, "answer",
+      () => branchFromMessage(item, true, ""));
+    appendFeedbackActions(row, turn, "assistant");
+    answer.after(row);
+  }
 }
 
 /**
@@ -5090,6 +5621,8 @@ function addTurn(turn) {
   const item = document.createElement("article");
   item.className = "turn";
   item.dataset.turnIndex = String(conversation.children.length);
+  item.dataset.conversationId = reading?.id || activeConversationId;
+  item.dataset.intentId = turn.parameters?.intent || "";
   const question = document.createElement("div");
   question.className = "user-message";
   fillQuestion(question, turn.question);
@@ -5102,6 +5635,7 @@ function addTurn(turn) {
   item.append(...[question, timeline, answer].filter(Boolean));
   addMessageActions(item, turn);
   conversation.append(item);
+  refreshFeedbackControls();
   selectTurn(item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
@@ -5265,6 +5799,7 @@ function showReadConversation(turns) {
     conversation.append(note);
   }
   renderConversations(lastConversationData);
+  highlightMemoryOrigin();
   updateChatSummary(turns?.length || 0);
   updateSendButton();
 }
@@ -6110,6 +6645,8 @@ function completePendingTurn(turn) {
   }
   pendingTurn = null;
   current.item.classList.remove("pending");
+  current.item.dataset.conversationId = activeConversationId;
+  current.item.dataset.intentId = turn.parameters?.intent || "";
   // A completed answer uses only the timeline committed by the core.
   // Local phase timings remain a visual estimate for a running/stopped turn.
   const timeline = renderTimeline(turn.timeline || null, turn);
@@ -6126,6 +6663,7 @@ function completePendingTurn(turn) {
   bindAnswerSelection(current.answer, current.item, turn);
   renderAnswer(current.answer, turn, current.item, current.thinkingMs);
   addMessageActions(current.item, turn);
+  refreshFeedbackControls();
   if (reading?.live) {
     renderConversations(lastConversationData);
   } else {
@@ -6644,12 +7182,17 @@ function onEvent(raw) {
     if (openProjectPath !== data.project) {
       projectBehaviorData = null;
       behaviorSave.pending = null;
+      feedbackData = { project: "", revision: "", entries: {} };
+      feedbackSave.pending = null;
+      memoryIndexState = null;
+      memorySyncPending = false;
+      memoryNavigation = null;
+      displayedMemoryProject = "";
+      displayedMemoryRevision = "";
     }
     openProjectPath = data.project;
     projectPresentation = data.behavior_presentation || null;
-    if (settingsTab === "indexing" || settingsTab === "intents") {
-      requestProjectBehavior();
-    }
+    requestProjectBehavior();
     messageAttachments = [];
     renderAttachments();
     selectedSources.length = 0;
@@ -6683,6 +7226,7 @@ function onEvent(raw) {
     updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
+    requestMemoryState();
     // The attached files are now in sources and indexed.
     if (attachedAsk) {
       const ask = attachedAsk;
@@ -6718,6 +7262,8 @@ function onEvent(raw) {
     updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
+    highlightMemoryOrigin();
+    requestMemoryState();
     if (branchDraft) {
       // A branch from a question: edit it and send it again.
       setQuestionDraft(branchDraft);
@@ -6728,6 +7274,7 @@ function onEvent(raw) {
     renderConversations(data);
     if (data.workspace_files) renderWorkspace(data.workspace_files);
     setBusy(false);
+    bridge?.requestMemoryStatus(openProjectPath);
   } else if (data.event === "reference_preview") {
     renderSourcePreview(data);
   } else if (data.event === "reference_error") {
@@ -6755,8 +7302,34 @@ function onEvent(raw) {
     completeAfterAnswerStages(data.turn);
     renderUsage();
     if (data.workspace_files) renderWorkspace(data.workspace_files);
+    bridge?.requestMemoryStatus(openProjectPath);
   } else if (data.event === "project_behavior") {
     renderProjectBehavior(data);
+  } else if (data.event === "conversation_feedback") {
+    receiveFeedback(data);
+  } else if (data.event === "message_feedback") {
+    receiveFeedbackSave(data);
+  } else if (data.event === "memory_status") {
+    receiveMemoryStatus(data);
+  } else if (data.event === "memory_sync_started") {
+    if (data.project === openProjectPath) {
+      byId("memory-index-status").textContent = "Updating conversation memory…";
+    }
+  } else if (data.event === "memory_synced") {
+    if (data.project === openProjectPath) {
+      memorySyncPending = false;
+      setBusy(false);
+      byId("memory-index-status").textContent = data.changed
+        ? `Updated conversation memory; ${data.embedded_count} new embeddings.`
+        : "Conversation memory is already current.";
+    }
+  } else if (data.event === "memory_sync_failed") {
+    if (data.project === openProjectPath) {
+      memorySyncPending = false;
+      setBusy(false);
+      byId("memory-index-status").textContent = data.message;
+      byId("memory-index-status").classList.add("tool-error");
+    }
   } else if (data.event === "settings_info") {
     settingsCatalog = data.catalog;
     applySettingsHelp(document);
@@ -6937,6 +7510,13 @@ byId("save-index-capabilities").addEventListener(
 byId("reset-index-capabilities").addEventListener(
   "click", () => saveIndexCapabilities(true),
 );
+byId("save-memory-policy").addEventListener(
+  "click", () => saveMemoryPolicy(),
+);
+byId("reset-memory-policy").addEventListener(
+  "click", () => saveMemoryPolicy(true),
+);
+byId("sync-memory-index").addEventListener("click", syncMemoryIndex);
 byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
 byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
 byId("use-legacy-workspace").addEventListener(
@@ -7463,6 +8043,13 @@ function returnToLaunch() {
   projectPresentation = null;
   projectBehaviorData = null;
   behaviorSave.pending = null;
+  feedbackData = { project: "", revision: "", entries: {} };
+  feedbackSave.pending = null;
+  memoryIndexState = null;
+  memorySyncPending = false;
+  memoryNavigation = null;
+  displayedMemoryProject = "";
+  displayedMemoryRevision = "";
   ready = false;
   updateFloatingHeader();
   chat.classList.add("hidden");

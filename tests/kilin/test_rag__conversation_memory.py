@@ -86,6 +86,22 @@ class TestRAGConversationMemory(unittest.TestCase):
         self.assertTrue(memory_index_path(self.root).exists())
         system = self.session.chat_session.restore_history.call_args.args[0]
         self.assertIn("PROVENANCE", system[0]["content"])
+        stored = self.session.turns[-1]
+        references = stored.parameters["memory_references"]
+        self.assertEqual(len(references), 2)
+        self.assertEqual([item["label"] for item in references],
+                         ["M1", "M2"])
+        self.assertEqual(
+            {item["role"] for item in references},
+            {"user", "assistant"},
+        )
+        self.assertTrue(all(item["turn_uuid"] == self.earlier_uuid
+                            for item in references))
+        self.assertTrue(all(item["origins"] == [{
+            "conversation_id": self.earlier_id, "turn_number": 1,
+        }] for item in references))
+        self.assertNotIn("foldon modules", str(references))
+        self.assertEqual(stored.evidence, ())
 
     def test_off_or_intent_read_false_does_not_embed(self):
         disabled = replace(
@@ -106,6 +122,9 @@ class TestRAGConversationMemory(unittest.TestCase):
         self.assertNotIn(
             "CONVERSATION MEMORY",
             self.session.chat_session.reply.call_args.args[0],
+        )
+        self.assertNotIn(
+            "memory_references", self.session.turns[-1].parameters
         )
 
     def test_intent_memory_read_disabled_avoids_embeddings(self):

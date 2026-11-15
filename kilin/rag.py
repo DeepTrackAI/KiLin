@@ -2067,6 +2067,25 @@ class RAGSession:
                     excluded_uuids=previously_shown,
                     query_text=self._format_memory_query(question),
                 )
+                if memory_hits:
+                    # Navigational provenance is not documentary Evidence.
+                    # Store origins with this answer so the GUI can revisit
+                    # them without reading traces or reconstructing a search.
+                    effective["memory_references"] = [
+                        {
+                            "label": f"M{number}",
+                            "turn_uuid": hit.record.turn_uuid,
+                            "role": hit.record.role,
+                            "origins": [
+                                {
+                                    "conversation_id": origin.conversation_id,
+                                    "turn_number": origin.turn_number,
+                                }
+                                for origin in hit.record.origins
+                            ],
+                        }
+                        for number, hit in enumerate(memory_hits, start=1)
+                    ]
                 trace.emit(
                     "conversation_memory.retrieved",
                     component="rag",

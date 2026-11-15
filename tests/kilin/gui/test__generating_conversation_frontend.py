@@ -89,6 +89,8 @@ const showSetupLock = () => {};
 const syncSourceDropTarget = () => {};
 const updateSendButton = () => {};
 const showNativeSourceDrag = () => {};
+const refreshFeedbackControls = () => {};
+const showMemoryPolicy = () => {};
 const renderModelsPanel = () => {};
 const focusComposer = () => {};
 const makeReorderable = () => {};
