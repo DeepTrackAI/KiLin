@@ -199,6 +199,64 @@ console.log("memory settings scope passed");
         self.assertIn("scope passed", result.stdout)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
+    def test_grouped_memory_origin_preserves_message_roles(self) -> None:
+        """Group one question and answer without losing labels or links."""
+
+        script = r"""
+const assert = require("node:assert/strict");
+const elements = [];
+const document = {createElement: (kind) => {
+  const element = {kind, children: [], disabled: false, textContent: "",
+    listeners: {}, append(...items) {this.children.push(...items);},
+    addEventListener(name, callback) {this.listeners[name] = callback;}};
+  elements.push(element);
+  return element;
+}};
+let lastConversationData = {conversations: [
+  {conversation_id: "branch", name: "Brainstorming branch"},
+  {conversation_id: "different", name: "Other discussion"},
+]};
+const answer = {children: [], append(item) {this.children.push(item);}};
+let navigation = null;
+const openMemoryOrigin = (origin) => {navigation = origin;};
+"""
+        script += extract_function(self.source, "appendMemoryProvenance")
+        script += r"""
+appendMemoryProvenance(answer, {parameters: {memory_references: [
+  {label: "M1", turn_uuid: "first", role: "user", origins: [
+    {conversation_id: "archived", turn_number: 2},
+    {conversation_id: "branch", turn_number: 2},
+  ]},
+  {label: "M2", turn_uuid: "first", role: "assistant", origins: [
+    {conversation_id: "branch", turn_number: 2},
+  ]},
+  {label: "M3", turn_uuid: "second", role: "user", origins: [
+    {conversation_id: "different", turn_number: 1},
+  ]},
+  {label: "M4", turn_uuid: "third", role: "assistant", origins: [
+    {conversation_id: "missing", turn_number: 5},
+  ]},
+]}});
+assert.equal(answer.children.length, 1);
+const buttons = answer.children[0].children.slice(1);
+assert.equal(buttons.length, 3);
+assert.match(buttons[0].textContent, /Brainstorming branch · turn 2/);
+assert.match(buttons[0].textContent, /M1 · Question/);
+assert.match(buttons[0].textContent, /M2 · Answer/);
+assert.match(buttons[1].textContent, /Other discussion · turn 1/);
+assert.match(buttons[1].textContent, /M3 · Question/);
+assert.equal(buttons[2].disabled, true);
+assert.match(buttons[2].textContent, /M4 · Answer/);
+buttons[0].listeners.click({stopPropagation() {}});
+assert.deepEqual(navigation, {conversation_id: "branch", turn_number: 2});
+assert.equal(elements.filter((element) => element.kind === "sup").length, 0);
+console.log("grouped memory provenance passed");
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("grouped memory provenance passed", result.stdout)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_memory_navigation_never_becomes_a_source_citation(self) -> None:
         """Use recorded origins for conversation links, not evidence IDs."""
 

@@ -63,6 +63,12 @@ infer or filter timeline entries from `answer_phase`. The latter describes
 control and status changes, including tool confirmation and completion.
 The `routed` phase includes `intent` and, only for tool-backed intents,
 `tool_name`; the core uses them to form the corresponding activity label.
+Enabled direct-answer memory retrieval emits `memory_retrieving` followed by
+`memory_ready`, whose `memory_hit_count`, `memory_turn_count`, and
+`duration_ms` report the selected messages, distinct turns, and measured
+index synchronization plus query duration. The first activity is timed until
+the second begins; both appear in the saved turn timeline. The browser uses
+core activity labels unchanged instead of inventing memory rows.
 
 Core-owned answer timelines are stored in each completed conversation
 turn under `timeline` (`elapsed_ms`, `steps` containing `phase`, `label`,
@@ -205,9 +211,13 @@ commands never call ordinary source indexing or modify source citations.
 Completed `answered`, `opened` and `conversation_opened` turn objects may
 contain `parameters.memory_references`: ordered labels `M1`, `M2`, etc.,
 retrieved turn UUID/role and active conversation/one-based turn origins.
-The GUI uses these only for navigation to earlier discussions. This
-metadata contains no retrieved memory text and must not be interpreted
-as the numbered, independently validated documentary `evidence` list.
+The GUI uses these only for navigation to earlier discussions. References
+with the same turn UUID are grouped into one conversation link while each
+message label and role (Question or Answer) remains visible. This is display
+grouping, not retrieval deduplication; UUIDs, roles, and origins remain
+unchanged in the saved turn. The metadata contains no retrieved memory text
+and must not be interpreted as the numbered, independently validated
+documentary `evidence` list.
 Links to archived origins are disabled. The source-reference preview
 contract is unchanged.
 
@@ -511,7 +521,8 @@ without a compatibility fallback to interpreting the English message.
 
 The phase strings used by the web page are the values of
 `kilin.rag.ANSWER_PHASE_*`: `routing`, `routed`, `retrieving`,
-`evidence_ready`, `generating`, `saving`, `completed`, and `processing`.
+`evidence_ready`, `memory_retrieving`, `memory_ready`, `generating`,
+`saving`, `completed`, and `processing`.
 `kilin.gui.engine.ENGINE_PHASE_LOADING_MODEL` adds `loading_model` when
 switching the MLX chat model. The strings are duplicated as JavaScript
 constants and are covered by the Qt-free protocol tests.

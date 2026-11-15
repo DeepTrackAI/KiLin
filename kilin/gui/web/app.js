@@ -23,6 +23,8 @@ const ANSWER_PHASE_ROUTING = "routing";
 const ANSWER_PHASE_ROUTED = "routed";
 const ANSWER_PHASE_RETRIEVING = "retrieving";
 const ANSWER_PHASE_EVIDENCE_READY = "evidence_ready";
+const ANSWER_PHASE_MEMORY_RETRIEVING = "memory_retrieving";
+const ANSWER_PHASE_MEMORY_READY = "memory_ready";
 const ANSWER_PHASE_GENERATING = "generating";
 const ANSWER_PHASE_SAVING = "saving";
 const ANSWER_PHASE_COMPLETED = "completed";
@@ -4824,18 +4826,35 @@ function appendMemoryProvenance(answer, turn) {
   const heading = document.createElement("p");
   heading.textContent = "Earlier conversation memory (not source evidence)";
   panel.append(heading);
-  for (const reference of references) {
+  // Two memories may be a question and answer from the same turn.
+  // Group by the saved turn identity, not by message text or label.
+  const groups = new Map();
+  for (const [index, reference] of references.entries()) {
     const origins = Array.isArray(reference.origins) ? reference.origins : [];
     const origin = origins.find((item) => lastConversationData?.conversations
       ?.some((entry) => entry.conversation_id === item.conversation_id));
+    const key = typeof reference.turn_uuid === "string" && reference.turn_uuid
+      ? `turn:${reference.turn_uuid}`
+      : origin ? `origin:${origin.conversation_id}:${origin.turn_number}`
+        : `unavailable:${index}`;
+    if (!groups.has(key)) groups.set(key, {origin: null, messages: []});
+    const group = groups.get(key);
+    if (!group.origin && origin) group.origin = origin;
+    const role = reference.role === "user" ? "Question"
+      : reference.role === "assistant" ? "Answer" : "Message";
+    group.messages.push(`${reference.label} · ${role}`);
+  }
+  for (const group of groups.values()) {
+    const origin = group.origin;
     const details = lastConversationData?.conversations?.find((item) =>
       item.conversation_id === origin?.conversation_id);
     const button = document.createElement("button");
     button.type = "button";
+    const messages = group.messages.join(" · ");
     button.textContent = origin
-      ? `${reference.label} · ${details.name} · turn ${origin.turn_number}`
-      : `${reference.label} · conversation unavailable`;
-    button.title = "Open the earlier conversation; this is not a source citation.";
+      ? `${details.name} · turn ${origin.turn_number} — ${messages}`
+      : `Conversation unavailable — ${messages}`;
+    button.title = "Open the earlier conversation; not source evidence.";
     button.disabled = !origin;
     if (origin) button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -7060,6 +7079,10 @@ function onEvent(raw) {
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_RETRIEVING) {
       byId("activity-text").textContent = data.message || "Searching project evidence";
+      byId("activity-detail").textContent = "";
+    } else if (data.phase === ANSWER_PHASE_MEMORY_RETRIEVING
+        || data.phase === ANSWER_PHASE_MEMORY_READY) {
+      byId("activity-text").textContent = data.message || "Retrieving conversation memories";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.choice) {
       showToolChoice(data.choice);

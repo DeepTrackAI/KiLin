@@ -86,6 +86,32 @@ class TestAnswerTimelineRecorder(unittest.TestCase):
             skipped[0]["label"],
         ])
 
+    def test_memory_retrieval_activity_has_its_own_timed_span(self) -> None:
+        """Measure memory search separately from sources and generation."""
+        now = [5.0]
+        recorder = _AnswerTimelineRecorder(clock=lambda: now[0])
+        recorder.record("memory_retrieving", {
+            "message": "Retrieving conversation memories",
+        })
+        now[0] += 0.225
+        recorder.record("memory_ready", {
+            "message": "3 conversation memories retrieved from 2 turns",
+        })
+        now[0] += 0.050
+        recorder.record("generating", {"message": "Generating answer"})
+        now[0] += 0.400
+        steps = recorder.finish().steps
+        self.assertEqual(
+            [(step.phase, step.label, step.ms) for step in steps],
+            [
+                ("memory_retrieving", "Retrieving conversation memories",
+                 225),
+                ("memory_ready",
+                 "3 conversation memories retrieved from 2 turns", 50),
+                ("generating", "Generating answer", 400),
+            ],
+        )
+
     def test_reference_check_reports_every_activity_in_order(self) -> None:
         """Keep the detailed tool progression with no GUI skip policy."""
         now = [1.0]

@@ -123,6 +123,8 @@ _PHASE_LABELS = {
     "routing": "Identifying intent",
     "retrieving": "Retrieving evidence",
     "evidence_ready": "Preparing answer",
+    "memory_retrieving": "Retrieving conversation memories",
+    "memory_ready": "Conversation memory retrieved",
     "generating": "Generating answer",
     "processing": "Processing request",
     "saving": "Saving conversation",

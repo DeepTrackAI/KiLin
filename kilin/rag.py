@@ -346,6 +346,8 @@ __all__ = [
     "ANSWER_PHASE_COMPLETED",
     "ANSWER_PHASE_EVIDENCE_READY",
     "ANSWER_PHASE_GENERATING",
+    "ANSWER_PHASE_MEMORY_READY",
+    "ANSWER_PHASE_MEMORY_RETRIEVING",
     "ANSWER_PHASE_PROCESSING",
     "ANSWER_PHASE_RETRIEVING",
     "ANSWER_PHASE_ROUTED",
@@ -364,6 +366,8 @@ AnswerPhase: TypeAlias = Literal[
     "routed",
     "retrieving",
     "evidence_ready",
+    "memory_retrieving",
+    "memory_ready",
     "generating",
     "saving",
     "completed",
@@ -373,6 +377,10 @@ ANSWER_PHASE_ROUTING: Final[AnswerPhase] = "routing"
 ANSWER_PHASE_ROUTED: Final[AnswerPhase] = "routed"
 ANSWER_PHASE_RETRIEVING: Final[AnswerPhase] = "retrieving"
 ANSWER_PHASE_EVIDENCE_READY: Final[AnswerPhase] = "evidence_ready"
+ANSWER_PHASE_MEMORY_RETRIEVING: Final[AnswerPhase] = (
+    "memory_retrieving"
+)
+ANSWER_PHASE_MEMORY_READY: Final[AnswerPhase] = "memory_ready"
 ANSWER_PHASE_GENERATING: Final[AnswerPhase] = "generating"
 ANSWER_PHASE_SAVING: Final[AnswerPhase] = "saving"
 ANSWER_PHASE_COMPLETED: Final[AnswerPhase] = "completed"
@@ -383,6 +391,8 @@ ANSWER_PHASE_CHOICES: Final[tuple[AnswerPhase, ...]] = (
     ANSWER_PHASE_ROUTED,
     ANSWER_PHASE_RETRIEVING,
     ANSWER_PHASE_EVIDENCE_READY,
+    ANSWER_PHASE_MEMORY_RETRIEVING,
+    ANSWER_PHASE_MEMORY_READY,
     ANSWER_PHASE_GENERATING,
     ANSWER_PHASE_SAVING,
     ANSWER_PHASE_COMPLETED,
@@ -2055,6 +2065,11 @@ class RAGSession:
                 and config.conversation_memory.enabled
                 and intent.memory_read
             ):
+                memory_started = perf_counter()
+                report_phase(
+                    ANSWER_PHASE_MEMORY_RETRIEVING,
+                    message="Retrieving conversation memories",
+                )
                 memory_index = self.sync_conversation_memory()
                 previously_shown = frozenset(
                     self.turns[number - 1].conversation_turn_uuid
@@ -2066,6 +2081,30 @@ class RAGSession:
                     max_tokens=config.conversation_memory.max_tokens,
                     excluded_uuids=previously_shown,
                     query_text=self._format_memory_query(question),
+                )
+                memory_count = len(memory_hits)
+                memory_turn_count = len({
+                    hit.record.turn_uuid for hit in memory_hits
+                })
+                memory_duration_ms = round(
+                    (perf_counter() - memory_started) * 1000, 3
+                )
+                result_label = (
+                    f"{memory_count} conversation "
+                    f"{'memory' if memory_count == 1 else 'memories'} "
+                    "retrieved"
+                )
+                if memory_count:
+                    result_label += (
+                        f" from {memory_turn_count} "
+                        f"{'turn' if memory_turn_count == 1 else 'turns'}"
+                    )
+                report_phase(
+                    ANSWER_PHASE_MEMORY_READY,
+                    message=result_label,
+                    memory_hit_count=memory_count,
+                    memory_turn_count=memory_turn_count,
+                    duration_ms=memory_duration_ms,
                 )
                 if memory_hits:
                     # Navigational provenance is not documentary Evidence.
@@ -2090,7 +2129,32 @@ class RAGSession:
                     "conversation_memory.retrieved",
                     component="rag",
                     data={
-                        "memory_hit_count": len(memory_hits),
+                        "memory_hit_count": memory_count,
+                        "memory_turn_count": memory_turn_count,
+                        "duration_ms": memory_duration_ms,
+                        "selected_memories": [
+                            {
+                                "label": f"M{number}",
+                                "turn_uuid": hit.record.turn_uuid,
+                                "role": hit.record.role,
+                                "origins": [
+                                    {
+                                        "conversation_id": (
+                                            origin.conversation_id
+                                        ),
+                                        "turn_number": (
+                                            origin.turn_number
+                                        ),
+                                    }
+                                    for origin in hit.record.origins
+                                ],
+                                "relevance": hit.relevance,
+                                "score": hit.score,
+                            }
+                            for number, hit in enumerate(
+                                memory_hits, start=1
+                            )
+                        ],
                         "memory_token_estimate": estimate_tokens(
                             render_memory_hits(memory_hits)
                         ),

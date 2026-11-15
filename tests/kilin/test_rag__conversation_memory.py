@@ -103,6 +103,83 @@ class TestRAGConversationMemory(unittest.TestCase):
         self.assertNotIn("foldon modules", str(references))
         self.assertEqual(stored.evidence, ())
 
+    def test_memory_retrieval_timeline_and_trace_provenance(self):
+        """Expose counts and timing without recording remembered text."""
+        from unittest.mock import MagicMock
+
+        FeedbackStore(self.root).update(
+            self.earlier_id, self.earlier_uuid,
+            "assistant", saved=True, reaction="liked",
+        )
+        observed: list[dict[str, object]] = []
+        phases: list[tuple[str, dict[str, object]]] = []
+        trace = MagicMock()
+        trace.include_content = False
+        trace.new_id.side_effect = lambda name: name
+        self.session.trace = trace
+        with patch.object(
+            self.session, "_behavior_config", return_value=self.config
+        ), _answer_patches(
+            self.session, self.intent, RouteDecision("writing", True)
+        ):
+            self.session.ask(
+                "Recall our foldon terminology",
+                activity_callback=observed.append,
+                phase_callback=lambda phase, details: phases.append(
+                    (phase, details)
+                ),
+            )
+        steps = self.session.turns[-1].timeline.steps
+        self.assertEqual(
+            [(event["phase"], event["label"]) for event in observed],
+            [(step.phase, step.label) for step in steps],
+        )
+        self.assertEqual(
+            [event["index"] for event in observed],
+            list(range(len(steps))),
+        )
+        retrieval = next(
+            step for step in steps if step.phase == "memory_retrieving"
+        )
+        self.assertEqual(retrieval.label, "Retrieving conversation memories")
+        result = next(
+            step for step in steps if step.phase == "memory_ready"
+        )
+        self.assertEqual(
+            result.label, "2 conversation memories retrieved from 1 turn"
+        )
+        self.assertGreaterEqual(retrieval.ms, 0)
+        self.assertEqual(
+            sum(step.ms for step in steps),
+            self.session.turns[-1].timeline.elapsed_ms,
+        )
+        details = next(
+            data for phase, data in phases if phase == "memory_ready"
+        )
+        self.assertEqual(details["memory_hit_count"], 2)
+        self.assertEqual(details["memory_turn_count"], 1)
+        self.assertGreaterEqual(details["duration_ms"], 0)
+        recorded = [
+            call.kwargs["data"]
+            for call in trace.emit.call_args_list
+            if call.args[0] == "conversation_memory.retrieved"
+        ]
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0]["memory_hit_count"], 2)
+        self.assertEqual(recorded[0]["memory_turn_count"], 1)
+        self.assertGreaterEqual(recorded[0]["duration_ms"], 0)
+        selections = recorded[0]["selected_memories"]
+        self.assertEqual(len(selections), 2)
+        self.assertEqual({item["role"] for item in selections},
+                         {"assistant", "user"})
+        self.assertTrue(all(item["turn_uuid"] == self.earlier_uuid
+                            for item in selections))
+        self.assertTrue(all(item["origins"][0]["conversation_id"]
+                            == self.earlier_id for item in selections))
+        self.assertTrue(all(isinstance(item["score"], float)
+                            for item in selections))
+        self.assertNotIn("foldon modules", str(recorded[0]))
+
     def test_off_or_intent_read_false_does_not_embed(self):
         disabled = replace(
             self.config,
@@ -126,6 +203,53 @@ class TestRAGConversationMemory(unittest.TestCase):
         self.assertNotIn(
             "memory_references", self.session.turns[-1].parameters
         )
+
+    def test_no_memory_hits_still_reports_retrieval_completion(self):
+        """Make a zero-hit memory search visible without false references."""
+        phases: list[tuple[str, dict[str, object]]] = []
+        with patch.object(
+            self.session, "_behavior_config", return_value=self.config
+        ), patch.object(
+            rag, "search_memory", return_value=()
+        ), _answer_patches(
+            self.session, self.intent, RouteDecision("writing", True)
+        ):
+            self.session.ask(
+                "An unrelated question",
+                phase_callback=lambda phase, details: phases.append(
+                    (phase, details)
+                ),
+            )
+        ready = [details for phase, details in phases
+                 if phase == "memory_ready"]
+        self.assertEqual(len(ready), 1)
+        self.assertEqual(ready[0]["memory_hit_count"], 0)
+        self.assertEqual(ready[0]["memory_turn_count"], 0)
+        self.assertIn("0 conversation memories retrieved", [
+            step.label for step in self.session.turns[-1].timeline.steps
+        ])
+        self.assertNotIn(
+            "memory_references", self.session.turns[-1].parameters
+        )
+
+    def test_disabled_memory_adds_no_retrieval_timeline_steps(self):
+        """Leave disabled projects' timeline and prompt paths unchanged."""
+        disabled = replace(
+            self.config,
+            conversation_memory=replace(
+                self.config.conversation_memory, enabled=False,
+            ),
+        )
+        with patch.object(
+            self.session, "_behavior_config", return_value=disabled
+        ), _answer_patches(
+            self.session, self.intent, RouteDecision("writing", True)
+        ):
+            self.session.ask("Recall our foldon terminology")
+        self.assertFalse(any(
+            step.phase.startswith("memory_")
+            for step in self.session.turns[-1].timeline.steps
+        ))
 
     def test_intent_memory_read_disabled_avoids_embeddings(self):
         config = replace(

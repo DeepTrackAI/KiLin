@@ -491,6 +491,7 @@ button:disabled { opacity: .62; cursor: default; }
 .memory-provenance { margin: 9px 0; padding: 8px 10px; border-left: 2px solid var(--line); font-size: 12px; }
 .memory-provenance p { margin: 0 0 5px; color: var(--muted); }
 .memory-provenance button { min-height: 25px; margin: 2px 5px 2px 0; padding: 3px 7px; font-size: 11px; border: 1px solid var(--line); background: var(--surface-soft); color: var(--text); }
+.memory-provenance button { max-width: 100%; white-space: normal; text-align: left; }
 .memory-provenance button:disabled { opacity: 0.6; }
 .memory-origin-highlight { outline: 2px solid var(--focus); outline-offset: 5px; }
 .answer-message:focus-visible, .turn.selected .answer-message { outline: 2px solid var(--answer-outline); outline-offset: 5px; border-radius: 2px; }

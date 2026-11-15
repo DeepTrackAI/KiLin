@@ -241,12 +241,26 @@ When an answer retrieves earlier conversation memory, the completed turn
 persists navigational ``parameters.memory_references`` metadata: labels,
 source turn UUIDs and active conversation/one-based-turn origins. No memory
 text is copied into this metadata. The GUI shows these links beneath the
-answer, **separately from scientific source citations**. Selecting a link
+answer, **separately from scientific source citations**. It groups matching
+turn UUIDs so a retrieved question and answer from the same conversation
+turn appear together, with their separate memory labels and roles, rather
+than as duplicate navigation links. Selecting a link
 opens the recorded conversation and highlights its turn. An archived or
 missing conversation yields an unavailable link rather than an invented
 source citation. A branch can provide another active origin of the same
 turn. Existing source citation numbering and evidence previews are
 unchanged. This metadata is derived context, not a scientific assertion.
+
+Enabled direct-answer memory retrieval is a dedicated core-timed activity:
+`memory_retrieving` begins before index synchronization and search, and
+`memory_ready` reports the selected message count and distinct turn count.
+The activity stream is visible during answering and persisted in the saved
+answer timeline. The optional `conversation_memory.retrieved` diagnostic
+event additionally records retrieval duration, selected memory labels,
+UUIDs, roles, active origins and relevance/ranking scores, without copying
+message text. No memory activity is emitted when indexing/retrieval is
+disabled for the current project or intent. These counts are separate from
+scientific source-reference counts.
 
 The index contains prior research discussions and embeddings, potentially
 including sensitive or speculative content. It is not encrypted or anonymized.

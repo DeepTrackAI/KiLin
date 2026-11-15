@@ -58,9 +58,9 @@ ask(question, options)
 ```
 
 The state machine uses `ANSWER_PHASE_*` identifiers (`routing`, `routed`,
-`retrieving`, `evidence_ready`, `generating`, `saving`, `completed`, and
-`processing`). Not every intent performs every phase; tools may control
-additional progress and confirmation. See [GUI protocol](gui_protocol.md)
+`retrieving`, `evidence_ready`, `memory_retrieving`, `memory_ready`,
+`generating`, `saving`, `completed`, and `processing`). Not every intent
+performs every phase; tools may control additional progress and confirmation. See [GUI protocol](gui_protocol.md)
 for event wire fields and the distinction between backend and frontend
 operation states. A callback's failure **before** commitment can abort the
 turn; a failure in the final completed notification is traced but should not
@@ -79,6 +79,15 @@ The routed activity shows the intent identifier in parentheses after its
 readable name, with `using <tool_name>` when the selected intent has a tool.
 Repeated notifications for an activity already in progress update that
 activity rather than creating artificial duplicate starts.
+
+When conversation memory is enabled for the current answering intent, the
+core adds `memory_retrieving` immediately before the index synchronization
+and memory query. The following `memory_ready` phase reports both the number
+of retrieved **messages** and the number of distinct originating **turns**,
+including zero results. The retrieval activity has its own measured duration
+in the saved timeline, separate from documentary source retrieval and model
+generation. No memory activities appear when memory is disabled, denied by
+the intent, or unavailable to a tool-owned answer.
 
 When diagnostic tracing is enabled, those same activity starts appear as
 `answer.activity` events, with the identical fields and order.
