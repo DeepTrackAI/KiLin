@@ -3,8 +3,8 @@
 The tool is being built in stages; this package holds its parts so far.
 It reads a document into sections and paragraphs (``_document``) so that
 each paragraph can be checked with its section as context and each
-finding reported with its line, and chooses the part a question asks to
-check (``_scope``).
+finding reported with its line, chooses the part a question asks to
+check (``_scope``), and runs the checks that need no model (``_checks``).
 
 Key Features
 ------------
@@ -23,6 +23,11 @@ Module Structure
 - ``_scope``
 
     The part of the document a question asks to check.
+
+- ``_checks`` and ``_configuration``
+
+    The checks done in code, the glossary for the model, and their
+    validated word lists and limits.
 
 Examples
 --------

@@ -183,6 +183,8 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/suggest_reference/_configuration.py`](../kilin/tools/suggest_reference/_configuration.py) | Validate the defaults owned by the suggest_reference tool. | [Per-tool README](../kilin/tools/suggest_reference/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/suggest_reference/tool.py`](../kilin/tools/suggest_reference/tool.py) | Tool ``suggest_reference``: find papers in the project to cite. | [Per-tool README](../kilin/tools/suggest_reference/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/writing_check/__init__.py`](../kilin/tools/writing_check/__init__.py) | The ``writing_check`` tool: grammar and style of a long document. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/writing_check/_checks.py`](../kilin/tools/writing_check/_checks.py) | Check a document's consistency and style in code, and build its glossary. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/writing_check/_configuration.py`](../kilin/tools/writing_check/_configuration.py) | Validate the defaults owned by the writing_check tool. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/writing_check/_document.py`](../kilin/tools/writing_check/_document.py) | Read a document into sections and paragraphs of prose. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/writing_check/_scope.py`](../kilin/tools/writing_check/_scope.py) | Choose the part of a document a question asks to check. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tool_settings.py`](../kilin/tool_settings.py) | List and change the tool settings of one KíLín project. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
@@ -201,7 +203,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Conversation memory | 8 |
 | GUI architecture | 10 |
 | Model management | 8 |
-| Per-tool README | 45 |
+| Per-tool README | 47 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 29 |
 | Source pipeline | 18 |
@@ -209,7 +211,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 166.**
+**Total production Python modules: 169.**
 
 ## Non-Python resources and UI assets
 

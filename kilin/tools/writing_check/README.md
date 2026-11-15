@@ -5,8 +5,9 @@ grammar and style of one long document (an article, thesis chapter, report
 or proposal) and returns suggested edits; it never rewrites the text. It is
 being built in stages and is not registered yet.
 
-So far it reads a document into sections and paragraphs (`_document.py`)
-and chooses the part of it a question asks to check (`_scope.py`).
+So far it reads a document into sections and paragraphs (`_document.py`),
+chooses the part of it a question asks to check (`_scope.py`), and runs the
+checks that need no model (`_checks.py`).
 
 ## Sections and paragraphs
 
@@ -50,3 +51,43 @@ style") are not section names. A section number or name the document does
 not have, several sections matching a name, or a paragraph position past
 the section's end gives a problem listing the headings, rather than
 checking the whole document.
+
+## Checks done in code
+
+Problems visible only across the whole document are found by code, in one
+pass with no model call, before any paragraph is sent to a model:
+
+| Check | Level | Finding |
+| --- | --- | --- |
+| Acronyms | consistency | first use before the definition; never defined (unless in `KNOWN_ACRONYMS`); defined again |
+| Terms | consistency | a term written as one word, two words or hyphenated ("data set", "dataset"): each less frequent form, with the most frequent as suggestion |
+| Spelling | consistency | US and UK spellings mixed: each use of the less frequent variant (`SPELLING_PAIRS`, with -d, -s, -ing, -ation and plural forms) |
+| Promotional words | style | each use of a word in `PROMOTIONAL_WORDS` |
+| Repeated words | grammar | a word written twice ("the the"); "that that" and "had had" allowed |
+| Long sentences | style | sentences over `LONG_SENTENCE_WORDS` words |
+
+A definition is "long form (ACR)" or "ACR (long form)", where the long
+form's initials spell the acronym (hyphenated parts count as words, small
+words such as "of" may be skipped). The abstract is checked on its own, as
+journals expect it to define its acronyms again. Ties (as many "data set"
+as "dataset", as many US as UK spellings) are not reported.
+
+Each finding has its paragraph, source line, level, the words as they read
+in the text, a suggestion (or none when it only flags) and a one-line
+reason. The same pass builds the glossary given to every model call: the
+defined acronyms, the preferred form of each term, and the spelling
+variant.
+
+### Settings (`checks.json`, section `CHECKS`)
+
+The file becomes the tool's `defaults.json` when the tool is registered.
+
+- `LONG_SENTENCE_WORDS` (default `40`, range 10–200): sentence length, in
+  words, reported as long.
+- `PROMOTIONAL_WORDS`: lowercase words or hyphenated phrases reported as
+  promotional ("novel", "state-of-the-art", ...).
+- `SPELLING_PAIRS`: `us:uk` entries ("color:colour"); "-ize"/"-ise" and
+  "-yze"/"-yse" verbs and "-or"/"-our" and "-er"/"-re" nouns also match
+  their inflected forms.
+- `KNOWN_ACRONYMS`: lowercase acronyms readers know without a definition
+  ("dna", "mri", roman numerals).
