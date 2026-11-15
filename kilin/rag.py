@@ -4713,6 +4713,7 @@ class RAGSession:
         context = ToolContext(
             project_root=Path(self.project.root),
             source_root=Path(self.project.source),
+            card=self._card_fields,
             chunks=self.chunks,
             graph=self.indexes.code_graph,
             rank=lambda text: self._rank_everything(text, trace_turn_id),
@@ -4967,6 +4968,47 @@ class RAGSession:
             for key, value in card.metadata:
                 fields.setdefault(key, value)
         return merged
+
+    def _card_fields(
+        self: RAGSession, path: Path
+    ) -> dict[str, str] | None:
+        """Return the fields of one source's cards, for tools.
+
+        Parameters
+        ----------
+        path: pathlib.Path
+            The source's indexed path.
+
+        Returns
+        -------
+        dict[str, str] | None
+            Metadata and statements by field name, from every valid card
+            of the source (the first card kind's value winning; several
+            statements of one field joined by a space); None when the
+            source has no valid card.
+
+        """
+
+        records = getattr(
+            getattr(self, "source_cards", None), "records", ()
+        )
+        fields: dict[str, str] = {}
+        found = False
+        for record in records or ():
+            card = getattr(record.result, "card", None)
+            if card is None or card.path != path:
+                continue
+            found = True
+            for key, value in card.metadata:
+                fields.setdefault(key, value)
+            statements: dict[str, list[str]] = {}
+            for statement in card.statements:
+                statements.setdefault(statement.field, []).append(
+                    statement.text
+                )
+            for key, texts in statements.items():
+                fields.setdefault(key, " ".join(texts))
+        return fields if found else None
 
     def _source_passages(
         self: RAGSession,

@@ -1021,6 +1021,8 @@ class TestRAGRoutingAndTools(unittest.TestCase):
         self.assertIs(context.confirm, callback)
         self.assertIs(context.write_pdf, writer)
         self.assertIs(context.choose, choose)
+        # Cards are read through the session, without a model call.
+        self.assertEqual(context.card.__func__, rag.RAGSession._card_fields)
         self.assertEqual(context.model_id, "chat-model")
         self.assertEqual(context.rank("topic"), [ranked(chunk("one"))])
         self.assertEqual(context.source_files(), {Path("a.py"): 2})

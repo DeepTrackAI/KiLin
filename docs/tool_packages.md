@@ -131,6 +131,14 @@ chunks, selected source paths, and coverage metadata. No answering model is
 called by retrieval. Tools do not automatically inherit the ordinary
 question-answering intent's evidence budgets.
 
+`ToolContext.card(path)` is optional too: it returns the fields of an
+indexed source's valid cards by name, the metadata (`title`, `authors`,
+`year`, `venue`, `identifiers`) and statements (`abstract`, `aim`,
+`methods`, `findings`, `limitations`, ...), or `None` when the source has
+no valid card or the context has no cards. It reads the cards built at
+indexing and calls no model, so a tool can describe a document (its
+field, aim and main findings) without a summary call of its own.
+
 For `suggest_reference`, the tool-local `SETTINGS` values in
 `defaults.json` define `DISCOVERY_STRATEGY` (default `hybrid`) and
 `DISCOVERY_TOKENS` (default `8000`). The project-type intent's `tool` object

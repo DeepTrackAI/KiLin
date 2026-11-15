@@ -89,7 +89,7 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -260,6 +260,13 @@ class ToolContext:
         including incomplete attempts and bounded recovery, for this tool
         run. ``None`` when the context cannot expose attempt accounting.
         The count can be sampled around ``ask_model`` without an extra call.
+    card: Callable[[pathlib.Path], Mapping[str, str] | None] | None, optional
+        ``card(path)`` returns the fields of the indexed source's valid
+        card by name: its metadata (``title``, ``authors``, ``year``,
+        ``venue``, ``identifiers``) and statements (such as ``abstract``,
+        ``aim``, ``methods``, ``findings``, ``limitations``), as indexed;
+        None when the source has no valid card. Reading a card calls no
+        model. None for contexts without cards. Defaults to ``None``.
 
     """
 
@@ -284,6 +291,7 @@ class ToolContext:
     retrieve: Callable[[RetrievalRequest], RetrievalResult] | None = None
     model_attempt_count: Callable[[], int] | None = None
     source_root: Path | None = None
+    card: Callable[[Path], Mapping[str, str] | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)

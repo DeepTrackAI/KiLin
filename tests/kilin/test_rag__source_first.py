@@ -280,6 +280,43 @@ class TestSourceFirstRAG(unittest.TestCase):
         session.source_cards = None
         self.assertEqual(session._card_metadata(), {})
 
+    def test_card_fields_for_tools(self):
+        session = fixtures._session()
+        statement = SimpleNamespace
+        paper = SimpleNamespace(
+            path=Path("a.pdf"),
+            metadata=(("title", "BRAPH: graph software"), ("year", "2017")),
+            statements=(
+                statement(field="aim", text="Analyse brain networks."),
+                statement(field="findings", text="Graph measures differ."),
+                statement(field="findings", text="Hubs are stable."),
+            ),
+        )
+        other = SimpleNamespace(
+            path=Path("a.pdf"),
+            metadata=(("title", "Another title"), ("venue", "PLoS One")),
+            statements=(),
+        )
+        session.source_cards = SimpleNamespace(records=(
+            SimpleNamespace(result=SimpleNamespace(card=paper)),
+            SimpleNamespace(result=SimpleNamespace(card=other)),
+            SimpleNamespace(result=SimpleNamespace(card=None)),
+        ))
+        self.assertEqual(
+            session._card_fields(Path("a.pdf")),
+            {
+                # The first card's value wins; later cards add fields.
+                "title": "BRAPH: graph software",
+                "year": "2017",
+                "aim": "Analyse brain networks.",
+                "findings": "Graph measures differ. Hubs are stable.",
+                "venue": "PLoS One",
+            },
+        )
+        self.assertIsNone(session._card_fields(Path("b.pdf")))
+        session.source_cards = None
+        self.assertIsNone(session._card_fields(Path("a.pdf")))
+
     def test_reject_invalid_source_first_requests(self):
         session = _session()
         for argument in ((0, False), (2, "no"), (True, False)):
