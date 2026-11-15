@@ -251,9 +251,9 @@ def run(
     Returns
     -------
     ToolResult
-        The answer with the first findings, no evidence passages (the
-        findings quote the document), and a summary of the counts; a
-        partial result when some model calls failed.
+        The answer with the first findings, the paragraphs they are in as
+        evidence (so follow-ups can reuse them), and a summary of the
+        counts; a partial result when some model calls failed.
 
     """
 
@@ -402,11 +402,26 @@ def run(
     })
     context.done(f"Checked {len(scope.paragraphs)} paragraphs",
                  evidence_count=0)
-    answer = chat_answer(
+    answer, cited = chat_answer(
         document, scope, findings, settings.chat_findings, notes, saved
     )
+    # The paragraphs behind the findings shown are the answer's evidence,
+    # so a follow-up ("suggest a better phrasing for line 75") can reuse
+    # them. Text from the question is not in the file: no evidence.
+    evidence = () if scope.text else tuple(
+        {
+            "citation": number,
+            "path": document.path,
+            "start_line": document.paragraphs[index].start_line,
+            "end_line": document.paragraphs[index].end_line,
+            "symbol": None,
+            "text": document.paragraphs[index].source,
+            "cell": None,
+        }
+        for number, index in enumerate(cited, start=1)
+    )
     return partial_result(
-        ToolResult(answer, (), summary), failures,
+        ToolResult(answer, evidence, summary), failures,
         completed=checked == 0 or len(failures) < checked,
     )
 
@@ -812,8 +827,8 @@ def chat_answer(
     limit: int,
     notes: Sequence[str],
     saved: Path | None,
-) -> str:
-    """Return the chat answer.
+) -> tuple[str, tuple[int, ...]]:
+    """Return the chat answer and the paragraphs it cites.
 
     Parameters
     ----------
@@ -832,10 +847,12 @@ def chat_answer(
 
     Returns
     -------
-    str
+    tuple[str, tuple[int, ...]]
         Markdown: the part and counts, then up to ``limit`` findings under
-        their section headings ("line 12 · grammar: “a” → “b” (reason)"),
-        the notes, and where the full report is.
+        their section headings ("line 12 · grammar: “a” → “b” (reason)
+        [1]", the number citing the finding's paragraph), the notes, and
+        where the full report is; and the cited paragraphs' indices, in
+        citation order.
 
     """
 
@@ -844,6 +861,7 @@ def chat_answer(
         f"{_counts(findings)}.",
     ]
     current = None
+    cited: list[int] = []
     for finding in findings[:limit]:
         name = _section_name(document, finding)
         if name != current:
@@ -852,9 +870,12 @@ def chat_answer(
         change = f"“{finding.original}”"
         if finding.suggestion:
             change += f" → “{finding.suggestion}”"
+        if finding.paragraph not in cited:
+            cited.append(finding.paragraph)
         lines.append(
             f"- line {finding.line} · {finding.level}: {change} "
-            f"({finding.reason.rstrip('.')})"
+            f"({finding.reason.rstrip('.')}) "
+            f"[{cited.index(finding.paragraph) + 1}]"
         )
     hidden = len(findings) - min(len(findings), limit)
     if hidden:
@@ -864,4 +885,4 @@ def chat_answer(
     if saved is not None:
         lines += ["", f"The full report is saved as `{saved.name}` in "
                   "outputs/."]
-    return "\n".join(lines)
+    return "\n".join(lines), tuple(cited)

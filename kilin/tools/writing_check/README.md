@@ -40,9 +40,13 @@ For "check the grammar and style of the methods of draft.tex", the tool:
 5. Checks each paragraph (`_review.py`) and drops suggestions that fail
    the checks below.
 6. Answers with the first `CHAT_FINDINGS` findings under their section
-   headings ("line 12 · grammar: “We tracks” → “We tracked”
-   (agreement)") and saves the full report, one table per section, as
-   `outputs/<document>_writing_check.md`.
+   headings ("line 12 · grammar: “We tracks” → “We tracked” (agreement)
+   [1]") and saves the full report, one table per section, as
+   `outputs/<document>_writing_check.md`. The paragraphs of the findings
+   shown are the answer's evidence (`[1]`, `[2]`, ...), so a follow-up
+   that reuses evidence ("suggest a better phrasing for the line 75 one")
+   has the whole paragraph, not only the words the answer shows. Text
+   checked from the question is not in a file and gives no evidence.
 
 Failed model calls are reported per paragraph (a partial result); the
 other paragraphs are still checked.

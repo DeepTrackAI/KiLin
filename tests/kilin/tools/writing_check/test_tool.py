@@ -185,6 +185,14 @@ class TestWritingCheckRun(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIn(line, answer)
         self.assertNotIn("12 particles", answer)
+        # The paragraphs behind the findings are the answer's evidence.
+        self.assertIn("(agreement) [2]", answer)
+        self.assertEqual(
+            [(item["citation"], item["start_line"], item["end_line"])
+             for item in result.evidence],
+            [(1, 4, 4), (2, 6, 6), (3, 8, 8)],
+        )
+        self.assertIn("\\cite{a}", result.evidence[1]["text"])
         self.assertIn(
             "1 suggested change was dropped (1 numbers changed); they are "
             "listed in the report.", answer,
@@ -285,6 +293,7 @@ class TestWritingCheckRun(unittest.TestCase):
             "and robust.", level="grammar",
         )
         self.assertIn("(the text in the question)", result.answer)
+        self.assertEqual(result.evidence, ())
         self.assertEqual(context.ask_model.call_count, 1 + 1)
 
     def test_unselected_document(self) -> None:
