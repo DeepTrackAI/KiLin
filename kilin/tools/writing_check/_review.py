@@ -48,10 +48,10 @@ Module Structure
 
     A change cut to the words it changes.
 
-- ``locate`` and ``rejection``
+- ``locate``, ``rejection`` and ``meaning_change``
 
-    The paragraph's own words for a quote, and why a suggested change
-    cannot be kept, if it cannot.
+    The paragraph's own words for a quote, why a suggested change cannot
+    be kept, and the changes of meaning no suggestion may make.
 
 - ``Dropped``
 
@@ -95,6 +95,7 @@ __all__ = [
     "document_brief",
     "document_context",
     "locate",
+    "meaning_change",
     "neighbours",
     "paragraph_prompt",
     "parse_findings",
@@ -609,6 +610,32 @@ def rejection(
     original = found[0]
     if " ".join(suggestion.split()) == original:
         return "nothing changes"
+    return meaning_change(original, suggestion, glossary)
+
+
+def meaning_change(original: str, changed: str, glossary: Glossary) -> str:
+    """Return how changed words alter the meaning, or ``""``.
+
+    Parameters
+    ----------
+    original: str
+        The words as the document writes them.
+    changed: str
+        The words as suggested.
+    glossary: Glossary
+        The code checks' glossary.
+
+    Returns
+    -------
+    str
+        ``""`` when nothing that carries meaning changes; otherwise the
+        first change found: numbers, citation placeholders, negations,
+        hedges or modal verbs, a defined acronym or preferred term
+        removed, or a term form the document does not use.
+
+    """
+
+    suggestion = changed
     for pattern, what in (
         (_NUMBER, "numbers"), (_PLACEHOLDER, "citations"),
     ):

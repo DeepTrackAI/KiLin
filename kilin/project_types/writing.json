@@ -38,7 +38,9 @@
       "cues": [
         "\\b(?:check|correct|fix|review)\\w*\\s+(?:\\w+\\s+){0,3}?(?:grammar|spelling|typos?|style|wording|english)\\b",
         "\\bproofread\\w*\\b[^\\n]{0,80}?(?:\\S+\\.(?:tex|md|docx?|txt|pdf)\\b|\\b(?:manuscript|draft|paper|thesis|chapter|document|article|section)s?\\b)",
-        "\\b(?:any|are\\s+there)\\s+(?:\\w+\\s+){0,2}?(?:typos|(?:grammar|grammatical|spelling)\\s+(?:errors|mistakes))\\b"
+        "\\b(?:any|are\\s+there)\\s+(?:\\w+\\s+){0,2}?(?:typos|(?:grammar|grammatical|spelling)\\s+(?:errors|mistakes))\\b",
+        "\\b(?:rephras\\w*|rewrit\\w*|reword\\w*|split\\w*|shorten\\w*|simplif\\w*|phrasing|alternatives?|better\\s+(?:version|wording))\\b[\\s\\S]{0,400}?\\bline\\s+\\d+\\b",
+        "\\bline\\s+\\d+\\b[\\s\\S]{0,400}?\\b(?:rephras\\w*|rewrit\\w*|reword\\w*|split\\w*|shorten\\w*|simplif\\w*|phrasing|alternatives?|better\\s+(?:version|wording))\\b"
       ],
       "requires": [
         "\\b(?:grammar\\w*|proofread\\w*|spelling|typos?|stylistic|style|wording|copy-?edit\\w*)\\b|\\b(?:the|my|its|our)\\s+english\\b"

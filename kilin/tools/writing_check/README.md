@@ -44,9 +44,10 @@ For "check the grammar and style of the methods of draft.tex", the tool:
    [1]") and saves the full report, one table per section, as
    `outputs/<document>_writing_check.md`. The paragraphs of the findings
    shown are the answer's evidence (`[1]`, `[2]`, ...), so a follow-up
-   that reuses evidence ("suggest a better phrasing for the line 75 one")
-   has the whole paragraph, not only the words the answer shows. Text
-   checked from the question is not in a file and gives no evidence.
+   that reuses evidence has the whole paragraph, not only the words the
+   answer shows. Text checked from the question is not in a file and
+   gives no evidence. A follow-up asking to rewrite a line comes back
+   to this tool (see "Rewriting a line").
 
 Failed model calls are reported per paragraph (a partial result); the
 other paragraphs are still checked.
@@ -158,6 +159,35 @@ in the report's "Dropped suggestions" table with why each was dropped,
 except those that only quote the context or change nothing, which are only
 counted. A failed call is reported for that paragraph and the others
 are still checked; without a brief, the paragraphs are checked without it.
+
+## Rewriting a line
+
+After a check, a question asking to rewrite a line ("suggest a better
+phrasing for line 75", "split the sentence at line 75", or a finding
+pasted with "rephrase it") comes back to `writing_check`
+(`_followup.py`): a cue in both project types matches a rewrite word
+(rephrase, rewrite, reword, split, shorten, simplify, phrasing,
+alternatives) with "line N", in either order. The general intents
+cannot do it well: they see only the few words the answer showed, and
+invent the rest.
+
+1. The document is the one the latest writing check in the conversation
+   checked; without one, the question names it ("rephrase line 6 of
+   draft.tex") or KíLín asks.
+2. The text to rewrite is the whole sentence holding a finding the check
+   listed at that line (a quoted one first, then a long sentence when the
+   question says "split" or "long", else the first), read from the
+   document; when no finding is listed there, the paragraph at that line.
+3. One model call asks for two or three complete versions (split into
+   two or three sentences for a long sentence), told the document's card
+   and glossary, with the paragraph as context.
+4. A version is dropped, with why, when it is cut short with an ellipsis,
+   changes nothing, fails the meaning checks of the model's suggestions
+   (numbers, negations, citations, hedges, terms), or adds more than two
+   content words the paragraph does not have (a new claim).
+
+The answer shows the full text with the paragraph as evidence `[1]`, the
+versions kept, numbered, and those dropped.
 
 ## Settings (`defaults.json`)
 

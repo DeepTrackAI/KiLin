@@ -109,6 +109,15 @@ from kilin.tools.writing_check._document import (
     Document,
     read_document,
 )
+from kilin.tools.writing_check._followup import (
+    ShownFinding,
+    option_rejection,
+    parse_options,
+    rewrite_prompt,
+    rewrite_request,
+    shown_findings,
+    target_text,
+)
 from kilin.tools.writing_check._review import (
     CONTEXT_QUOTED,
     Dropped,
@@ -258,6 +267,9 @@ def run(
     """
 
     summary: dict[str, object] = {"name": "writing_check"}
+    line = rewrite_request(request.question)
+    if line is not None:
+        return _rewrite(request, context, line, summary)
     context.progress("Finding the document")
     chosen = choose_document(
         request, context,
@@ -424,6 +436,116 @@ def run(
         ToolResult(answer, evidence, summary), failures,
         completed=checked == 0 or len(failures) < checked,
     )
+
+
+def _rewrite(
+    request: ToolRequest,
+    context: ToolContext,
+    line: int,
+    summary: dict[str, object],
+) -> ToolResult:
+    """Rewrite the sentence or paragraph at a line, as a follow-up.
+
+    Parameters
+    ----------
+    request: ToolRequest
+        The question, naming the line, and the earlier turns.
+    context: ToolContext
+        Tool services.
+    line: int
+        The line the question names.
+    summary: dict[str, object]
+        The result summary, filled in here.
+
+    Returns
+    -------
+    ToolResult
+        Two or three checked rewrites of the finding's whole sentence (or
+        of the paragraph at the line), with the paragraph as evidence; or
+        why there is none.
+
+    """
+
+    findings: list[ShownFinding] = []
+    path = None
+    for turn in request.earlier:  # Latest first.
+        shown = shown_findings(turn.answer)
+        if shown or turn.answer.lstrip().startswith("**Writing check of"):
+            findings = shown
+            path = turn.paths[0] if turn.paths else None
+            break
+    if path is None:
+        chosen = choose_document(
+            request, context,
+            question="Which document is that line in?",
+            example="rephrase line 75 of draft.tex",
+            prefer=(".tex", ".md", ".docx", ".txt"),
+        )
+        if isinstance(chosen, str):
+            context.done("No document chosen", evidence_count=0)
+            return ToolResult(chosen, (), summary)
+        path = chosen[0]
+    summary.update({"document": path.as_posix(), "rewrite_line": line})
+    text, read_as = _source_text(path, context)
+    if text is None:
+        context.done("Document not readable", evidence_count=0)
+        return ToolResult(
+            f"I could not read {path.name} from the project's selected "
+            "sources.", (), summary,
+        )
+    document = read_document(read_as, text)
+    document = Document(path, document.sections, document.paragraphs)
+    target = target_text(document, line, findings, request.question)
+    if target is None:
+        context.done("No prose at the line", evidence_count=0)
+        return ToolResult(
+            f"Line {line} of {path.name} holds no prose to rewrite.",
+            (), summary,
+        )
+    index, original, finding = target
+    paragraph = document.paragraphs[index]
+    _, glossary = check_document(document)
+    card_reader = getattr(context, "card", None)
+    card = card_reader(path) if card_reader is not None else None
+    about = document_context(card, "", glossary)
+    context.progress(f"Rewriting line {line}")
+    try:
+        reply = context.ask_model(
+            *rewrite_prompt(original, paragraph.text, about, finding), None
+        )
+    except Exception as error:  # Reported in the answer, not fatal.
+        reply = ""
+        summary["failure"] = str(error)
+    kept, dropped = [], []
+    for option in parse_options(reply):
+        why = option_rejection(original, option, paragraph.text, glossary)
+        (dropped if why else kept).append((option, why))
+    summary.update({"rewrites": len(kept), "dropped": len(dropped)})
+    lines = [
+        f"**Rewriting line {line} of {path.name}**", "",
+        f"Text: “{original}” [1]", "",
+    ]
+    if kept:
+        lines += [f"{number}. “{option}”"
+                  for number, (option, _) in enumerate(kept, start=1)]
+    else:
+        lines.append(
+            "No rewrite kept the text's meaning, so none is suggested."
+            if dropped else "The model gave no rewrite."
+        )
+    for option, why in dropped:
+        lines += ["", f"*Dropped: “{option}” ({why}).*"]
+    context.done(f"Rewrote line {line}", evidence_count=1)
+    evidence = ({
+        "citation": 1,
+        "path": path,
+        "start_line": paragraph.start_line,
+        "end_line": paragraph.end_line,
+        "symbol": None,
+        "text": paragraph.source,
+        "cell": None,
+    },)
+    return ToolResult("\n".join(lines), evidence, summary)
 
 
 def _source_text(

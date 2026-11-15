@@ -44,6 +44,10 @@ Module Structure
 
     A finding placed at the source line of its words, for any check.
 
+- ``sentences``
+
+    A paragraph's sentences, with where each starts.
+
 Examples
 --------
 >>> from pathlib import Path
@@ -74,6 +78,7 @@ __all__ = [
     "Glossary",
     "check_document",
     "make_finding",
+    "sentences",
 ]
 
 LEVEL_GRAMMAR: Final[str] = "grammar"
@@ -629,6 +634,34 @@ def _repeated(paragraphs: Sequence[Paragraph]) -> list[Finding]:
     ]
 
 
+def sentences(text: str) -> list[tuple[int, str]]:
+    """Return a paragraph's sentences, with where each starts.
+
+    Parameters
+    ----------
+    text: str
+        A paragraph's readable text.
+
+    Returns
+    -------
+    list[tuple[int, str]]
+        Each sentence's position in the text and its words, split after
+        ".", "!" or "?" before a capital, digit or bracket ("et al.",
+        "e.g.", "Fig." and similar do not end a sentence).
+
+    """
+
+    found = []
+    offset = 0
+    for sentence in _SENTENCE_END.split(text):
+        start = text.find(sentence, offset)
+        if start < 0:
+            start = offset
+        found.append((start, sentence))
+        offset = start + len(sentence)
+    return found
+
+
 def _long_sentences(paragraphs: Sequence[Paragraph]) -> list[Finding]:
     """Find sentences longer than the configured number of words.
 
@@ -646,17 +679,14 @@ def _long_sentences(paragraphs: Sequence[Paragraph]) -> list[Finding]:
 
     findings = []
     for index, paragraph in enumerate(paragraphs):
-        offset = 0
-        for sentence in _SENTENCE_END.split(paragraph.text):
-            start = paragraph.text.find(sentence, offset)
-            offset = start + len(sentence) if start >= 0 else offset
+        for start, sentence in sentences(paragraph.text):
             words = sentence.split()
             if len(words) > _config.LONG_SENTENCE_WORDS:
                 findings.append(make_finding(
                     paragraphs, index, LEVEL_STYLE, "long sentence",
                     " ".join(words[:_SENTENCE_START_WORDS]), "",
                     f"{len(words)} words; consider splitting it.",
-                    max(start, 0),
+                    start,
                 ))
     return findings
 

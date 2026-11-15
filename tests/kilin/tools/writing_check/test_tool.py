@@ -25,7 +25,7 @@ from docx import Document as WordDocument
 from kilin.answering import _cued_intent
 from kilin.project_type import project_type
 from kilin.tools import writing_check as tool
-from kilin.tools._contract import ToolRequest
+from kilin.tools._contract import EarlierTurn, ToolRequest
 from kilin.tools._registry import TOOL_WRITING_CHECK
 from tests.kilin.tools._contract_support import (
     assert_packaged_defaults,
@@ -48,7 +48,14 @@ The dataset showed that the dataset is large.
 
 
 def _model(system: str, prompt: str, tokens: int | None) -> str:
-    """Answer like a model: a brief, or the changes for a paragraph."""
+    """Answer like a model: a brief, rewrites, or a paragraph's changes."""
+    if "rewrite text" in system:
+        return (
+            "OPTION: We tracked particles to estimate diffusion [cite].\n"
+            "OPTION: We tracked particles in order to...\n"
+            "OPTION: We tracked particles with remarkable new hardware to "
+            "estimate diffusion [cite].\n"
+        )
     if "describe documents" in system:
         return "A biophysics article on particle tracking."
     checked = '"""\nWe tracks' in prompt  # The paragraph, not context.
@@ -108,6 +115,11 @@ class TestWritingCheckPackage(unittest.TestCase):
                 "proofread the methods section",
                 "check the English of the second paragraph",
                 "are there typos in my manuscript?",
+                "suggest a better phrasing for line 75",
+                "split the sentence at line 75",
+                "line 75 · style: “DeepTrack2 complements platforms like "
+                "BiaPy” (47 words; consider splitting it)\n\n"
+                "suggest a better phrasing",
             ):
                 with self.subTest(type_id=type_id, question=question):
                     self.assertEqual(_cued_intent(project, question),
@@ -116,6 +128,7 @@ class TestWritingCheckPackage(unittest.TestCase):
                 "check the references of draft.tex",
                 "which papers discuss writing style?",
                 "summarize the paper",
+                "what does line 3 of the table show?",
             ):
                 with self.subTest(type_id=type_id, question=question):
                     self.assertNotEqual(_cued_intent(project, question),
@@ -159,9 +172,9 @@ class TestWritingCheckRun(unittest.TestCase):
         values.update(extra)
         return SimpleNamespace(**values)
 
-    def _run(self, question: str, context=None, **settings):
+    def _run(self, question: str, context=None, earlier=(), **settings):
         context = context or self._context()
-        request = ToolRequest(question, question)
+        request = ToolRequest(question, question, earlier=earlier)
         return tool.run(
             tool.WritingCheckSettings(**settings), request, context
         ), context
@@ -218,6 +231,41 @@ class TestWritingCheckRun(unittest.TestCase):
                  c.args[0]]
         self.assertEqual(steps[:2], ["Checking grammar of paragraph 1 of 4",
                                      "Checking style of paragraph 1 of 4"])
+
+    def test_rewrite_follow_up(self) -> None:
+        first, _ = self._run("check the grammar of draft.tex")
+        earlier = (EarlierTurn(
+            1, "check the grammar of draft.tex", answer=first.answer,
+            paths=tuple(item["path"] for item in first.evidence),
+        ),)
+        context = self._context()
+        result, context = self._run(
+            "suggest a better phrasing for line 6", context, earlier
+        )
+        answer = result.answer
+        self.assertTrue(answer.startswith(
+            "**Rewriting line 6 of draft.tex**\n\nText: “We tracks "
+            "particles in order to estimate diffusion [cite].” [1]"
+        ))
+        self.assertIn(
+            "1. “We tracked particles to estimate diffusion [cite].”",
+            answer,
+        )
+        self.assertNotIn("2. ", answer)
+        for why in ("cut short with an ellipsis",
+                    "adds words the paragraph does not have"):
+            with self.subTest(why=why):
+                self.assertIn(why, answer)
+        self.assertEqual(context.ask_model.call_count, 1)
+        self.assertEqual(result.evidence[0]["start_line"], 6)
+        self.assertEqual(result.summary["rewrites"], 1)
+
+    def test_rewrite_without_an_earlier_check(self) -> None:
+        result, _ = self._run("rephrase line 6 of draft.tex")
+        self.assertIn("**Rewriting line 6 of draft.tex**", result.answer)
+        result, _ = self._run("rephrase line 2 of draft.tex")
+        self.assertEqual(result.answer,
+                         "Line 2 of draft.tex holds no prose to rewrite.")
 
     def test_part_and_card(self) -> None:
         card = Mock(return_value={"title": "Tracking", "aim": "Diffusion."})
