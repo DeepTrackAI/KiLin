@@ -229,6 +229,16 @@ console.log("memory settings scope passed");
                       styles)
         self.assertIn('.message-actions.memory-available { opacity: 1;',
                       styles)
+        self.assertIn('.memory-turn { display: flex; flex-direction: column;',
+                      styles)
+        self.assertIn('.memory-message { display: flex; width: fit-content;',
+                      styles)
+        self.assertIn('.memory-message-name { min-width: 0;', styles)
+        self.assertIn('text-overflow: ellipsis; white-space: nowrap;',
+                      styles)
+        self.assertIn('.memory-message-role { flex: none;', styles)
+        self.assertNotIn('.memory-turn-messages', styles)
+        self.assertNotIn('.memory-turn-link', styles)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_no_memory_does_not_add_an_action(self) -> None:
@@ -255,7 +265,7 @@ console.log("no memory action passed");
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_grouped_memory_origin_preserves_message_roles(self) -> None:
-        """Group one question and answer without losing labels or links."""
+        """Show one clickable line per message, with shared turn origins."""
 
         script = r"""
 const assert = require("node:assert/strict");
@@ -321,26 +331,41 @@ assert.equal(stopped, 1);
 assert.equal(wrapper.hidden, false);
 assert.equal(toggle.attributes["aria-expanded"], "true");
 assert.equal(rowClasses.has("memory-expanded"), true);
-const groups = panel.children.slice(1);
+const groups = panel.children;
+const label = (button) => button.children.map((child) => child.textContent)
+  .join("");
 assert.equal(groups.length, 3);
-const firstLink = groups[0].children[0];
-const firstMessages = groups[0].children[1].children;
-assert.match(firstLink.textContent, /Brainstorming branch · turn 2/);
+const firstMessages = groups[0].children;
 assert.equal(firstMessages.length, 2);
-assert.equal(firstMessages[0].textContent, "M1 · Question");
+assert.equal(firstMessages[0].kind, "button");
+assert.equal(label(firstMessages[0]),
+  "Brainstorming branch · Turn 2 — Question");
+assert.equal(firstMessages[0].children[0].className, "memory-message-name");
+assert.equal(firstMessages[0].children[1].className, "memory-message-role");
 assert.equal(firstMessages[0].className,
   "memory-message memory-question");
-assert.equal(firstMessages[1].textContent, "M2 · Answer");
+assert.equal(label(firstMessages[1]),
+  "Brainstorming branch · Turn 2 — Answer");
 assert.equal(firstMessages[1].className,
   "memory-message memory-answer");
-assert.match(groups[1].children[0].textContent, /Other discussion · turn 1/);
-assert.equal(groups[1].children[1].children[0].textContent,
-  "M3 · Question");
+assert.equal(groups[1].children.length, 1);
+assert.equal(label(groups[1].children[0]),
+  "Other discussion · Turn 1 — Question");
+assert.equal(groups[2].children.length, 1);
 assert.equal(groups[2].children[0].disabled, true);
-assert.equal(groups[2].children[1].children[0].textContent,
-  "M4 · Answer");
-firstLink.listeners.click({stopPropagation() {}});
+assert.equal(label(groups[2].children[0]),
+  "Conversation unavailable — Answer");
+assert.match(groups[2].children[0].title, /not source evidence/);
+firstMessages[0].listeners.click({stopPropagation() {}});
 assert.deepEqual(navigation, {conversation_id: "branch", turn_number: 2});
+navigation = null;
+firstMessages[1].listeners.click({stopPropagation() {}});
+assert.deepEqual(navigation, {conversation_id: "branch", turn_number: 2});
+navigation = null;
+groups[1].children[0].listeners.click({stopPropagation() {}});
+assert.deepEqual(navigation, {conversation_id: "different", turn_number: 1});
+assert.equal(elements.filter((element) =>
+  element.className === "memory-turn-link").length, 0);
 assert.equal(elements.filter((element) => element.kind === "sup").length, 0);
 row.listeners.keydown({key: "Escape", stopPropagation() {stopped++;}});
 assert.equal(stopped, 2);
@@ -403,14 +428,16 @@ const panel = wrapper.children[0];
 assert.equal(wrapper.hidden, true);
 assert.equal(panel.className, "memory-provenance");
 assert.match(toggle.title, /not source evidence/);
-assert.match(panel.children[0].textContent, /not source evidence/);
-const group = panel.children[1];
+assert.match(panel.attributes["aria-label"], /not source evidence/);
+assert.equal(panel.children.length, 1);
+const group = panel.children[0];
+assert.equal(group.children.length, 1);
 const button = group.children[0];
 assert.equal(button.disabled, false);
-assert.match(button.textContent, /Original brainstorming/);
-assert.equal(group.children[1].children[0].textContent, "M1 · Answer");
-assert.equal(group.children[1].children[0].className,
-  "memory-message memory-answer");
+assert.equal(button.children.map((item) => item.textContent).join(""),
+  "Original brainstorming · Turn 2 — Answer");
+assert.equal(button.className, "memory-message memory-answer");
+assert.match(button.title, /not source evidence/);
 button.listeners.click({stopPropagation: () => {}});
 assert.deepEqual(memoryNavigation, {conversation_id: "c-1", turn_number: 2});
 lastConversationData.conversations = [];
@@ -419,8 +446,10 @@ appendMemoryProvenance(row, {
   parameters: {memory_references: [{label: "M1",
     origins: [{conversation_id: "c-1", turn_number: 2}]}]},
 });
-assert.equal(row.children[3].children[0].children[1].children[0]
-  .disabled, true);
+const missing = row.children[3].children[0].children[0].children[0];
+assert.equal(missing.disabled, true);
+assert.equal(missing.children.map((item) => item.textContent).join(""),
+  "Conversation unavailable — Message");
 assert.equal(elements.filter((element) => element.kind === "sup").length, 0);
 console.log("memory provenance separate passed");
 """

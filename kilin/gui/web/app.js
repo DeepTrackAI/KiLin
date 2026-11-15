@@ -4837,10 +4837,7 @@ function appendMemoryProvenance(row, turn) {
   panel.id = `memory-provenance-${turn.conversation_turn_uuid}`;
   panel.setAttribute("role", "region");
   panel.setAttribute("aria-label", "Earlier conversation memory (not source evidence)");
-  const heading = document.createElement("p");
-  heading.textContent = "Earlier conversation memory (not source evidence)";
-  panel.append(heading);
-  // Group by durable turn identity; distinct messages retain their labels.
+  // Group by durable turn identity so both roles use an active origin.
   const groups = new Map();
   for (const [index, reference] of references.entries()) {
     const origins = Array.isArray(reference.origins) ? reference.origins : [];
@@ -4855,7 +4852,7 @@ function appendMemoryProvenance(row, turn) {
     if (!group.origin && origin) group.origin = origin;
     const role = reference.role === "user" ? "Question"
       : reference.role === "assistant" ? "Answer" : "Message";
-    group.messages.push({label: reference.label, role});
+    group.messages.push({role});
   }
   for (const group of groups.values()) {
     const origin = group.origin;
@@ -4863,29 +4860,32 @@ function appendMemoryProvenance(row, turn) {
       item.conversation_id === origin?.conversation_id);
     const item = document.createElement("section");
     item.className = "memory-turn";
-    const link = document.createElement("button");
-    link.type = "button";
-    link.className = "memory-turn-link";
-    link.textContent = origin
-      ? `${details.name} · turn ${origin.turn_number}`
-      : "Conversation unavailable";
-    link.title = "Open the earlier conversation; not source evidence.";
-    link.disabled = !origin;
-    if (origin) link.addEventListener("click", (event) => {
-      event.stopPropagation();
-      openMemoryOrigin(origin);
-    });
-    const messages = document.createElement("div");
-    messages.className = "memory-turn-messages";
     for (const message of group.messages) {
-      const bubble = document.createElement("div");
+      const link = document.createElement("button");
+      link.type = "button";
       const alignment = message.role === "Question" ? "memory-question"
         : message.role === "Answer" ? "memory-answer" : "memory-other";
-      bubble.className = `memory-message ${alignment}`;
-      bubble.textContent = `${message.label} · ${message.role}`;
-      messages.append(bubble);
+      link.className = `memory-message ${alignment}`;
+      const name = origin ? details.name : "Conversation unavailable";
+      const suffix = origin ? ` · Turn ${origin.turn_number} — ${message.role}`
+        : ` — ${message.role}`;
+      const nameLabel = document.createElement("span");
+      nameLabel.className = "memory-message-name";
+      nameLabel.textContent = name;
+      const roleLabel = document.createElement("span");
+      roleLabel.className = "memory-message-role";
+      roleLabel.textContent = suffix;
+      link.append(nameLabel, roleLabel);
+      link.title = origin
+        ? `Open ${name}${suffix}; not source evidence.`
+        : "Conversation unavailable; not source evidence.";
+      link.disabled = !origin;
+      if (origin) link.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openMemoryOrigin(origin);
+      });
+      item.append(link);
     }
-    item.append(link, messages);
     panel.append(item);
   }
   const count = references.length;

@@ -246,13 +246,15 @@ source turn UUIDs and active conversation/one-based-turn origins. No memory
 text is copied into this metadata. The answer's action row shows a
 small memory icon and the number of retrieved messages, alongside Save,
 Like, and Dislike. The reference details are collapsed by default; clicking
-the icon expands the original grouped references below the action row.
-They remain **separate from scientific source citations**. Matching turn
-UUIDs group a retrieved question and answer with separate labels and roles
-instead of duplicate navigation links. Selecting a link opens the recorded
-conversation and highlights its turn. An archived or
-missing conversation yields an unavailable link rather than an invented
-source citation. A branch can provide another active origin of the same
+the icon expands a compact list below the action row. Each memory is a
+single clickable line, such as ``Brainstorming · Turn 2 — Question`` or
+``Brainstorming · Turn 2 — Answer``, aligned to the same sides as chat
+messages. They remain **separate from scientific source citations**. Matching
+turn UUIDs share an active origin, but each retrieved question or answer has
+its own link without a duplicate heading or secondary label. Selecting a
+line opens the recorded conversation and highlights its turn. An archived or
+missing conversation yields a disabled line rather than an invented source
+citation. A branch can provide another active origin of the same
 turn. Existing source citation numbering and evidence previews are
 unchanged. This metadata is derived context, not a scientific assertion.
 
