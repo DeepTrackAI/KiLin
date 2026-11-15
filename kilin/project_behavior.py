@@ -74,7 +74,7 @@ __all__ = [
 ]
 
 PROJECT_BEHAVIOR_FILE: Final[str] = "project_behavior.json"
-_FORMAT: Final[str] = "project-behavior-v2"
+_FORMAT: Final[str] = "project-behavior"
 _DELETE: Final[dict[str, bool]] = {"$delete": True}
 _MAX_BYTES: Final[int] = 1_048_576
 _GLOBAL_FIELDS: Final[frozenset[str]] = frozenset((

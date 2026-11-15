@@ -77,7 +77,7 @@ project's shared and per-intent behavior. Packaged project types remain
 immutable. `profile.ini` still owns backend, model, indexing filters, and
 answer settings. `[tool.<name>]` owns shared tool settings.
 
-The behavior file uses the **`project-behavior-v2`** format, a fixed
+The behavior file uses the **`project-behavior`** format, a fixed
 `project_type_id`, and four required sparse objects: `global`, `intents`,
 `capabilities`, and `memory`. Only differences from the packaged defaults
 are stored. `capabilities` controls source indexing (`code_graph` and
@@ -149,10 +149,9 @@ sections with independent budgets and provenance.
 
 The policy scopes do not affect the document index compatibility
 signature. Changing memory settings will not refresh or invalidate
-document/source-card indexes. The behavior format is prerelease and is
-not backward compatible with `project-behavior-v1`: incompatible older
-project behavior files raise an error and are not rewritten or migrated.
-No workspace data is deleted automatically.
+document/source-card indexes. The behavior format is defined once for this prerelease. A file with an
+unknown format raises an error without being rewritten. Existing workspace
+data is never silently deleted.
 
 Advanced indexing exposes `code_graph` (true, false, or `"auto"`) and
 `document_headers` (true or false). Changes alter index metadata and require

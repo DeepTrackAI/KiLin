@@ -319,7 +319,7 @@ class TestProjectBehavior(ProjectBehaviorFixture):
         self.assertEqual(updated["memory"]["values"]["max_hits"], 6)
         path = self.first / PROJECT_BEHAVIOR_FILE
         state = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(state["format"], "project-behavior-v2")
+        self.assertEqual(state["format"], "project-behavior")
         self.assertEqual(state["memory"]["max_hits"], 6)
         self.assertEqual(state["global"], {})
         with self.assertRaisesRegex(ValueError, "changed since"):
@@ -430,12 +430,12 @@ class TestProjectBehavior(ProjectBehaviorFixture):
         self.save_intent_memory("question_answering", indexing="explicit")
         self.assertEqual(session._index_metadata(), before)
 
-    def test_previous_behavior_format_is_not_implicitly_upgraded(self):
-        """Reject unsupported prerelease snapshots without changing them."""
+    def test_unknown_behavior_format_is_rejected_without_rewriting(self):
+        """Reject unknown formats without rewriting stored project settings."""
 
         path = self.first / PROJECT_BEHAVIOR_FILE
         content = json.dumps({
-            "format": "project-behavior-v1", "project_type_id": "literature",
+            "format": "other-format", "project_type_id": "literature",
             "global": {}, "intents": {}, "capabilities": {},
         })
         path.write_text(content, encoding="utf-8")
@@ -446,13 +446,13 @@ class TestProjectBehavior(ProjectBehaviorFixture):
     def test_corrupted_or_foreign_overrides_fail_closed(self):
         path = self.first / PROJECT_BEHAVIOR_FILE
         for value in (
-            '{"format":"project-behavior-v1","project_type_id":'
+            '{"format":"other-format","project_type_id":'
             '"code","global":{},"intents":{}}',
-            '{"format":"project-behavior-v1","project_type_id":'
+            '{"format":"other-format","project_type_id":'
             '"literature","global":{},"intents":{"other":{}}}',
-            '{"format":"project-behavior-v1","project_type_id":'
+            '{"format":"other-format","project_type_id":'
             '"literature","global":{},"intents":{},"unexpected":1}',
-            '{"format":"project-behavior-v1","project_type_id":'
+            '{"format":"other-format","project_type_id":'
             '"literature","global":{},"global":{},"intents":{}}',
             '{not valid json',
         ):
