@@ -498,7 +498,7 @@ button:disabled { opacity: .62; cursor: default; }
 .memory-provenance-wrapper[hidden] { display: none; }
 .memory-provenance { box-sizing: border-box; width: min(420px, 100%); max-height: min(350px, 55vh); margin: 5px 0 2px; padding: 8px 10px; overflow-y: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--text); font-size: 12px; }
 .memory-turn { display: flex; flex-direction: column; gap: 4px; padding: 3px 0; }
-.memory-turn + .memory-turn { border-top: 1px solid var(--line); padding-top: 7px; }
+.memory-turn + .memory-turn { padding-top: 7px; }
 .memory-message { display: flex; width: fit-content; max-width: 100%; min-height: 26px; padding: 5px 9px; border: 0; border-radius: 9px; font: inherit; text-align: left; line-height: 1.35; cursor: pointer; }
 .memory-message-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .memory-message-role { flex: none; white-space: nowrap; }
@@ -869,6 +869,12 @@ details[open]::details-content { block-size: auto; }
 }
 .source-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .source-card-actions button { flex: 0 1 auto; }
+/* Give switches and adjacent dropdown fields consistent vertical space. */
+#models-panel .source-card-settings > select + .check-row,
+#models-panel .source-card-settings > .check-row + label:not(.check-row),
+#models-panel .source-card-settings > .check-row + .settings-grid {
+  margin-top: 14px;
+}
 
 /* Project-local behavior editors follow existing Settings visual hierarchy. */
 .behavior-intent { padding: 11px 0; border-bottom: 1px solid var(--line); }
