@@ -20,6 +20,11 @@
       "title": "Large workload threshold",
       "summary": "Sets the batch threshold used by the confirmation policy.",
       "description": "Used to decide whether a planned multi-batch operation is large enough to request confirmation."
+    },
+    "extra_searches": {
+      "title": "Extra searches",
+      "summary": "Sets how many times a quick answer reads further down the search results.",
+      "description": "Before a quick answer from the best-ranked passages, the answering model checks whether they answer the question. If not, the next-ranked passages are added, up to this many times. Zero turns the check off."
     }
   }
 }

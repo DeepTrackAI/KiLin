@@ -146,6 +146,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import partial
 from hashlib import sha256
 import json
 from math import isfinite
@@ -198,6 +199,7 @@ from kilin.answering import (
     select_history,
     side_reply,
     strip_thinking,
+    summarize_answer,
     turn_representation,
 )
 from kilin.chat import (
@@ -222,6 +224,7 @@ from kilin.model_settings import read_router_model, validate_model_id
 from kilin.project_layout import source_scan_exclusions
 from kilin.workspace import include_explicit_imports
 from kilin.project_type import (
+    HISTORY_POLICY_NONE,
     HISTORY_POLICY_RECENT,
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_NONE,
@@ -331,6 +334,7 @@ from kilin.tools import (
 )
 from kilin.tools._shared.model_results import incomplete_notice
 from kilin.tools._shared.choose_document import document_scope
+from kilin.tools._shared.enough_evidence import passages_answer
 from kilin.tool_settings import with_project_settings
 from kilin.trace_logging import (
     TRACE_EVENT_PROGRESS_UPDATED,
@@ -448,6 +452,11 @@ _UNCITED_RELATED_EVIDENCE: Final[int] = require_default_int(
 # Earlier turns made available when resolving references in tool requests.
 _MAX_EARLIER_TURNS: Final[int] = require_default_int(
     _RAG_DEFAULTS, "MAX_EARLIER_TURNS", "RAG"
+)
+# Most times a search reads further down its ranking when the answering
+# model says the passages found do not answer the question.
+_EXTRA_SEARCHES: Final[int] = require_default_int(
+    _RAG_DEFAULTS, "EXTRA_SEARCHES", "RAG"
 )
 # A citation group in an answer, such as "[2]" or "[1, 3]".
 _CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
@@ -1895,9 +1904,9 @@ class RAGSession:
                     # A single inferred focus must not silently narrow an
                     # explicit request about every source in the project.
                     scope = ()
-                evidence = self._retrieve(
+                search = partial(
+                    self._retrieve,
                     search_text,
-                    retrieval_count,
                     trace_turn_id=turn_id,
                     status_callback=lambda message: report_phase(
                         ANSWER_PHASE_RETRIEVING, message=message
@@ -1921,6 +1930,40 @@ class RAGSession:
                         if source_limits is not None else {}
                     ),
                 )
+                page = effective["retrieval_count"]
+                evidence = search(page)
+                # The answer may rank just below the first page. When the
+                # answering model says the passages found do not answer,
+                # read further down the same ranking of the user's words.
+                searches = 0
+                while use_router and searches < _EXTRA_SEARCHES:
+                    texts = [item.text for item in evidence]
+                    # Only a clear "no" reads further.
+                    if passages_answer(
+                        question, texts, self._ask_check
+                    ) is not False:
+                        break
+                    searches += 1
+                    report_phase(
+                        ANSWER_PHASE_RETRIEVING,
+                        message="Searching further",
+                    )
+                    wider = search(page * (searches + 1))
+                    trace.emit(
+                        "retrieval.search_again",
+                        component="rag",
+                        data={
+                            "round": searches,
+                            "retrieval_count": page * (searches + 1),
+                            "evidence_count": len(wider),
+                        },
+                        turn_id=turn_id,
+                    )
+                    if len(wider) <= len(evidence):
+                        break  # The ranking has nothing further to add.
+                    evidence = wider
+                if searches:
+                    effective["extra_searches"] = searches
                 found = len(evidence)
                 related_turns = [
                     number
@@ -2381,6 +2424,23 @@ class RAGSession:
                 temperature=self.chat_session.temperature,
                 max_new_tokens=self.chat_session.max_new_tokens,
             )
+            # The router model writes the one-sentence summary the router
+            # reads for this turn later. Only routed turns are read by the
+            # router; small talk and failed answers keep the first sentence.
+            summary = None
+            if (
+                use_router
+                and not (
+                    intent.tool is None
+                    and intent.history_policy == HISTORY_POLICY_NONE
+                    and intent.retrieval_mode == RETRIEVAL_MODE_NONE
+                )
+                and effective.get("completion", {}).get("status")
+                != "incomplete"
+            ):
+                summary = summarize_answer(
+                    self._router_chat(), question, answer
+                )
             # Tokens the models read and generated for this answer.
             effective["usage"] = self.usage_since(usage)
             # The last recorded activity is the checkpoint boundary. Its
@@ -2399,7 +2459,11 @@ class RAGSession:
                 timeline=timeline,
             )
             # A compact summary lets the router find this turn later.
-            representation = turn_representation(turn, len(self.turns) + 1)
+            representation = turn_representation(
+                turn, len(self.turns) + 1, summary=summary
+            )
+            if summary is not None:
+                representation["summary_model"] = self.router_model
             effective["representation"] = representation
             trace.emit(
                 "conversation.turn.representation",
@@ -4721,6 +4785,7 @@ class RAGSession:
             source_files=self._source_files,
             ask_router=self._ask_router,
             ask_model=ask_model,
+            ask_check=self._ask_check,
             model_attempt_count=lambda: len(model_calls),
             write=write,
             model_id=str(getattr(self.chat_session, "model_id", "")),
@@ -5542,6 +5607,7 @@ class RAGSession:
             },
             "fallback": decision.fallback,
             "shortcut": decision.shortcut,
+            "repeated_turn": decision.repeated_turn,
             "duration_ms": round((perf_counter() - started) * 1000, 3),
         }
         if trace.include_content:
@@ -5617,6 +5683,36 @@ class RAGSession:
         """
 
         return self.router_reply(system, prompt, max_new_tokens=max_new_tokens)
+
+    def _ask_check(
+        self: RAGSession, system: str, prompt: str, max_new_tokens: int
+    ) -> str:
+        """Ask the answering model a short check, in the tools' call form.
+
+        The model that writes the answer judges best whether the passages
+        found are enough. A check needs one word, so thinking is off and
+        decoding greedy whatever the answer's settings; the answering
+        conversation and settings are restored afterwards.
+
+        Parameters
+        ----------
+        system: str
+            System instruction for the check only.
+        prompt: str
+            The check question.
+        max_new_tokens: int
+            Maximum length of the reply.
+
+        Returns
+        -------
+        str
+            The answering model's reply, without thinking text.
+
+        """
+
+        return side_reply(
+            self.chat_session, system, prompt, max_new_tokens=max_new_tokens
+        )
 
     def _new_chat_session(
         self: RAGSession, model_id: str, **settings: object
@@ -6683,6 +6779,9 @@ def _answer_prompt(
         "An alternative name match is not proof of identity: attribute it to "
         "its actual source and do not equate differently qualified symbols "
         "without supporting evidence. "
+        "The evidence is a search selection, not the whole documents: when "
+        "it does not state something, say the evidence does not state it, "
+        "not that the documents do not. "
         "Answer using the evidence above. Put [1], [2], and so on immediately "
         "after the claims they support. Cite only the evidence numbers "
         f"{cited}: numbers in brackets inside the evidence text are the "

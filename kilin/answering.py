@@ -8,8 +8,16 @@ included, and whether evidence is searched, reused, or skipped.
 
 Earlier turns enter the prompt as question and answer text only; their
 retrieved evidence stays with the turn it was retrieved for. Each turn keeps
-a short representation (question, cited sources, first sentence of the
-answer) so the router can point back to older turns without reading them.
+a short representation (question, cited sources, and a one-sentence summary
+of the answer) so the router can point back to older turns without reading
+them. The router model writes the summary once, when the turn is saved; the
+answer's first sentence is kept when the answer has only one sentence or
+the model gives no usable summary.
+
+A question asked again, with the same distinctive words as an earlier
+question, takes that turn's saved route without asking the router model,
+so the same question reaches the same intent and tool. Only the route is
+reused; the answer is written again.
 
 The router's judgement of which turns a question relates to is checked
 before it is used: a related turn is kept only when the question points
@@ -41,8 +49,15 @@ Key Features
 
 - **Turn representations**
 
-    ``turn_representation`` builds a compact, model-free summary of a turn.
-    Invalid saved representations are rebuilt from the original turn.
+    ``turn_representation`` builds a compact summary of a turn, and
+    ``summarize_answer`` asks the router model for its one-sentence answer
+    summary. Invalid saved representations are rebuilt from the original
+    turn.
+
+- **Repeated questions**
+
+    ``route_question`` gives a question asked again the saved route of the
+    earlier turn, without a router call.
 
 - **Packaged answering defaults**
 
@@ -88,7 +103,11 @@ Module Structure
 
 - ``turn_representation``
 
-    Summarize a turn compactly, without a model.
+    Summarize a turn compactly, optionally with a model-written summary.
+
+- ``summarize_answer``
+
+    Ask the router model for a one-sentence summary of an answer.
 
 - ``side_reply``
 
@@ -174,6 +193,7 @@ __all__ = [
     "select_history",
     "side_reply",
     "strip_thinking",
+    "summarize_answer",
     "turn_representation",
 ]
 
@@ -199,6 +219,13 @@ MAX_LISTED_TURNS: Final[int] = require_default_int(
 # Token budget for the router's one-line JSON decision.
 _ROUTER_MAX_TOKENS: Final[int] = require_default_int(
     _ANSWERING_DEFAULTS, "ROUTER_MAX_TOKENS", "ANSWERING"
+)
+# Token budget and answer length for the router's one-sentence summary.
+_SUMMARY_MAX_TOKENS: Final[int] = require_default_int(
+    _ANSWERING_DEFAULTS, "SUMMARY_MAX_TOKENS", "ANSWERING"
+)
+_SUMMARY_ANSWER_MAX_CHARACTERS: Final[int] = require_default_int(
+    _ANSWERING_DEFAULTS, "SUMMARY_ANSWER_MAX_CHARACTERS", "ANSWERING"
 )
 # Maximum question and answer-summary characters in a turn representation.
 _REPRESENTATION_MAX_CHARACTERS: Final[int] = require_default_int(
@@ -328,6 +355,9 @@ class RouteDecision:
     dropped_turns: tuple[tuple[int, str], ...]
         Related turns the router named but the checks removed, each with
         the reason, for tracing.
+    repeated_turn: int | None
+        The earlier turn whose route was reused because it asked the same
+        question; the router model was skipped.
 
     """
 
@@ -339,6 +369,7 @@ class RouteDecision:
     shortcut: str | None = None
     refers_back: bool = False
     dropped_turns: tuple[tuple[int, str], ...] = ()
+    repeated_turn: int | None = None
 
 
 def extract_thinking(text: str) -> str:
@@ -412,8 +443,10 @@ def _neutral_citations(text: str) -> str:
     return _CITATION.sub(f" {HISTORY_CITATION_MARKER}", text)
 
 
-def turn_representation(turn: object, number: int) -> dict[str, object]:
-    """Summarize a turn compactly, without a model.
+def turn_representation(
+    turn: object, number: int, *, summary: str | None = None
+) -> dict[str, object]:
+    """Summarize a turn compactly.
 
     Parameters
     ----------
@@ -421,18 +454,21 @@ def turn_representation(turn: object, number: int) -> dict[str, object]:
         A conversation turn with ``question``, ``answer``, and ``evidence``.
     number: int
         One-based position of the turn in its conversation.
+    summary: str | None, optional
+        Model-written answer summary from ``summarize_answer``. Defaults to
+        ``None``, which keeps the answer's first sentence.
 
     Returns
     -------
     dict[str, object]
         ``turn_id``, ``question``, ``sources`` (cited files and symbols),
-        and ``summary`` (the answer's first sentence).
+        and ``summary`` (the given summary, or the answer's first
+        sentence).
 
     """
 
     clean = strip_thinking(getattr(turn, "answer", ""))
-    answer = _without_citations(clean)
-    first = re.split(r"(?<=[.!?])\s+", " ".join(answer.split()), maxsplit=1)
+    first = summary or _answer_sentences(clean)[0]
 
     # Only cited evidence is listed; an answer without citations lists all.
     cited = {
@@ -458,12 +494,80 @@ def turn_representation(turn: object, number: int) -> dict[str, object]:
         "turn_id": number,
         "question": question[:_REPRESENTATION_MAX_CHARACTERS],
         "sources": sources[:_REPRESENTATION_MAX_SOURCES],
-        "summary": (
-            first[0][:_REPRESENTATION_MAX_CHARACTERS]
-            if first and first[0]
-            else ""
-        ),
+        "summary": first[:_REPRESENTATION_MAX_CHARACTERS],
     }
+
+
+def _answer_sentences(answer: str) -> list[str]:
+    """Split an answer into its first sentence and the rest.
+
+    Parameters
+    ----------
+    answer: str
+        Answer text, possibly with thinking and citations.
+
+    Returns
+    -------
+    list[str]
+        The first sentence, then the remaining text when there is any;
+        ``[""]`` for an empty answer. Thinking text and citation groups are
+        removed and whitespace is collapsed.
+
+    """
+
+    text = " ".join(_without_citations(strip_thinking(answer)).split())
+    return re.split(r"(?<=[.!?])\s+", text, maxsplit=1)
+
+
+def summarize_answer(chat: _Chat, question: str, answer: str) -> str | None:
+    """Ask the router model for a one-sentence summary of an answer.
+
+    The router lists each earlier turn by one line. An answer's first
+    sentence is often a status line ("This project has 1 source file."),
+    so a short model summary tells the router what the answer said.
+
+    Parameters
+    ----------
+    chat: ChatSession
+        Router model session; its conversation is restored afterwards.
+    question: str
+        The question the answer replies to.
+    answer: str
+        The saved answer, possibly with thinking and citations.
+
+    Returns
+    -------
+    str | None
+        One sentence with collapsed whitespace. None when the answer has
+        only one sentence, or the call fails, is cut off, or gives an empty
+        reply; the caller then keeps the answer's first sentence.
+
+    """
+
+    sentences = _answer_sentences(answer)
+    if len(sentences) < 2:
+        return None
+
+    text = " ".join(sentences)[:_SUMMARY_ANSWER_MAX_CHARACTERS]
+    system = (
+        "You summarize answers for KíLín. You reply with one sentence "
+        "only, in the language of the answer."
+    )
+    prompt = f"""Question: {question}
+
+Answer:
+{text}
+
+In one sentence of at most 30 words, say what the answer states, keeping
+its key names, numbers, and conclusion."""
+    try:
+        reply = side_reply(
+            chat, system, prompt,
+            max_new_tokens=_SUMMARY_MAX_TOKENS, require_complete=True,
+        )
+    except Exception:  # A summary failure must not stop saving a turn.
+        return None
+    return " ".join(reply.split()) or None
 
 
 def _representation_line(representation: dict[str, object]) -> str:
@@ -841,6 +945,10 @@ def route_question(
 
     Notes
     -----
+    A question with the same distinctive words as an earlier question
+    takes that turn's saved route without a router call (see
+    ``_repeated_route``).
+
     The router's related turns are checked: a turn is kept only when the
     question points back (``refers_back``) or shares a distinctive term
     with the turn's question, sources, or summary. Turns whose intent
@@ -868,6 +976,12 @@ def route_question(
                     standalone=True,
                     shortcut=pattern.pattern,
                 )
+
+    # A question asked again takes the earlier turn's route, so it
+    # reaches the same intent and tool.
+    repeated = _repeated_route(project, turns, question, excluded_turn_ids)
+    if repeated is not None:
+        return repeated
 
     representations = [
         (
@@ -980,6 +1094,84 @@ def route_question(
         refers_back=pointing,
         dropped_turns=tuple(dropped),
     )
+
+
+def _repeated_route(
+    project: ProjectType,
+    turns: list[object],
+    question: str,
+    excluded_turn_ids: frozenset[int],
+) -> RouteDecision | None:
+    """Return the saved route of an earlier turn that asked the same question.
+
+    Two questions are the same when they have the same distinctive words
+    (``_content_terms``), so case, word order, punctuation, and common
+    words do not matter, while a different name or number does. A question
+    that points back ("and its methods?") depends on the turn before it,
+    so it is never treated as repeated, and neither is an earlier question
+    that pointed back. Only the newest matching turn is considered.
+
+    Parameters
+    ----------
+    project: ProjectType
+        Current project type with its intents.
+    turns: list
+        Earlier conversation turns.
+    question: str
+        The new question.
+    excluded_turn_ids: frozenset[int]
+        Turns that must not be matched or related, such as disliked
+        answers.
+
+    Returns
+    -------
+    RouteDecision | None
+        The earlier turn's intent, standalone flag, and related turns, with
+        ``repeated_turn`` set. None when no earlier question matches, or
+        the matching turn's saved route is missing, malformed, or names an
+        intent the project type no longer has.
+
+    """
+
+    terms = _content_terms(question)
+    if not terms or refers_back(question):
+        return None
+
+    for number in range(len(turns), 0, -1):
+        turn = turns[number - 1]
+        earlier = str(getattr(turn, "question", ""))
+        if (
+            number in excluded_turn_ids
+            or _content_terms(earlier) != terms
+            or refers_back(earlier)
+        ):
+            continue
+
+        parameters = getattr(turn, "parameters", None)
+        if not isinstance(parameters, dict):
+            return None
+        intent = parameters.get("intent")
+        standalone = parameters.get("standalone")
+        related = parameters.get("related_turn_ids")
+        if (
+            not isinstance(intent, str)
+            or intent not in project.intents
+            or type(standalone) is not bool
+            or not isinstance(related, list)
+            or not all(
+                type(item) is int and 0 < item < number for item in related
+            )
+        ):
+            return None
+
+        kept = tuple(item for item in related if item not in excluded_turn_ids)
+        return RouteDecision(
+            intent=intent,
+            standalone=standalone or not kept,
+            related_turn_ids=kept,
+            repeated_turn=number,
+        )
+    return None
 
 
 def _cued_intent(project: ProjectType, question: str) -> str | None:

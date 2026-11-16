@@ -206,6 +206,10 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
             "MAX_RELATED_TURNS": answering.MAX_RELATED_TURNS,
             "MAX_LISTED_TURNS": answering.MAX_LISTED_TURNS,
             "ROUTER_MAX_TOKENS": answering._ROUTER_MAX_TOKENS,
+            "SUMMARY_MAX_TOKENS": answering._SUMMARY_MAX_TOKENS,
+            "SUMMARY_ANSWER_MAX_CHARACTERS": (
+                answering._SUMMARY_ANSWER_MAX_CHARACTERS
+            ),
             "REPRESENTATION_MAX_CHARACTERS": (
                 answering._REPRESENTATION_MAX_CHARACTERS
             ),
@@ -247,6 +251,8 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
                 "MAX_RELATED_TURNS",
                 "MAX_LISTED_TURNS",
                 "ROUTER_MAX_TOKENS",
+                "SUMMARY_MAX_TOKENS",
+                "SUMMARY_ANSWER_MAX_CHARACTERS",
                 "REPRESENTATION_MAX_CHARACTERS",
                 "REPRESENTATION_MAX_SOURCES",
                 "SHORT_QUESTION_MAX_WORDS",
@@ -892,6 +898,126 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(decision.intent, self.config.default_intent)
 
 
+class TestRepeatedQuestions(unittest.TestCase):
+    """Test that a question asked again takes the earlier turn's route."""
+
+    def setUp(self) -> None:
+        """Create a conversation whose second turn used a tool."""
+
+        self.config = project_type("code")
+        self.turns = [
+            _turn("Explain the fit function", "Fit trains [1]. More."),
+            _turn("List every MRI scanner", "Two scanners [1]. More."),
+        ]
+        self.turns[1].parameters = {
+            "intent": "code_generation",
+            "standalone": False,
+            "related_turn_ids": [1],
+        }
+
+    def _route(
+        self,
+        question: str,
+        excluded: frozenset[int] = frozenset(),
+    ) -> tuple[answering.RouteDecision, bool]:
+        """Route a question and report whether the router was asked.
+
+        Parameters
+        ----------
+        question: str
+            User question being classified.
+        excluded: frozenset[int], optional
+            Turns excluded from routing. Defaults to none.
+
+        Returns
+        -------
+        tuple[answering.RouteDecision, bool]
+            The decision, and True when the router model was called.
+
+        """
+
+        reply = '{"intent": "question_answering", "standalone": true}'
+        with patch.object(
+            answering, "side_reply", return_value=reply
+        ) as side:
+            decision = answering.route_question(
+                object(), self.config, self.turns, question,
+                excluded_turn_ids=excluded,
+            )
+        return decision, side.called
+
+    def test_same_words_reuse_the_saved_route(self) -> None:
+        """Ignore case, order, punctuation, and common words."""
+
+        for question in (
+            "List every MRI scanner",
+            "list every MRI scanner?",
+            "MRI scanner: list every",
+        ):
+            with self.subTest(question=question):
+                decision, asked = self._route(question)
+                self.assertFalse(asked)
+                self.assertEqual(decision.repeated_turn, 2)
+                self.assertEqual(decision.intent, "code_generation")
+                self.assertFalse(decision.standalone)
+                self.assertEqual(decision.related_turn_ids, (1,))
+
+    def test_different_words_ask_the_router(self) -> None:
+        """A changed name or an added word is a new question."""
+
+        for question in (
+            "List every CT scanner",
+            "List every MRI scanner model",
+        ):
+            with self.subTest(question=question):
+                decision, asked = self._route(question)
+                self.assertTrue(asked)
+                self.assertIsNone(decision.repeated_turn)
+
+    def test_questions_that_point_back_are_never_repeats(self) -> None:
+        """A question about "it" depends on the turn before it."""
+
+        self.turns[1].question = "List every MRI scanner it uses"
+        decision, asked = self._route("List every MRI scanner it uses")
+        self.assertTrue(asked)
+        self.assertIsNone(decision.repeated_turn)
+
+    def test_excluded_turns_are_not_matched_or_related(self) -> None:
+        """A disliked answer is not repeated, nor related through a repeat."""
+
+        decision, asked = self._route(
+            "List every MRI scanner", frozenset({2})
+        )
+        self.assertTrue(asked)
+        self.assertIsNone(decision.repeated_turn)
+
+        decision, asked = self._route(
+            "List every MRI scanner", frozenset({1})
+        )
+        self.assertFalse(asked)
+        self.assertEqual(decision.related_turn_ids, ())
+        self.assertTrue(decision.standalone)
+
+    def test_unusable_saved_routes_ask_the_router(self) -> None:
+        """Route normally when the saved route cannot be trusted."""
+
+        for parameters in (
+            {},
+            {"intent": "removed", "standalone": True, "related_turn_ids": []},
+            {"intent": ["code_generation"], "standalone": True,
+             "related_turn_ids": []},
+            {"intent": "code_generation", "standalone": "yes",
+             "related_turn_ids": []},
+            {"intent": "code_generation", "standalone": False,
+             "related_turn_ids": [2]},
+        ):
+            with self.subTest(parameters=parameters):
+                self.turns[1].parameters = parameters
+                decision, asked = self._route("List every MRI scanner")
+                self.assertTrue(asked)
+                self.assertIsNone(decision.repeated_turn)
+
+
 class TestRouterPrompt(unittest.TestCase):
     """Test the router prompt's scope and conversation representation."""
 
@@ -1406,6 +1532,15 @@ class TestHistory(unittest.TestCase):
         self.assertEqual(representation["sources"], ["file2.py:fit"])
         self.assertEqual(representation["summary"], "Fit trains the model.")
 
+    def test_representation_uses_a_given_summary(self) -> None:
+        """Replace the first sentence with a model-written summary."""
+
+        turn = _turn("Explain fit", "Fit trains [1]. More.")
+        representation = answering.turn_representation(
+            turn, 1, summary="S" * 250
+        )
+        self.assertEqual(representation["summary"], "S" * 200)
+
     def test_representation_handles_foreign_platform_paths(self) -> None:
         """Read POSIX and Windows evidence labels on every host platform."""
 
@@ -1472,3 +1607,47 @@ class TestHistory(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnswerSummary(unittest.TestCase):
+    """Test the router model's one-sentence answer summary."""
+
+    def test_long_answer_is_summarized_without_citations(self) -> None:
+        """Send the visible answer only and collapse the reply."""
+
+        chat = _FakeChat(response="  Fit trains\n the model.  ")
+        summary = answering.summarize_answer(
+            chat, "Explain fit",
+            "<think>Inspect [1]</think>Status line [1]. Fit trains it [2].",
+        )
+        self.assertEqual(summary, "Fit trains the model.")
+        prompt = chat.observations[0]["message"]
+        self.assertIn("Status line. Fit trains it.", prompt)
+        self.assertNotIn("Inspect", prompt)
+        self.assertEqual(
+            chat.observations[0]["max_new_tokens"],
+            answering._SUMMARY_MAX_TOKENS,
+        )
+        self.assertEqual(chat.messages[0]["content"], "Original instructions")
+
+    def test_one_sentence_answer_needs_no_model(self) -> None:
+        """Keep the first sentence when it is the whole answer."""
+
+        chat = _FakeChat()
+        self.assertIsNone(
+            answering.summarize_answer(chat, "Q", "Only one sentence [1].")
+        )
+        self.assertEqual(chat.observations, [])
+
+    def test_failed_or_empty_summaries_are_none(self) -> None:
+        """A failed call never stops saving the turn."""
+
+        for chat in (
+            _FakeChat(reply_error=RuntimeError("out of memory")),
+            _FakeChat(response="<think>unfinished"),
+            _FakeChat(response="   "),
+        ):
+            with self.subTest(response=chat.response):
+                self.assertIsNone(
+                    answering.summarize_answer(chat, "Q", "One. Two.")
+                )

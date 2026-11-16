@@ -260,6 +260,12 @@ class ToolContext:
         including incomplete attempts and bounded recovery, for this tool
         run. ``None`` when the context cannot expose attempt accounting.
         The count can be sampled around ``ask_model`` without an extra call.
+    ask_check: Callable[[str, str, int], str] | None, optional
+        Asks the selected answering model a short check
+        ``(system, prompt, max_new_tokens)`` with thinking off and greedy
+        decoding, such as whether the passages found answer the question;
+        the conversation is untouched. None for contexts without it, where
+        tools fall back to ``ask_router``. Defaults to ``None``.
 
     """
 
@@ -284,6 +290,7 @@ class ToolContext:
     retrieve: Callable[[RetrievalRequest], RetrievalResult] | None = None
     model_attempt_count: Callable[[], int] | None = None
     source_root: Path | None = None
+    ask_check: Callable[[str, str, int], str] | None = None
 
 
 @dataclass(frozen=True, slots=True)

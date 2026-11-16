@@ -10,6 +10,7 @@ This package owns the `find_fact` registered tool. Its `defaults.json` is indepe
 - `MAX_MODEL_CALLS` (default `200`): Most reading parts (1-500). Allowed range: 1–500.
 - `CONFIRMATION` (default `"always"`): When to ask before reading; ``always`` by default, because the user chooses between a thorough and a quick answer. Allowed values: always, when_large, never.
 - `LARGE_BATCHES` (default `0`): With ``when_large``, plans with more parts than this ask first. Allowed range: 0–100.
+- `EXTRA_SEARCHES` (default `1`): For a quick answer from the best-ranked passages, how many times to add the next-ranked passages when the answering model says the passages found do not answer the question; `0` turns the check off. Allowed range: 0–5.
 
 ### `ESTIMATES`
 

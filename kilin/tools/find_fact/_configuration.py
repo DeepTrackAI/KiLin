@@ -57,6 +57,7 @@ __all__ = [
     "DEFAULT_MAX_MODEL_CALLS",
     "DEFAULT_CONFIRMATION",
     "DEFAULT_LARGE_BATCHES",
+    "DEFAULT_EXTRA_SEARCHES",
     "PROMPT_TOKENS_PER_SECOND",
     "REPLY_TOKENS_PER_SECOND",
     "NOTES_PROMPT_TOKENS",
@@ -81,6 +82,7 @@ require_keys(
         "MAX_MODEL_CALLS",
         "CONFIRMATION",
         "LARGE_BATCHES",
+        "EXTRA_SEARCHES",
     }, "find_fact.SETTINGS"
 )
 DEFAULT_PART_TOKENS: Final[int] = (
@@ -96,6 +98,9 @@ if DEFAULT_CONFIRMATION not in ('always', 'when_large', 'never'):
     raise ValueError("find_fact.SETTINGS.CONFIRMATION is not supported.")
 DEFAULT_LARGE_BATCHES: Final[int] = (
     require_int(_SETTINGS, "LARGE_BATCHES", "find_fact.SETTINGS", 0, 100)
+)
+DEFAULT_EXTRA_SEARCHES: Final[int] = (
+    require_int(_SETTINGS, "EXTRA_SEARCHES", "find_fact.SETTINGS", 0, 5)
 )
 _ESTIMATES = require_section(
     _DEFAULTS, "ESTIMATES", "find_fact"

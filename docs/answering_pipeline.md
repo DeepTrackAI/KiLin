@@ -130,7 +130,14 @@ to reconstruct missing activity data.
 
 `answering.route_question()` takes the question, project type and compact
 representations of prior turns. First, a configured shortcut pattern can
-match without an additional LLM call. Otherwise a router model produces a
+match without an additional LLM call. Next, a question asked again takes
+the saved route (intent, standalone flag, related turns) of the newest
+earlier turn with the same distinctive words, also without a router call;
+`RouteDecision.repeated_turn` names that turn. Case, word order,
+punctuation and common words do not matter, but a different name or number
+does, and neither question may point back ("and its methods?"). Disliked
+turns are never matched. Only the route is reused; the answer is written
+again. Otherwise a router model produces a
 structured decision (`RouteDecision`) with intent, standalone/follow-up
 judgment and related prior-turn identifiers. Parsed IDs are checked against
 available history and additional reference or distinctive-term heuristics;
@@ -169,7 +176,13 @@ latency; see [Package defaults](package_defaults.md).
 
 Saved turns include original question, answer, evidence, timestamp and
 parameters. `turn_representation()` constructs a compact summary used when
-routing later questions. `refers_back()` identifies follow-up phrasing;
+routing later questions: the question, cited sources and a one-sentence
+answer summary. When the router is used, `summarize_answer()` asks the
+router model for that sentence once, before the turn is saved, and the
+representation records the model under `summary_model`. The answer's
+first sentence is kept for one-sentence answers, small talk, incomplete
+answers, unrouted turns, and when the summary call fails. Saved summaries
+are reused, never regenerated. `refers_back()` identifies follow-up phrasing;
 `search_text()` incorporates earlier user wording according to the verified
 decision. `select_history()` applies the intent's policy:
 
@@ -257,6 +270,23 @@ The retrieved evidence supplies exact text and source coordinates, with
 citation numbers referenced by the answer. A named-document operation may
 use extra document-scoped ranking or a full-document token budget; its
 semantics cannot be emulated reliably by global top-k alone.
+
+In `search` mode, when the router is used, the answering model (the one
+the user chose, with thinking off and greedy decoding) is then asked one
+yes/no question: do the passages found state what the question needs? It
+is told they are a search selection, not the whole documents.
+On a clear "no", the search is repeated for one more page of
+`retrieval_count` results, up to `RAG.EXTRA_SEARCHES` times (see
+[Package defaults](package_defaults.md)), and the turn records
+`extra_searches`. The wider search ranks the same search text, so it reads
+further down the ranking; the model never writes a query. An unclear reply,
+a failed check, or a wider search that finds nothing new keeps the
+passages already found. Source-first evidence limits still apply
+afterwards. The answer prompt also says the evidence is a search
+selection, so a missing detail is reported as not stated in the evidence
+rather than absent from the documents. Tools run their own check through
+`ToolContext.ask_check` where it fits, such as the quick
+answer of `find_fact` (`kilin/tools/_shared/enough_evidence.py`).
 
 The evidence budget is not a guaranteed universal hard cap for every
 prompt. Retrieved chunks, related evidence, full-document selection, chat
