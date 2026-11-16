@@ -1046,8 +1046,28 @@ class TestRepeatedQuestions(unittest.TestCase):
             )
         choose.assert_not_called()
 
+    def test_back_to_back_repeat_counts_even_when_it_points_back(
+        self,
+    ) -> None:
+        """Right after the same question, "they" means the same thing."""
+
+        self.turns[2].question = "Which dataset did they use?"
+        decision, prompt = self._route("which dataset did they use")
+        self.assertEqual(decision.repeated_turn, 3)
+        self.assertIn("asked again right after that answer", prompt)
+
+    def test_singular_and_plural_are_the_same_question(self) -> None:
+        """"scanners" and "scanner" are the same key word."""
+
+        decision, _ = self._route("List every MRI scanners")
+        self.assertEqual(decision.repeated_turn, 2)
+        self.assertEqual(answering._singular("studies"), "study")
+        for word in ("analysis", "process", "corpus", "gas"):
+            with self.subTest(word=word):
+                self.assertEqual(answering._singular(word), word)
+
     def test_new_questions_are_not_repeats(self) -> None:
-        """A changed name, an added word, or pointing back is new."""
+        """A changed name, an added word, or pointing back later is new."""
 
         self.turns[1].question = "List every MRI scanner it uses"
         for question in (

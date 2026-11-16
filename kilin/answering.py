@@ -1131,9 +1131,11 @@ def _repeated_turn(
     Two questions are the same when they have the same distinctive words
     (``_content_terms``), so case, word order, punctuation, and common
     words do not matter, while a different name or number does. A question
-    that points back ("and its methods?") depends on the turn before it,
-    so it is never treated as repeated, and neither is an earlier question
-    that pointed back.
+    that points back ("and its methods?") depends on the turn before it:
+    asked right after the same question, "its" means the same thing both
+    times, so it repeats the last turn; asked again later, it may mean
+    something else, so it is not treated as repeated, and neither is an
+    earlier question that pointed back.
 
     Parameters
     ----------
@@ -1152,17 +1154,18 @@ def _repeated_turn(
     """
 
     terms = _content_terms(question)
-    if not terms or refers_back(question):
+    if not terms:
         return None
 
+    pointing = refers_back(question)
     for number in range(len(turns), 0, -1):
         earlier = str(getattr(turns[number - 1], "question", ""))
-        if (
-            number not in excluded_turn_ids
-            and _content_terms(earlier) == terms
-            and not refers_back(earlier)
-        ):
+        if number in excluded_turn_ids or _content_terms(earlier) != terms:
+            continue
+        # Only the last turn shares the context a pointing word refers to.
+        if number == len(turns) or not (pointing or refers_back(earlier)):
             return number
+        return None
     return None
 
 
@@ -1466,7 +1469,8 @@ def _content_terms(text: str) -> set[str]:
     """Return the distinctive terms of a text.
 
     Lowercase words of three or more characters that are not common words,
-    plus capitalized acronyms and short names, such as ``MRI``.
+    in singular form ("datasets" and "dataset" match), plus capitalized
+    acronyms and short names, such as ``MRI``.
 
     Parameters
     ----------
@@ -1481,13 +1485,39 @@ def _content_terms(text: str) -> set[str]:
     """
 
     words = {
-        word
+        _singular(word)
         for word in re.findall(r"[a-z0-9][a-z0-9_-]+", text.lower())
         if len(word) >= 3 and word not in _COMMON_WORDS
     }
     # Acronyms and short names ("R", "ML", "MRI") count, case-sensitively.
     names = set(re.findall(r"\b[A-Z][A-Z0-9]*\b", text)) - {"I"}
     return words | names
+
+
+def _singular(word: str) -> str:
+    """Return the singular form of a regular English plural.
+
+    Parameters
+    ----------
+    word: str
+        Lowercase word.
+
+    Returns
+    -------
+    str
+        "studies" becomes "study" and "datasets" "dataset"; words ending in
+        "ss", "us" or "is" ("process", "corpus", "analysis") and short words
+        are unchanged. Irregular plurals ("mice") are not handled.
+
+    """
+
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith(
+        ("ss", "us", "is")
+    ):
+        return word[:-1]
+    return word
 
 
 def _representation_text(representation: dict[str, object]) -> str:

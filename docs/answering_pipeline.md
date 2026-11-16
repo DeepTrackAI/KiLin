@@ -139,8 +139,10 @@ Invalid or unusable router output falls back to the project's default
 intent rather than interpreting an arbitrary tool name.
 
 A question with the same distinctive words as an earlier question (case,
-word order, punctuation and common words aside; neither question pointing
-back) is still routed by the model. The prompt adds that it repeats that
+word order, punctuation and common words aside) is still routed by the
+model. A question that points back ("which dataset did they use?") counts
+as a repeat only of the turn just before, where "they" means the same thing;
+asked again later, it may mean something else and is routed as new. The prompt adds that it repeats that
 turn and how the turn was answered, and, when it is the turn just before,
 that the last answer likely missed, so another intent may serve better.
 `RouteDecision.repeated_turn` records the turn for tracing. Disliked turns
