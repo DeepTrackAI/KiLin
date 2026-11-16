@@ -56,6 +56,11 @@ class TestInstallerScript(unittest.TestCase):
         self.assertIn("RedirectionGuard=no", self.script)
         self.assertIn("PrivilegesRequired=lowest", self.script)
 
+    def test_progress_page_shows_uv_output_and_keeps_the_log(self) -> None:
+        self.assertIn("CreateOutputMarqueeProgressPage(", self.script)
+        self.assertIn("ExecAndLogOutput(", self.script)
+        self.assertIn("SaveStringToFile(InstallLog", self.script)
+
     def test_failure_stops_setup_before_files_are_copied(self) -> None:
         start = self.script.index("function PrepareToInstall")
         body = self.script[start:self.script.index("end;\n\n", start)]

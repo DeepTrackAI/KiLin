@@ -121,8 +121,9 @@ The installer holds only uv, an icon and the optional wheel:
 - Uninstalling removes the program and the runtime, and keeps projects
   and preferences.
 
-While uv installs, the installer window does not redraw and Windows may
-call it "not responding"; the first install takes several minutes.
+While uv installs, a progress page shows the step (getting Python, then
+installing KíLín and its packages) and uv's latest output line, such as
+the PyTorch download; the first install takes several minutes.
 
 **The installer is not code-signed.** Windows SmartScreen shows "Windows
 protected your PC" for it; testers who trust the build choose **More

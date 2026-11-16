@@ -68,6 +68,17 @@ Filename: "{code:RuntimeDir}\Scripts\kilin-gui.exe"; Description: "Open KíLín"
 Type: filesandordirs; Name: "{localappdata}\kilin\runtime"
 
 [Code]
+var
+  { Shows the install step and uv's latest output line while uv runs. }
+  ProgressPage: TOutputMarqueeProgressPage;
+  InstallLog, StepText: String;
+
+procedure InitializeWizard();
+begin
+  ProgressPage := CreateOutputMarqueeProgressPage('Installing Python and KíLín',
+    'This takes several minutes and needs an internet connection.');
+end;
+
 function RuntimeRoot(): String;
 begin
   Result := ExpandConstant('{localappdata}\kilin\runtime');
@@ -89,24 +100,35 @@ begin
 #endif
 end;
 
-{ Run uv hidden, appending its output to the log; True when it succeeds. }
-function RunUv(const Uv, Arguments, Log: String): Boolean;
+{ Each line uv prints: keep it in the log and show it under the step. }
+procedure ShowUvLine(const S: String; const Error, FirstLine: Boolean);
+begin
+  SaveStringToFile(InstallLog, S + #13#10, True);
+  ProgressPage.SetText(StepText, S);
+  ProgressPage.Animate();
+end;
+
+{ Run uv hidden for one step; True when it succeeds. }
+function RunUv(const Uv, Arguments, Step: String): Boolean;
 var
   Code: Integer;
   Command: String;
 begin
+  StepText := Step;
+  ProgressPage.SetText(Step, '');
   Command := 'set "UV_PYTHON_INSTALL_DIR=' + RuntimeRoot() + '\python"' +
     ' && set "UV_CACHE_DIR=' + RuntimeRoot() + '\uv-cache"' +
-    ' && "' + Uv + '" ' + Arguments + ' >> "' + Log + '" 2>&1';
-  Result := Exec(ExpandConstant('{cmd}'), '/C "' + Command + '"', '',
-    SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+    ' && "' + Uv + '" ' + Arguments;
+  Result := ExecAndLogOutput(ExpandConstant('{cmd}'), '/C "' + Command + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, Code, @ShowUvLine) and (Code = 0);
 end;
 
 { Install Python and KíLín before any file is copied. A failure stops Setup
   with a message and leaves an earlier installation untouched. }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
-  Uv, Runtime, Log, Source: String;
+  Uv, Runtime, Source: String;
+  Installed: Boolean;
 begin
   Result := '';
   ExtractTemporaryFile('uv.exe');
@@ -118,24 +140,29 @@ begin
   Source := Spec('');
 #endif
   Runtime := RuntimeDir('');
-  Log := RuntimeRoot() + '\install.log';
+  InstallLog := RuntimeRoot() + '\install.log';
   ForceDirectories(RuntimeRoot());
   DelTree(Runtime, True, True, True);
-  DeleteFile(Log);
-  WizardForm.PreparingLabel.Caption :=
-    'Installing Python and KíLín. This takes a few minutes and needs ' +
-    'an internet connection.';
-  WizardForm.Refresh();
-  { --torch-backend auto picks the CUDA build of PyTorch for an NVIDIA GPU
-    and the CPU build otherwise; PyPI alone has only the CPU build. }
-  if not (RunUv(Uv, 'venv --python 3.12 "' + Runtime + '"', Log) and
+  DeleteFile(InstallLog);
+  ProgressPage.Show();
+  try
+    { --torch-backend auto picks the CUDA build of PyTorch for an NVIDIA
+      GPU and the CPU build otherwise; PyPI alone has only the CPU build. }
+    Installed :=
+      RunUv(Uv, 'venv --python 3.12 "' + Runtime + '"',
+        'Step 1 of 2: Getting Python 3.12') and
       RunUv(Uv, 'pip install --torch-backend auto --python "' + Runtime +
-        '\Scripts\python.exe" "' + Source + '"', Log) and
-      FileExists(Runtime + '\Scripts\kilin-gui.exe')) then
+          '\Scripts\python.exe" "' + Source + '"',
+        'Step 2 of 2: Installing KíLín and its packages') and
+      FileExists(Runtime + '\Scripts\kilin-gui.exe');
+  finally
+    ProgressPage.Hide();
+  end;
+  if not Installed then
   begin
     DelTree(Runtime, True, True, True);
     Result := 'KíLín could not be installed. Check the internet ' +
-      'connection and run the installer again. Details: ' + Log;
+      'connection and run the installer again. Details: ' + InstallLog;
   end;
   DelTree(RuntimeRoot() + '\uv-cache', True, True, True);
 end;
