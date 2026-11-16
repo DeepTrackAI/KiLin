@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, Mock, patch, sentinel
 from kilin import rag
 from kilin.answering import RouteDecision
 from kilin.project_type import (
+    HISTORY_POLICY_NONE,
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_NONE,
     RETRIEVAL_MODE_REUSE,
@@ -101,6 +102,200 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
             session.turns[-1].parameters["model_summary"],
             "Model: chat-model (thinking off, T=0.9, 8 192 max tokens)",
         )
+
+    def test_routed_turn_saves_the_router_summary(self) -> None:
+        """Save the router model's summary only when routing is on."""
+        session = _session()
+        with _answer_patches(session, _intent()), patch.object(
+            rag, "summarize_answer", return_value="Model summary."
+        ) as summarize:
+            session.ask("Question", use_router=True)
+            session.ask("Question two", use_router=False)
+        summarize.assert_called_once_with(
+            session.chat_session, "Question", "model answer"
+        )
+        routed, unrouted = (
+            turn.parameters["representation"] for turn in session.turns
+        )
+        self.assertEqual(routed["summary"], "Model summary.")
+        self.assertEqual(routed["summary_model"], "chat-model")
+        self.assertEqual(unrouted["summary"], "model answer")
+        self.assertNotIn("summary_model", unrouted)
+
+    def test_choice_dialog_reaches_routing_and_the_page(self) -> None:
+        """Show the routing question on the page before waiting for it."""
+        session = _session()
+        choose = Mock(return_value=0)
+        phases = []
+        with _answer_patches(session, _intent()) as mocks:
+            session.ask(
+                "Question", use_router=True, choice_callback=choose,
+                phase_callback=lambda phase, details: phases.append(
+                    (phase, details)
+                ),
+            )
+            ask_user = mocks.route.call_args.kwargs["choose"]
+            self.assertEqual(ask_user("How?", ("Same", "Other")), 0)
+        choose.assert_called_once_with("How?", ("Same", "Other"))
+        self.assertEqual(phases[-1][0], "processing")
+        self.assertEqual(
+            phases[-1][1]["choice"],
+            {
+                "question": "How?", "options": ["Same", "Other"],
+                "allow_cancel": False,
+            },
+        )
+
+    def test_another_way_tells_the_answer_the_last_one_missed(self) -> None:
+        """Add the hint only after the user chose "Try another way"."""
+        for another_way in (True, False):
+            with self.subTest(another_way=another_way):
+                session = _session()
+                decision = RouteDecision(
+                    "test_intent", True, repeated_turn=3,
+                    another_way=another_way,
+                )
+                with _answer_patches(session, _intent(), decision):
+                    session.ask(
+                        "Question", use_router=False,
+                        answer_guidance="Be brief.",
+                    )
+                prompt = session.chat_session.reply.call_args.args[0]
+                guidance = session.turns[-1].parameters["answer_guidance"]
+                self.assertIn("Be brief.", prompt)
+                self.assertEqual(
+                    "right after turn 3 and chose another way" in prompt,
+                    another_way,
+                )
+                self.assertEqual("chose another way" in guidance, another_way)
+
+    def test_small_talk_keeps_the_first_sentence(self) -> None:
+        """Skip the summary for turns the router never lists."""
+        session = _session()
+        small_talk = _intent(RETRIEVAL_MODE_NONE, policy=HISTORY_POLICY_NONE)
+        with _answer_patches(session, small_talk), patch.object(
+            rag, "summarize_answer"
+        ) as summarize:
+            session.ask("Hello there, how are you", use_router=True)
+        summarize.assert_not_called()
+
+    def test_search_reads_further_when_passages_do_not_answer(self) -> None:
+        """Ask for one more page of results after the router says no."""
+        session = _session()
+        first = (_evidence(),)
+        wider = (_evidence(), _evidence(start=20))
+        with _answer_patches(session, _intent()) as mocks, patch.object(
+            rag, "summarize_answer", return_value=None
+        ), patch.object(
+            session, "_ask_check", return_value="No."
+        ) as ask:
+            mocks.retrieve.side_effect = [first, wider]
+            session.ask("Which software?", retrieval_count=2,
+                        use_router=True)
+        self.assertEqual(
+            [call.args[1] for call in mocks.retrieve.call_args_list], [2, 4]
+        )
+        self.assertEqual(ask.call_count, rag._EXTRA_SEARCHES)
+        turn = session.turns[-1]
+        self.assertEqual(len(turn.evidence), 2)
+        self.assertEqual(turn.parameters["extra_searches"], 1)
+
+    def test_source_first_does_not_retry_a_fixed_evidence_budget(
+        self,
+    ) -> None:
+        """No redundant check or embedding when limits fix the result."""
+
+        session = _session()
+        intent = replace(_intent(), retrieval_strategy="source_first")
+        with _answer_patches(session, intent) as mocks, patch.object(
+            session, "_ask_check", return_value="no"
+        ) as ask, patch.object(rag, "summarize_answer", return_value=None):
+            session.ask("Which software?", use_router=True)
+        mocks.retrieve.assert_called_once()
+        ask.assert_not_called()
+        self.assertNotIn(
+            "extra_searches", session.turns[-1].parameters
+        )
+
+    def test_oversize_check_and_zero_searches_skip_model_calls(self) -> None:
+        """Avoid model calls that cannot usefully expand evidence."""
+
+        for zero, oversized in ((True, False), (False, True)):
+            with self.subTest(zero=zero, oversized=oversized):
+                session = _session()
+                evidence = _evidence(
+                    text="X" * 20000 if oversized else "X"
+                )
+                with _answer_patches(session, _intent()) as mocks, \
+                        patch.object(session, "_ask_check") as ask, \
+                        patch.object(rag, "summarize_answer",
+                                     return_value=None), \
+                        patch.object(rag, "_EXTRA_SEARCHES",
+                                     0 if zero else 1):
+                    mocks.retrieve.return_value = (evidence,)
+                    session.ask("Which software?", use_router=True)
+                mocks.retrieve.assert_called_once()
+                ask.assert_not_called()
+
+    def test_wider_search_respects_the_global_result_cap(self) -> None:
+        """Expansion never requests more than the configured count cap."""
+
+        session = _session()
+        with _answer_patches(session, _intent()) as mocks, patch.object(
+            session, "_ask_check", return_value="no"
+        ), patch.object(rag, "summarize_answer", return_value=None), \
+                patch.object(rag, "_MAX_EXPANDED_RESULTS", 3):
+            mocks.retrieve.side_effect = [
+                (_evidence(),),
+                (_evidence(), _evidence(start=10)),
+            ]
+            session.ask("Which software?", retrieval_count=2,
+                        use_router=True)
+        self.assertEqual(
+            [call.args[1] for call in mocks.retrieve.call_args_list],
+            [2, 3],
+        )
+
+    def test_check_asks_the_answering_model_without_thinking(self) -> None:
+        """Judge the passages with the user's model, thinking off."""
+        session = _session()
+        session.chat_session.thinking = True
+        with patch.object(
+            rag, "side_reply", return_value="yes"
+        ) as side:
+            reply = session._ask_check("system", "prompt", 8)
+        self.assertEqual(reply, "yes")
+        side.assert_called_once_with(
+            session.chat_session, "system", "prompt", max_new_tokens=8
+        )
+
+    def test_search_keeps_passages_that_answer_or_without_router(
+        self,
+    ) -> None:
+        """Search once when the router says yes, or routing is off."""
+        for use_router, reply in ((True, "Yes"), (False, "No")):
+            with self.subTest(use_router=use_router):
+                session = _session()
+                with _answer_patches(session, _intent()) as mocks, \
+                        patch.object(rag, "summarize_answer",
+                                     return_value=None), \
+                        patch.object(session, "_ask_check",
+                                     return_value=reply):
+                    session.ask("Which software?", use_router=use_router)
+                mocks.retrieve.assert_called_once()
+                self.assertNotIn(
+                    "extra_searches", session.turns[-1].parameters
+                )
+
+    def test_search_again_stops_when_nothing_more_is_found(self) -> None:
+        """Keep the first passages when a wider search adds none."""
+        session = _session()
+        with _answer_patches(session, _intent()) as mocks, patch.object(
+            rag, "summarize_answer", return_value=None
+        ), patch.object(session, "_ask_check", return_value="no"):
+            session.ask("Which software?", use_router=True)
+        self.assertEqual(mocks.retrieve.call_count, 2)
+        self.assertEqual(session.turns[-1].evidence, (_evidence(),))
 
     def test_search_adds_related_evidence_and_history(self) -> None:
         """Combine related evidence with the selected conversation history."""

@@ -126,6 +126,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/_shared/_rating.py`](../kilin/tools/_shared/_rating.py) | Rate citation suitability from checked evidence, not search rank. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/) |
 | [`kilin/tools/_shared/choose_document.py`](../kilin/tools/_shared/choose_document.py) | Choose the source document a request is about, or ask the user. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/document_notes.py`](../kilin/tools/_shared/document_notes.py) | Shared reading, note-taking and citation checks for document tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/_shared/enough_evidence.py`](../kilin/tools/_shared/enough_evidence.py) | Ask whether the passages found for a question are enough to answer it. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/earlier_turns.py`](../kilin/tools/_shared/earlier_turns.py) | Select an earlier turn with listed supporting evidence. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/long_lists.py`](../kilin/tools/_shared/long_lists.py) | Offer to save a long list as a Markdown file instead of the chat. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/mentions.py`](../kilin/tools/_shared/mentions.py) | Reassemble and scan exact source mentions for multiple tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
@@ -201,11 +202,11 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Project workspaces | 6 |
 | Retrieval pipeline | 29 |
 | Source pipeline | 18 |
-| Tool extension contracts | 23 |
+| Tool extension contracts | 24 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 163.**
+**Total production Python modules: 164.**
 
 ## Non-Python resources and UI assets
 

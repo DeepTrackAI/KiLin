@@ -13,10 +13,12 @@ otherwise every indexed file. Reading everything takes time, so by default
 the user always chooses first: read everything, a quick answer, or cancel.
 When the question names exact terms, the quick answer takes notes on only
 the passages that mention them; otherwise, or when no passage mentions
-them, it answers from the best-ranked passages directly. Passages are
-numbered once across all files, so every citation is unambiguous, and
-citations to passages that do not exist are
-counted in the summary.
+them, it answers from the best-ranked passages directly. Before that
+answer, the answering model checks whether those passages answer the
+question; if not, the next-ranked passages are added, up to
+``extra_searches`` times. Passages are numbered once across all files,
+so every citation is unambiguous, and citations to passages that do not
+exist are counted in the summary.
 
 Parts beyond ``max_model_calls`` are not read, and the answer says so. A
 failed notes call gives that part no notes; it is not retried. Only the
@@ -30,6 +32,11 @@ Key Features
 
     The user chooses between reading every passage in scope and a quick
     answer from exact-term hits or the best-ranked passages.
+
+- **Search again**
+
+    A quick answer from ranked passages reads further down the ranking
+    when the answering model says the passages found do not answer.
 
 - **Notes per file**
 
@@ -92,6 +99,7 @@ from kilin.tools._shared.model_results import partial_result
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._shared.citations import inspect_citations
+from kilin.tools._shared.enough_evidence import rank_until_answered
 from kilin.tools._shared.document_notes import (
     plan_parts,
     quote_citations,
@@ -149,6 +157,13 @@ class FactSettings:
         chooses between a thorough and a quick answer.
     large_batches: int
         With ``when_large``, plans with more parts than this ask first.
+    extra_searches: int
+        For a quick answer from ranked passages, most times the next-ranked
+        passages are added when the answering model says the passages found
+        do not answer (0-5; 0 turns the check off).
+    max_check_characters: int
+        Maximum characters in the evidence-check prompt (128-100000).
+        Oversized checks are skipped without dropping evidence.
 
     """
 
@@ -156,6 +171,8 @@ class FactSettings:
     max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
+    extra_searches: int = _config.DEFAULT_EXTRA_SEARCHES
+    max_check_characters: int = _config.DEFAULT_MAX_CHECK_CHARACTERS
 
 
 def parse_settings(data: dict, where: str) -> FactSettings:
@@ -185,6 +202,8 @@ def parse_settings(data: dict, where: str) -> FactSettings:
         "max_model_calls",
         "confirmation",
         "large_batches",
+        "extra_searches",
+        "max_check_characters",
     )
     reject_unknown(where, data, names)
 
@@ -205,6 +224,13 @@ def parse_settings(data: dict, where: str) -> FactSettings:
         ),
         large_batches=check_int(
             where, data, "large_batches", defaults.large_batches, 0, 100
+        ),
+        extra_searches=check_int(
+            where, data, "extra_searches", defaults.extra_searches, 0, 5
+        ),
+        max_check_characters=check_int(
+            where, data, "max_check_characters",
+            defaults.max_check_characters, 128, 100000,
         ),
     )
 
@@ -316,11 +342,12 @@ def run(
     budget = all_parts[: settings.max_model_calls]
 
     order = {chunk.identifier: index for index, chunk in enumerate(passages)}
-    ranked = [
+    ranking = list(dict.fromkeys(
         order[result.chunk.identifier]
         for result in context.rank(request.text)
         if result.chunk.identifier in order
-    ][: context.retrieval_count]
+    ))
+    ranked = ranking[: context.retrieval_count]
 
     # Quick: when the question names exact terms, only the passages that
     # mention them (read in parts, per file); otherwise the ranked ones.
@@ -356,11 +383,26 @@ def run(
         )
         if missing:
             note = f"{term_label(missing, ())[1]}. {note}"
+        # Estimate the worst-case selected passages, including the one
+        # optional check and further ranked pages, before confirmation.
+        quick_limit = min(
+            len(ranking),
+            context.retrieval_count * (settings.extra_searches + 1),
+        )
+        potential = ranking[:quick_limit]
+        if settings.extra_searches and len(ranking) > len(ranked):
+            note += f"; may inspect up to {len(potential)} passages"
         quick_seconds = (
             _QUICK_ANSWER_SECONDS
-            + sum(estimate_tokens(texts[index]) for index in ranked)
+            + sum(estimate_tokens(texts[index]) for index in potential)
             / _PROMPT_TOKENS_PER_SECOND
         )
+        if settings.extra_searches and len(ranking) > len(ranked):
+            quick_seconds += (
+                _CALL_SECONDS
+                + settings.max_check_characters
+                / 4 / _PROMPT_TOKENS_PER_SECOND
+            )
 
     plan = ToolPlan(
         tool="find_fact",
@@ -378,7 +420,7 @@ def run(
         batches=len(all_parts),
         batches_to_run=len(budget),
         estimated_seconds=round(_estimate(budget, texts), 1),
-        quick_items=len(hits) if terms else len(ranked),
+        quick_items=len(hits) if terms else len(potential),
         quick_seconds=round(quick_seconds, 1),
         details=(f"Model: {context.model_id}",),
         quick_label=label,
@@ -414,6 +456,18 @@ def run(
         read = len(hits)
         given = sorted(hits)
     elif choice == PLAN_CHOICE_QUICK:
+        # The fact may rank just below the first page: when the answering
+        # model says the passages found do not answer, read further down.
+        ranked, searches = rank_until_answered(
+            request.question,
+            ranking,
+            texts,
+            page=context.retrieval_count,
+            rounds=settings.extra_searches,
+            ask=context.ask_check or context.ask_router,
+            max_characters=settings.max_check_characters,
+        )
+        summary["extra_searches"] = searches
         numbering = {
             number: index
             for number, index in enumerate(sorted(ranked), start=1)
