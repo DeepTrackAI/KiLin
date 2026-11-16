@@ -114,6 +114,8 @@ The installer holds only uv, an icon and the optional wheel:
   failure stops Setup with a message and the log
   `%LOCALAPPDATA%\kilin\runtime\install.log`; an earlier version is
   untouched. After an update, other versions' runtimes are removed.
+- There is no licence page. As on macOS, the welcome dialog shows the
+  terms of use on first launch and records their acceptance.
 - The Start-menu shortcut opens `kilin-gui.exe` without a console window.
 - `KILIN_APP_UV` and `KILIN_APP_SPEC` are set in the user environment so
   the application's backend-repair commands use the same uv and build, as
@@ -121,9 +123,14 @@ The installer holds only uv, an icon and the optional wheel:
 - Uninstalling removes the program and the runtime, and keeps projects
   and preferences.
 
-While uv installs, a progress page shows the step (getting Python, then
-installing KíLín and its packages) and uv's latest output line, such as
-the PyTorch download; the first install takes several minutes.
+If KíLín is already installed, Setup first offers to reinstall it (or
+install the new version) or to remove it. While uv installs, a progress
+page shows the percentage, the size downloaded and an estimate of the
+time left, above a list of the large downloads, such as PyTorch, each
+marked downloading or downloaded. The
+first install takes several minutes. On the last page, **Show the install
+log** opens `install.log`, where lines starting with `+` list the
+installed packages and their versions.
 
 **The installer is not code-signed.** Windows SmartScreen shows "Windows
 protected your PC" for it; testers who trust the build choose **More

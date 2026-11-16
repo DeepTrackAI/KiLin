@@ -56,10 +56,36 @@ class TestInstallerScript(unittest.TestCase):
         self.assertIn("RedirectionGuard=no", self.script)
         self.assertIn("PrivilegesRequired=lowest", self.script)
 
-    def test_progress_page_shows_uv_output_and_keeps_the_log(self) -> None:
-        self.assertIn("CreateOutputMarqueeProgressPage(", self.script)
-        self.assertIn("ExecAndLogOutput(", self.script)
-        self.assertIn("SaveStringToFile(InstallLog", self.script)
+    def test_progress_page_follows_downloads_and_keeps_the_log(self) -> None:
+        for text in (
+            "CreateOutputProgressPage(",
+            "ExecAndLogOutput(",
+            "SaveStringToFile(InstallLog",
+            "Pos('Downloading ', Line) = 1",
+            "Pos('Downloaded ', Line) = 1",
+            "' left'",
+            "SetTimer(0, 0, 1000",
+            "TNewMemo.Create(ProgressPage)",
+            "'downloaded'",
+            "'downloading'",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, self.script)
+
+    def test_finish_page_offers_the_install_log(self) -> None:
+        section = self.script.split("[Run]")[1].split("[UninstallDelete]")[0]
+        log = r"{localappdata}\kilin\runtime\install.log"
+        self.assertIn(f'Filename: "{log}"', section)
+        self.assertIn("postinstall shellexec", section)
+
+    def test_earlier_installation_can_be_reinstalled_or_removed(self) -> None:
+        start = self.script.index("function InitializeSetup")
+        body = self.script[start:self.script.index("end;\n\n", start)]
+        app_id = self.script.split("AppId={{")[1].split("}")[0]
+        self.assertIn(f"Uninstall\\{{{app_id}}}_is1", self.script)
+        for text in ("WizardSilent()", "'UninstallString'", "Remove KíLín"):
+            with self.subTest(text=text):
+                self.assertIn(text, body)
 
     def test_failure_stops_setup_before_files_are_copied(self) -> None:
         start = self.script.index("function PrepareToInstall")
@@ -85,9 +111,13 @@ class TestInstallerScript(unittest.TestCase):
             [r'Type: filesandordirs; Name: "{localappdata}\kilin\runtime"'],
         )
 
-    def test_icon_and_license_exist(self) -> None:
+    def test_icon_exists(self) -> None:
         self.assertTrue((SCRIPT.parent / "kilin.ico").is_file())
-        self.assertTrue((ROOT / "LICENSE").is_file())
+
+    def test_terms_are_left_to_the_application(self) -> None:
+        # As on macOS, the welcome dialog asks for the terms of use once.
+        self.assertNotIn("LicenseFile=", self.script)
+        self.assertTrue((ROOT / "kilin/gui/terms.txt").is_file())
 
 
 @unittest.skipUnless(POWERSHELL, "PowerShell is not available.")
