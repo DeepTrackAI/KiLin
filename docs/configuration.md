@@ -120,14 +120,20 @@ Packaged project types define the source-first search caps per intent:
 `evidence_tokens`. The caps are upper bounds, not quotas: a question
 with only a few relevant sources may return fewer passages. Writing
 uses larger evidence budgets for drafting, research, and verification;
-the two brainstorming types prioritize different behavior. Creative
-Brainstorming defaults to source-free ideation and searches when its
-selected intent calls for evidence. Grounded Brainstorming searches
+the two brainstorming types prioritize different behavior. Brainstorming (Creative)
+defaults to source-free ideation and searches when its
+selected intent calls for evidence. Brainstorming (Grounded) searches
 the indexed project sources for every substantive ideation intent.
 Code Repository uses hybrid search and the saved project-profile
 `retrieval_count` instead of these source-first limits. Larger evidence
 budgets may improve coverage but consume more model context and increase
 latency; projects can override per-intent limits in Settings → Intents.
+
+The revised Writing Assistant definition now includes Word documents,
+LaTeX manuscripts and bibliographies, Python/MATLAB code, and notebooks
+among its default source suffixes, alongside PDF, Markdown, and text.
+These are creation defaults; existing projects retain their saved
+`profile.ini` extension list until explicitly reconfigured.
 
 ### Conversation memory policies
 
@@ -148,7 +154,7 @@ pipeline:
 The packaged defaults use `questions: all`, `answers: selected`,
 `max_hits: 4`, and `max_tokens: 2000` for every project type.
 Conversation memory is enabled by default for new `writing`,
-`brainstorming` (Creative Brainstorming), `grounded_brainstorming`,
+`creative_brainstorming` (Brainstorming (Creative)), `grounded_brainstorming`,
 and `reviewing` projects and disabled for new `code`
 and `literature` projects. Every type defaults to excluding disliked
 answers from chat context, independently of memory enablement.
