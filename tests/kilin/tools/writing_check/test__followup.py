@@ -33,6 +33,12 @@ ANSWER = """**Writing check of ms.tex** (the whole document)
 - line 5 · style: “DeepTrack2 complements platforms like BiaPy, CellProfiler, \
 and” (47 words; consider splitting it) [2]
 """
+EXTRACTED_ANSWER = (
+    "**Writing check of paper.pdf** (the whole document)\n\n"
+    "- extracted-text line 5 · style: “DeepTrack2 complements "
+    "platforms like BiaPy, CellProfiler, and” "
+    "(47 words; consider splitting it) [1]\n"
+)
 LONG = (
     "DeepTrack2 complements platforms like BiaPy, CellProfiler, and "
     "ilastik as their upstream counterpart, supplying the physically "
@@ -54,6 +60,8 @@ class TestRequests(unittest.TestCase):
             ("suggest a better phrasing for line 75", 75),
             ("split the sentence at line 12", 12),
             ("line 75 · style: “DeepTrack2 …” (47 words)\n\nrephrase it", 75),
+            ("rephrase extracted-text line 75 of paper.pdf", 75),
+            ("extracted-text line 75 · style: text\n\nsplit it", 75),
             ("what does line 3 say?", None),
             ("rephrase the previous answer", None),
         ):
@@ -70,6 +78,10 @@ class TestRequests(unittest.TestCase):
               "CellProfiler, and", "", True)],
         )
         self.assertEqual(shown_findings("An ordinary answer."), [])
+        extracted = shown_findings(EXTRACTED_ANSWER)
+        self.assertEqual(len(extracted), 1)
+        self.assertEqual(extracted[0].line, 5)
+        self.assertTrue(extracted[0].long_sentence)
 
 
 class TestTarget(unittest.TestCase):
@@ -94,6 +106,22 @@ class TestTarget(unittest.TestCase):
         self.assertEqual((index, text, finding),
                          (0, "We tracks particles. It works.", None))
         self.assertIsNone(target_text(self.document, 99, [], "line 99"))
+
+    def test_extracted_text_finding_targets_sentence_not_paragraph(
+        self,
+    ) -> None:
+        """PDF/Word findings retain their sentence when pasted back.
+
+        """
+
+        index, text, finding = target_text(
+            self.document, 5, shown_findings(EXTRACTED_ANSWER),
+            "split extracted-text line 5",
+        )
+        self.assertEqual(index, 1)
+        self.assertTrue(text.startswith("DeepTrack2 complements"))
+        self.assertFalse(text.startswith("It is short"))
+        self.assertTrue(finding.long_sentence)
 
 
 class TestOptions(unittest.TestCase):

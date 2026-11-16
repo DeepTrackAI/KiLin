@@ -13,9 +13,9 @@ only a few words. This module:
    line when no finding is listed there.
 3. Asks the model, in one call, for two or three complete rewrites that
    say the same thing, split when the finding is a long sentence.
-4. Keeps only rewrites that change no meaning (``meaning_change``), add
-   no words the paragraph does not have, and are not cut short with an
-   ellipsis.
+4. Keeps only rewrites that pass conservative wording safeguards
+   (``meaning_change``), introduce few new words, and are not cut short
+   with an ellipsis. Human review is still required.
 
 Key Features
 ------------
@@ -26,8 +26,8 @@ Key Features
 
 - **Checked rewrites**
 
-    The same meaning checks as the paragraph suggestions, and no new
-    claims.
+    The same conservative screens as the paragraph suggestions; these
+    cannot guarantee unchanged scientific meaning.
 
 Module Structure
 ----------------
@@ -81,7 +81,9 @@ _REWRITE_WORDS: Final[str] = (
     r"\b(?:rephras\w*|rewrit\w*|reword\w*|split\w*|shorten\w*|simplif\w*|"
     r"phrasing|alternatives?|better\s+(?:version|wording))\b"
 )
-_LINE: Final[re.Pattern[str]] = re.compile(r"\bline\s+(\d+)\b", re.I)
+_LINE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:extracted-text\s+)?line\s+(\d+)\b", re.I
+)
 _REWRITE: Final[re.Pattern[str]] = re.compile(_REWRITE_WORDS, re.I)
 # Patterns for the project types' cues, matching such a request.
 REWRITE_CUES: Final[tuple[str, ...]] = (
@@ -90,7 +92,8 @@ REWRITE_CUES: Final[tuple[str, ...]] = (
 )
 # One finding line of a writing check's answer (``chat_answer``).
 _SHOWN: Final[re.Pattern[str]] = re.compile(
-    r"^- line (?P<line>\d+) · (?P<level>\w+): “(?P<original>.+?)”"
+    r"^- (?:extracted-text )?line (?P<line>\d+) · "
+    r"(?P<level>\w+): “(?P<original>.+?)”"
     r"(?: → “(?P<suggestion>.*?)”)? \((?P<reason>.*)\)(?: \[\d+\])?\s*$",
     re.MULTILINE,
 )

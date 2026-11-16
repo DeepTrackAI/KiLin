@@ -182,6 +182,8 @@ invent the rest.
    listed at that line (a quoted one first, then a long sentence when the
    question says "split" or "long", else the first), read from the
    document; when no finding is listed there, the paragraph at that line.
+   Both `line N` and `extracted-text line N` from PDF/Word reports are
+   recognized, so a pasted finding still targets the flagged sentence.
 3. One model call asks for two or three complete versions (split into
    two or three sentences for a long sentence), told the document's card
    and glossary, with the paragraph as context.
@@ -212,6 +214,14 @@ case), and users per project.
   requests, including the optional document brief and paragraph checks,
   even without an interactive confirmation callback. Unchecked model
   work is explicitly reported as incomplete.
+- `MAX_PROMPT_CHARACTERS` (default `16000`, range 2000–100000): hard
+  character limit on the combined system and user prompt of each model
+  request, including the optional brief and follow-up rewrites. A request
+  that exceeds this limit is skipped, without truncating the paragraph.
+  Optional neighboring-sentence context longer than 500 characters is
+  explicitly marked as abbreviated, to keep a long neighbor from
+  preventing checks of otherwise short paragraphs.
+  It is not an exact model-token or context-window limit.
 - `QUICK_PARAGRAPHS` (default `10`, range 1–1000): paragraphs checked for
   grammar by the quick version.
 - `CHAT_FINDINGS` (default `20`, range 0–200): findings shown in the chat;
@@ -243,7 +253,13 @@ context, paragraph and instructions) and `REPLY_TOKENS` (`150`).
 
 ## Scientific wording safeguards and attribution
 
-Automated checks reject visible changes to numbers, negations, claim-direction terms, citations, and defined terminology. These checks cannot prove that a proposed edit preserves scientific meaning; the researcher must verify suggestions before using them.
+Automated checks reject visible changes to numbers, negations,
+claim-direction terms, citations, and defined terminology. They also
+reject changes that relocate protected expressions or rearrange common
+content words around a scientific claim, such as switching which
+treatment is effective. This conservative screen may reject a safe
+rephrasing; it cannot prove semantic equivalence. Researchers must
+verify suggestions before using them.
 
 When checking text supplied in the question rather than text found in an indexed document, findings are labelled as question text. No citation to the selected source is emitted and question-text line positions are not presented as document line numbers.
 
@@ -253,6 +269,19 @@ A selected LaTeX file is checked on its own. Commands such as `\input` and `\inc
 
 For PDF and Word sources, line numbers identify lines in extracted text, not positions in the native document. References to passages remain linked to the selected source file.
 
-The confirmation plan is an estimate, not authorization to exceed `MAX_MODEL_CALLS`. The tool counts actual logical model requests, including failures and document-brief calls. When the limit is reached, unreviewed model checks appear as incomplete work; the deterministic checks and completed results remain available.
+The confirmation plan is an estimate, not authorization to exceed
+`MAX_MODEL_CALLS`. The tool counts actual logical model requests,
+including failures and document-brief calls. A prompt larger than
+`MAX_PROMPT_CHARACTERS` is not submitted and consumes no model-call
+budget. If an optional document-brief prompt is too large, the checks
+continue without it. Oversized paragraph prompts appear as incomplete
+items; a follow-up rewrite is skipped with an explicit explanation.
+
+The summary reports actual model requests (`model_calls`), successfully
+completed paragraph checks (`model_checks`), attempted paragraph checks
+(`model_attempted_checks`), and checks skipped for prompt size or call
+budget. GUI completion messages report partial work rather than claiming
+that failed model checks completed. Unreviewed work is not silently
+counted as checked; deterministic findings remain available.
 
 A check with no findings, dropped suggestions or failed model calls does not create an empty report in `outputs/`.

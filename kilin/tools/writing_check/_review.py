@@ -116,6 +116,8 @@ _FIELD_CHARACTERS: Final[int] = 300
 _BRIEF_CHARACTERS: Final[int] = 4000
 # Style suggestions asked for, at most, per paragraph.
 _STYLE_MAX: Final[int] = 5
+# Surrounding sentences are optional context, not text being checked.
+_NEIGHBOUR_MAX_CHARACTERS: Final[int] = 500
 # What each kind of section is for, by a word in its title.
 _ROLES: Final[tuple[tuple[str, str], ...]] = (
     ("abstract", "abstract: the whole work in brief"),
@@ -167,6 +169,21 @@ _CLAIM_TERMS: Final[re.Pattern[str]] = re.compile(
     r"reject(?:s|ed|ing)?|attribut(?:e|es|ed|ing))\b",
     re.IGNORECASE,
 )
+# Unchanged content words anchor sensitive claims to their subjects.
+# Grammar and style may change function words without moving these anchors.
+_ANCHOR_WORD: Final[re.Pattern[str]] = re.compile(r"[A-Za-z]+(?:-[A-Za-z]+)*")
+# Common scientific subject identifiers: A/B, strain A1, GPU, SPT.
+_SUBJECT_ID: Final[re.Pattern[str]] = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Z][0-9]*|[A-Z]{2,}[A-Z0-9]*)"
+    r"(?![A-Za-z0-9])"
+)
+_FUNCTION_WORDS: Final[frozenset[str]] = frozenset({
+    "a", "an", "the", "and", "or", "but", "of", "for", "to", "from",
+    "in", "on", "at", "by", "with", "as", "is", "are", "was", "were",
+    "be", "been", "being", "it", "its", "that", "this", "these", "those",
+    "which", "who", "whom", "we", "they", "their", "our", "has", "have",
+    "had", "do", "does", "did",
+})
 # Words of shared context kept on each side of a trimmed change.
 _TRIM_CONTEXT: Final[int] = 2
 # Characters a model may write differently when it quotes the text; each
@@ -412,7 +429,9 @@ def neighbours(document: Document, index: int) -> tuple[str, str]:
     -------
     tuple[str, str]
         The last sentence of the paragraph before and the first sentence
-        of the paragraph after, ``""`` where there is none.
+        of the paragraph after, ``""`` where there is none. Long context
+        sentences are explicitly abbreviated; the checked paragraph is
+        never shortened.
 
     """
 
@@ -424,6 +443,16 @@ def neighbours(document: Document, index: int) -> tuple[str, str]:
         _SENTENCE_END.split(document.paragraphs[index + 1].text)[0]
         if index + 1 < len(document.paragraphs) else ""
     )
+    if len(before) > _NEIGHBOUR_MAX_CHARACTERS:
+        before = (
+            "[context abbreviated] "
+            + before[-_NEIGHBOUR_MAX_CHARACTERS:]
+        )
+    if len(after) > _NEIGHBOUR_MAX_CHARACTERS:
+        after = (
+            after[:_NEIGHBOUR_MAX_CHARACTERS]
+            + " [context abbreviated]"
+        )
     return before, after
 
 
@@ -644,11 +673,10 @@ def meaning_change(original: str, changed: str, glossary: Glossary) -> str:
     Returns
     -------
     str
-        ``""`` when nothing that carries meaning changes; otherwise the
-        first high-risk change found: numbers, citation placeholders,
-        negations, claim-sensitive terms, hedges or modal verbs, a
-        defined acronym or preferred term
-        removed, or a term form the document does not use.
+        ``""`` when the conservative screen detects no high-risk change,
+        not proof of semantic equivalence. Otherwise the first issue:
+        numbers, citations, moved negations, changed subject identifiers,
+        claim-sensitive terms, hedges, acronyms or preferred terminology.
 
     """
 
@@ -672,6 +700,17 @@ def meaning_change(original: str, changed: str, glossary: Glossary) -> str:
         Counter(word.casefold() for word in _HEDGE.findall(suggestion))
     ):
         return "it changes a hedge or modal verb"
+    old_order = _protected_order(original)
+    if old_order != _protected_order(suggestion):
+        return "it relocates a negation, hedge or claim-sensitive term"
+    if old_order:
+        if Counter(_SUBJECT_ID.findall(original)) != Counter(
+            _SUBJECT_ID.findall(suggestion)
+        ):
+            return "it changes a scientific subject identifier"
+        old_anchors, new_anchors = _shared_anchors(original, suggestion)
+        if old_anchors != new_anchors:
+            return "it moves claim-sensitive language between subjects"
     kept = [*glossary.acronyms, *set(glossary.terms.values())]
     for term in kept:
         pattern = rf"(?<![\w-]){re.escape(term)}(?![\w-])"
@@ -684,6 +723,78 @@ def meaning_change(original: str, changed: str, glossary: Glossary) -> str:
         if re.search(pattern, suggestion, re.IGNORECASE):
             return f"it writes “{form}”, which the document does not use"
     return ""
+
+
+def _protected_order(text: str) -> tuple[str, ...]:
+    """Return the ordered negations, hedges and claim-sensitive terms.
+
+    Parameters
+    ----------
+    text: str
+        Original or proposed wording.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Protected expressions in reading order, ignoring case.
+
+    """
+
+    found = [
+        (match.start(), match.group(0).casefold())
+        for pattern in (_NEGATION, _HEDGE, _CLAIM_TERMS)
+        for match in pattern.finditer(text)
+    ]
+    return tuple(word for _, word in sorted(found))
+
+
+def _shared_anchors(
+    original: str, changed: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return shared content words in their original and proposed order.
+
+    Parameters
+    ----------
+    original: str
+        Wording before the edit.
+    changed: str
+        Wording after the edit.
+
+    Returns
+    -------
+    tuple[tuple[str, ...], tuple[str, ...]]
+        The common content words in both passages, in reading order.
+        Uppercase single-letter identifiers such as treatment A are kept.
+
+    """
+
+    def anchors(text: str) -> list[str]:
+        """Keep content words and uppercase single-letter identifiers.
+
+        Parameters
+        ----------
+        text: str
+            Words in the passage.
+
+        Returns
+        -------
+        list[str]
+            Words that anchor scientific statements.
+
+        """
+
+        return [
+            word.casefold() for word in _ANCHOR_WORD.findall(text)
+            if word.casefold() not in _FUNCTION_WORDS
+            or (len(word) == 1 and word.isupper())
+        ]
+
+    before, after = anchors(original), anchors(changed)
+    shared = set(before) & set(after)
+    return (
+        tuple(word for word in before if word in shared),
+        tuple(word for word in after if word in shared),
+    )
 
 
 def review_paragraph(

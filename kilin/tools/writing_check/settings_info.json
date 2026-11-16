@@ -21,6 +21,11 @@
       "summary": "Hard limit on logical model requests in one check.",
       "description": "At most this many requests are made, even when no confirmation interface exists. Includes the document brief and each grammar/style check. Unchecked paragraphs are reported as incomplete. Range: 1 to 500."
     },
+    "max_prompt_characters": {
+      "title": "Maximum prompt characters",
+      "summary": "Hard size limit for each model request, including the system prompt.",
+      "description": "Requests exceeding this total character length are not sent to the model. The document brief is optional; oversized paragraph checks are reported as incomplete, and oversized rewrites are skipped. Text is never silently truncated. Default: 16000; range: 2000 to 100000. This is a character limit, not a model token limit."
+    },
     "quick_paragraphs": {
       "title": "Quick-check paragraphs",
       "summary": "Sets how many paragraphs the quick option checks.",

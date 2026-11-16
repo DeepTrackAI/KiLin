@@ -114,6 +114,22 @@ class TestPrompts(unittest.TestCase):
             with self.subTest(part=part):
                 self.assertIn(part, user)
 
+    def test_long_neighbour_is_abbreviated_not_the_paragraph(self) -> None:
+        """Bound optional context without shortening the checked text.
+
+        """
+
+        content = ("First sentence. " + "Context " * 400
+                   + "\n\nTarget paragraph.\n")
+        document = read_document(Path("long.txt"), content)
+        system, prompt = paragraph_prompt(
+            LEVEL_GRAMMAR, document, 1, ""
+        )
+        self.assertIn("[context abbreviated]", prompt)
+        self.assertIn('Paragraph to check:\n"""\nTarget paragraph.',
+                      prompt)
+        self.assertLess(len(system) + len(prompt), 3000)
+
     def test_style_prompt_and_first_paragraph(self) -> None:
         _, user = paragraph_prompt(LEVEL_STYLE, self.document, 0, "")
         self.assertIn("Suggest at most 5 changes", user)
@@ -342,6 +358,76 @@ class TestScientificClaimSafety(unittest.TestCase):
         after = "The treatment reduced survival."
         self.assertTrue(
             option_rejection(before, after, before, Glossary())
+        )
+
+    def test_relocated_claims_and_subjects_are_rejected(self) -> None:
+        """Preserve not only protected words, but also their placement.
+
+        """
+
+        from kilin.tools.writing_check._checks import Glossary
+        from kilin.tools.writing_check._review import meaning_change
+
+        for before, after in (
+            (
+                "Treatment A was effective; treatment B was ineffective.",
+                "Treatment B was effective; treatment A was ineffective.",
+            ),
+            (
+                "Drug alpha improved, but drug beta declined.",
+                "Drug beta improved, but drug alpha declined.",
+            ),
+            (
+                "Treatment A was not effective; B was effective.",
+                "Treatment A was effective; B was not effective.",
+            ),
+            (
+                "Treatment A had positive results; B had negative ones.",
+                "Treatment A had negative results; B had positive ones.",
+            ),
+            (
+                "Treatment A was effective.",
+                "Treatment B was effective.",
+            ),
+        ):
+            with self.subTest(before=before):
+                why = meaning_change(before, after, Glossary())
+                self.assertTrue(why, (before, after))
+
+    def test_benign_grammar_edits_remain_possible(self) -> None:
+        """Changing a function word need not move a scientific claim.
+
+        """
+
+        from kilin.tools.writing_check._checks import Glossary
+        from kilin.tools.writing_check._review import meaning_change
+
+        self.assertEqual(
+            meaning_change(
+                "Treatment A were effective.",
+                "Treatment A was effective.", Glossary(),
+            ),
+            "",
+        )
+
+    def test_rewrite_rejects_subject_swap_with_unchanged_word_counts(
+        self,
+    ) -> None:
+        """Rewrites use the same scientific claim-order safeguards.
+
+        """
+
+        from kilin.tools.writing_check._checks import Glossary
+        from kilin.tools.writing_check._followup import option_rejection
+
+        original = (
+            "Treatment A was effective; treatment B was ineffective."
+        )
+        changed = (
+            "Treatment B was effective; treatment A was ineffective."
+        )
+        self.assertTrue(
+            option_rejection(original, changed, original, Glossary())
         )
 
 if __name__ == "__main__":

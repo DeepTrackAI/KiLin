@@ -163,6 +163,36 @@ _UNLISTED_DROPS: Final[frozenset[str]] = frozenset(
 )
 
 
+def _prompt_limit_message(
+    system: str, prompt: str, maximum: int
+) -> str:
+    """Explain why a model prompt exceeds the configured size limit.
+
+    Parameters
+    ----------
+    system: str
+        System instructions.
+    prompt: str
+        User prompt, including source context and requested text.
+    maximum: int
+        Maximum combined characters in both prompts.
+
+    Returns
+    -------
+    str
+        The reason for skipping the call, or an empty string if it fits.
+
+    """
+
+    size = len(system) + len(prompt)
+    if size > maximum:
+        return (
+            f"Prompt has {size} characters (limit {maximum}); "
+            "the model was not called and the text was not truncated."
+        )
+    return ""
+
+
 @dataclass(frozen=True, slots=True)
 class WritingCheckSettings:
     """Settings of ``writing_check`` in a project type.
@@ -182,6 +212,9 @@ class WritingCheckSettings:
     max_model_calls: int
         Absolute cap on logical model requests, including the brief,
         even without a confirmation callback (1-500).
+    max_prompt_characters: int
+        Combined system and user prompt limit for each model request
+        (2000-100000); oversized prompts are skipped, never truncated.
     quick_paragraphs: int
         Paragraphs checked for grammar by the quick version (1-1000).
     chat_findings: int
@@ -193,6 +226,7 @@ class WritingCheckSettings:
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
     max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
+    max_prompt_characters: int = _config.DEFAULT_MAX_PROMPT_CHARACTERS
     quick_paragraphs: int = _config.DEFAULT_QUICK_PARAGRAPHS
     chat_findings: int = _config.DEFAULT_CHAT_FINDINGS
 
@@ -222,7 +256,7 @@ def parse_settings(data: dict, where: str) -> WritingCheckSettings:
     reject_unknown(
         where, data,
         ("level", "confirmation", "large_batches", "max_model_calls",
-         "quick_paragraphs", "chat_findings"),
+         "max_prompt_characters", "quick_paragraphs", "chat_findings"),
     )
     defaults = WritingCheckSettings()
     return WritingCheckSettings(
@@ -238,6 +272,10 @@ def parse_settings(data: dict, where: str) -> WritingCheckSettings:
         max_model_calls=check_int(
             where, data, "max_model_calls", defaults.max_model_calls,
             1, 500,
+        ),
+        max_prompt_characters=check_int(
+            where, data, "max_prompt_characters",
+            defaults.max_prompt_characters, 2000, 100000,
         ),
         quick_paragraphs=check_int(
             where, data, "quick_paragraphs", defaults.quick_paragraphs, 1,
@@ -277,7 +315,7 @@ def run(
     summary: dict[str, object] = {"name": "writing_check"}
     line = rewrite_request(request.question)
     if line is not None:
-        return _rewrite(request, context, line, summary)
+        return _rewrite(settings, request, context, line, summary)
     context.progress("Finding the document")
     chosen = choose_document(
         request, context,
@@ -388,8 +426,14 @@ def run(
     failures: list[dict[str, object]] = []
     dropped: list[tuple[int, str, Dropped]] = []
     checked = 0
+    attempted_checks = 0
+    prompt_skipped_checks = 0
+    prompt_rejections = 0
     model_calls = 0
     omitted = 0
+    budget_omitted = 0
+    requested = 0
+    brief_skipped = False
 
     def ask_limited(system: str, prompt: str, tokens: int | None) -> str:
         """Apply the hard limit to every model request, even failed ones.
@@ -415,7 +459,13 @@ def run(
 
         """
 
-        nonlocal model_calls
+        nonlocal model_calls, prompt_rejections
+        message = _prompt_limit_message(
+            system, prompt, settings.max_prompt_characters
+        )
+        if message:
+            prompt_rejections += 1
+            raise ValueError(message)
         if model_calls >= settings.max_model_calls:
             raise RuntimeError("writing_check model-call budget exhausted")
         model_calls += 1
@@ -435,22 +485,36 @@ def run(
         brief = ""
         if use_brief:
             context.progress("Describing the document")
+            before = prompt_rejections
             brief = document_brief(document, ask_limited)
+            brief_skipped = prompt_rejections > before
+            if brief_skipped:
+                notes.append(
+                    "The optional document description was skipped: "
+                    "its prompt exceeded the size limit."
+                )
         about = document_context(card, brief, glossary)
         requested = len(paragraphs) * len(levels)
         for position, index in enumerate(paragraphs, start=1):
             for level in levels:
                 if model_calls >= settings.max_model_calls:
                     break
-                checked += 1
                 context.progress(
                     f"Checking {level} of paragraph {position} of "
                     f"{len(paragraphs)}"
                 )
+                previous_calls = model_calls
+                previous_rejections = prompt_rejections
                 kept, rejected, failure = review_paragraph(
                     level, document, index, about, glossary,
                     ask_limited,
                 )
+                if model_calls > previous_calls:
+                    attempted_checks += 1
+                    if not failure:
+                        checked += 1
+                elif prompt_rejections > previous_rejections:
+                    prompt_skipped_checks += 1
                 findings += kept
                 line = document.paragraphs[index].start_line
                 dropped += [(line, level, item) for item in rejected]
@@ -462,12 +526,24 @@ def run(
                             f"({level})"
                         ),
                         "message": failure,
-                        "reason": "model_result",
+                        "reason": (
+                            "prompt_limit" if prompt_rejections >
+                            previous_rejections else "model_result"
+                        ),
                     })
-        omitted = requested - checked
-        if omitted:
+        omitted = requested - attempted_checks
+        budget_omitted = max(
+            0, omitted - prompt_skipped_checks
+        )
+        if prompt_skipped_checks:
+            notes.append(
+                f"{prompt_skipped_checks} model checks were skipped "
+                "because their prompts exceeded the configured size "
+                "limit. No source text was truncated."
+            )
+        if budget_omitted:
             message = (
-                f"{omitted} model checks were not run because the "
+                f"{budget_omitted} model checks were not run because the "
                 f"limit of {settings.max_model_calls} calls was reached."
             )
             notes.append(message)
@@ -502,8 +578,13 @@ def run(
         )),
         "model_calls": model_calls,
         "model_checks": checked,
+        "model_attempted_checks": attempted_checks,
+        "prompt_skipped_checks": prompt_skipped_checks,
+        "brief_skipped_for_prompt_size": brief_skipped,
         "max_model_calls": settings.max_model_calls,
+        "max_prompt_characters": settings.max_prompt_characters,
         "omitted_model_checks": omitted,
+        "budget_omitted_checks": budget_omitted,
         "report": saved.as_posix() if saved else None,
     })
     answer, cited = chat_answer(
@@ -525,19 +606,23 @@ def run(
         }
         for number, index in enumerate(cited, start=1)
     )
-    context.done(
-        f"Checked {len(scope.paragraphs)} paragraphs",
-        evidence_count=len(evidence),
-    )
+    if choice == PLAN_CHOICE_CANCEL:
+        completion = "Completed deterministic checks; model work cancelled"
+    elif checked == requested:
+        amount = len(paragraphs)
+        unit = "paragraph" if amount == 1 else "paragraphs"
+        completion = f"Checked {amount} {unit}"
+    else:
+        completion = f"Completed {checked} of {requested} model checks"
+    context.done(completion, evidence_count=len(evidence))
     return partial_result(
         ToolResult(answer, evidence, summary), failures,
-        completed=(checked > sum(
-            item["reason"] == "model_result" for item in failures
-        )),
+        completed=checked > 0,
     )
 
 
 def _rewrite(
+    settings: WritingCheckSettings,
     request: ToolRequest,
     context: ToolContext,
     line: int,
@@ -547,6 +632,8 @@ def _rewrite(
 
     Parameters
     ----------
+    settings: WritingCheckSettings
+        Resource limits for the rewrite model request.
     request: ToolRequest
         The question, naming the line, and the earlier turns.
     context: ToolContext
@@ -608,14 +695,27 @@ def _rewrite(
     card = card_reader(path) if card_reader is not None else None
     about = document_context(card, "", glossary)
     context.progress(f"Rewriting line {line}")
+    system, prompt = rewrite_prompt(original, paragraph.text, about, finding)
+    message = _prompt_limit_message(
+        system, prompt, settings.max_prompt_characters
+    )
+    summary["max_prompt_characters"] = settings.max_prompt_characters
+    if message:
+        summary.update({
+            "model_calls": 0,
+            "status": "incomplete",
+            "reason": "prompt_limit",
+        })
+        context.done("Rewrite skipped: prompt too long", evidence_count=0)
+        return ToolResult(f"Cannot rewrite line {line}: {message}",
+                          (), summary)
     summary["model_calls"] = 1
     try:
-        reply = context.ask_model(
-            *rewrite_prompt(original, paragraph.text, about, finding), None
-        )
+        reply = context.ask_model(system, prompt, None)
     except Exception as error:  # Reported in the answer, not fatal.
         reply = ""
         summary["failure"] = str(error)
+        summary["status"] = "incomplete"
     kept, dropped = [], []
     for option in parse_options(reply):
         why = option_rejection(original, option, paragraph.text, glossary)
@@ -630,6 +730,8 @@ def _rewrite(
     if kept:
         lines += [f"{number}. “{option}”"
                   for number, (option, _) in enumerate(kept, start=1)]
+    elif summary.get("failure"):
+        lines.append("The model call failed; no rewrite was produced.")
     else:
         lines.append(
             "No rewrite passed the automated safeguards."
@@ -640,7 +742,14 @@ def _rewrite(
     if kept:
         lines += ["", "*Verify that each rewrite preserves the scientific "
                   "meaning before using it.*"]
-    context.done(f"Rewrote line {line}", evidence_count=1)
+    if summary.get("failure"):
+        completion = f"Rewrite failed at line {line}"
+    elif kept:
+        noun = "rewrite" if len(kept) == 1 else "rewrites"
+        completion = f"Proposed {len(kept)} {noun} for line {line}"
+    else:
+        completion = f"No acceptable rewrite for line {line}"
+    context.done(completion, evidence_count=1)
     evidence = ({
         "citation": 1,
         "path": path,

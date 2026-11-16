@@ -95,6 +95,9 @@ class TestWritingCheckPackage(unittest.TestCase):
             {"level": "everything"}, {"unknown": 1}, {"chat_findings": 201},
             {"confirmation": "sometimes"}, {"quick_paragraphs": 0},
             {"max_model_calls": 0}, {"max_model_calls": 501},
+            {"max_prompt_characters": 1999},
+            {"max_prompt_characters": 100001},
+            {"max_prompt_characters": True},
         ):
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
@@ -241,6 +244,7 @@ class TestWritingCheckRun(unittest.TestCase):
         self.assertEqual(context.ask_model.call_count, 1 + 4 * 2)
         self.assertEqual(result.summary["model_calls"], 9)
         self.assertEqual(result.summary["model_checks"], 8)
+        self.assertEqual(result.summary["model_attempted_checks"], 8)
         context.done.assert_called_once_with(
             "Checked 4 paragraphs", evidence_count=3
         )
@@ -297,6 +301,21 @@ class TestWritingCheckRun(unittest.TestCase):
         result, _ = self._run("rephrase line 2 of draft.tex")
         self.assertEqual(result.answer,
                          "Line 2 of draft.tex holds no prose to rewrite.")
+
+    def test_failed_rewrite_does_not_claim_completion(self) -> None:
+        """A failed model request must not report a successful rewrite.
+
+        """
+
+        context = self._context(
+            ask_model=Mock(side_effect=RuntimeError("model unavailable")),
+        )
+        result, _ = self._run("rephrase line 6 of draft.tex", context)
+        self.assertEqual(result.summary["status"], "incomplete")
+        self.assertIn("no rewrite was produced", result.answer)
+        context.done.assert_called_once_with(
+            "Rewrite failed at line 6", evidence_count=1
+        )
 
     def test_part_and_card(self) -> None:
         card = Mock(return_value={"title": "Tracking", "aim": "Diffusion."})
@@ -423,7 +442,115 @@ class TestWritingCheckRun(unittest.TestCase):
         self.assertEqual(context.ask_model.call_count, 2)
         self.assertEqual(result.summary["model_calls"], 2)
         self.assertEqual(result.summary["omitted_model_checks"], 2)
+        self.assertEqual(result.summary["model_checks"], 0)
+        self.assertEqual(result.summary["model_attempted_checks"], 2)
+        context.done.assert_called_once_with(
+            "Completed 0 of 4 model checks",
+            evidence_count=len(result.evidence),
+        )
         self.assertEqual(result.summary["status"], "incomplete")
+
+    def test_mixed_model_results_report_only_completed_checks(self) -> None:
+        """A failed request must not inflate completion counters.
+
+        """
+
+        model = Mock(side_effect=[RuntimeError("offline"), "NONE",
+                                  "NONE", "NONE"])
+        context = self._context(
+            card=Mock(return_value={"title": "Draft"}), ask_model=model,
+        )
+        result, _ = self._run(
+            "check the grammar of draft.tex", context,
+            level="grammar",
+        )
+        self.assertEqual(result.summary["model_calls"], 4)
+        self.assertEqual(result.summary["model_attempted_checks"], 4)
+        self.assertEqual(result.summary["model_checks"], 3)
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertEqual(context.done.call_args.args[0],
+                         "Completed 3 of 4 model checks")
+
+    def test_oversized_paragraph_is_not_sent_to_the_model(self) -> None:
+        """Bound every prompt without silently truncating the source.
+
+        """
+
+        (self.root / "sources" / "draft.tex").write_text(
+            "\\begin{document}\n\\section{Short}\n"
+            "We tracks particles.\n\n\\section{Long}\n"
+            + "Longword sentence. " * 1300 + "\n\\end{document}\n",
+            encoding="utf-8",
+        )
+        context = self._context(
+            card=Mock(return_value={"title": "Draft"}),
+        )
+        result, _ = self._run(
+            "check the grammar of draft.tex", context,
+            level="grammar", max_prompt_characters=3000,
+        )
+        self.assertEqual(context.ask_model.call_count, 1)
+        self.assertEqual(result.summary["model_checks"], 1)
+        self.assertEqual(result.summary["model_attempted_checks"], 1)
+        self.assertEqual(result.summary["prompt_skipped_checks"], 1)
+        self.assertEqual(result.summary["omitted_model_checks"], 1)
+        self.assertEqual(result.summary["budget_omitted_checks"], 0)
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertIn("not truncated", result.answer)
+        self.assertEqual(context.done.call_args.args[0],
+                         "Completed 1 of 2 model checks")
+        self.assertLess(
+            sum(len(text) for text in context.ask_model.call_args.args[:2]),
+            3001,
+        )
+
+    def test_oversized_optional_brief_is_skipped(self) -> None:
+        """An oversized document description must not block a short check.
+
+        """
+
+        headings = "".join(
+            f"# Heading number {i} with a long description\n\n"
+            for i in range(120)
+        )
+        (self.root / "sources" / "outline.md").write_text(
+            headings + "# Last\n\nWe tracks particles.\n",
+            encoding="utf-8",
+        )
+        context = self._context(
+            chunks=[chunk("o1", "text", path="outline.md")],
+            source_files=lambda: {Path("outline.md"): 1},
+        )
+        result, _ = self._run(
+            "check grammar of outline.md", context,
+            level="grammar", max_prompt_characters=3000,
+        )
+        self.assertTrue(result.summary["brief_skipped_for_prompt_size"])
+        self.assertEqual(result.summary["model_calls"], 1)
+        self.assertEqual(result.summary["model_checks"], 1)
+        self.assertIn("document description was skipped", result.answer)
+
+    def test_oversized_rewrite_is_skipped(self) -> None:
+        """Follow-up rewrites obey the same prompt-size limit.
+
+        """
+
+        (self.root / "sources" / "long.txt").write_text(
+            "word " * 4000, encoding="utf-8"
+        )
+        context = self._context(
+            chunks=[chunk("l1", "text", path="long.txt")],
+            source_files=lambda: {Path("long.txt"): 1},
+        )
+        result, _ = self._run(
+            "rephrase line 1 of long.txt", context,
+            max_prompt_characters=3000,
+        )
+        context.ask_model.assert_not_called()
+        self.assertEqual(result.summary["model_calls"], 0)
+        self.assertEqual(result.summary["reason"], "prompt_limit")
+        self.assertEqual(result.evidence, ())
+        self.assertIn("not truncated", result.answer)
 
     def test_parent_latex_file_is_not_silently_checked_as_empty(self) -> None:
         """Keep referenced files behind explicit source selection.
@@ -471,8 +598,42 @@ class TestWritingCheckRun(unittest.TestCase):
         self.assertTrue(report.exists())
         self.assertIn("text supplied in the question", report.read_text())
         context.done.assert_called_once_with(
-            "Checked 1 paragraphs", evidence_count=0
+            "Checked 1 paragraph", evidence_count=0
         )
+
+    def test_word_followup_rewrites_flagged_sentence_only(self) -> None:
+        """Parse extracted-text findings rather than the full paragraph.
+
+        """
+
+        word = WordDocument()
+        word.add_heading("Methods", level=1)
+        word.add_paragraph("We tracks particles. This sentence is fine.")
+        word.save(self.root / "sources" / "draft.docx")
+        context = self._context(
+            chunks=[chunk("w1", "Methods", path="draft.docx")],
+            source_files=lambda: {Path("draft.docx"): 1},
+        )
+        first, _ = self._run(
+            "check the grammar of draft.docx", context, level="grammar"
+        )
+        self.assertIn("extracted-text line", first.answer)
+        earlier = (EarlierTurn(
+            1, "check the grammar of draft.docx", answer=first.answer,
+            paths=(Path("draft.docx"),),
+        ),)
+        context.ask_model.reset_mock()
+        result, _ = self._run(
+            "rephrase extracted-text line 3 of draft.docx",
+            context, earlier=earlier,
+        )
+        self.assertIn("Rewriting extracted-text line", result.answer)
+        prompt = context.ask_model.call_args.args[1]
+        self.assertIn('Text to rewrite:\n"""\nWe tracks particles.',
+                      prompt)
+        self.assertIn("Paragraph, for reference only", prompt)
+        self.assertNotIn('Text to rewrite:\n"""\nWe tracks particles. '
+                         "This sentence is fine.", prompt)
 
     def test_unselected_document(self) -> None:
         context = self._context(source_files=lambda: {})
