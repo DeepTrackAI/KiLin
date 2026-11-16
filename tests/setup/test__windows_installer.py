@@ -118,6 +118,15 @@ class TestInstallerScript(unittest.TestCase):
             [r'Type: filesandordirs; Name: "{localappdata}\kilin\runtime"'],
         )
 
+    def test_only_directives_start_with_a_hash(self) -> None:
+        # The preprocessor reads every line starting with "#", indented or
+        # not, as a directive: a line such as "#13#10 + ..." fails the build.
+        directives = ("#if", "#else", "#endif", "#error", "#define")
+        for number, line in enumerate(self.script.splitlines(), start=1):
+            if line.lstrip().startswith("#"):
+                with self.subTest(line=number):
+                    self.assertTrue(line.lstrip().startswith(directives))
+
     def test_icon_exists(self) -> None:
         self.assertTrue((SCRIPT.parent / "kilin.ico").is_file())
 

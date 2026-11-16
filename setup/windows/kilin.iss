@@ -437,8 +437,9 @@ begin
   InstallLog := RuntimeRoot() + '\install.log';
   ForceDirectories(RuntimeRoot());
   DelTree(Runtime, True, True, True);
-  SaveStringToFile(InstallLog, 'KíLín {#AppVersion} from ' + Source +
-    #13#10 + 'Into ' + Runtime + #13#10 + 'Lines starting with + are the ' +
+  { No line may start with '#': the preprocessor reads it as a directive. }
+  SaveStringToFile(InstallLog, 'KíLín {#AppVersion} from ' + Source + #13#10 +
+    'Into ' + Runtime + #13#10 + 'Lines starting with + are the ' +
     'installed packages and their versions.' + #13#10#13#10, False);
   Shown := 0;
   PageTick := GetTickCount();
