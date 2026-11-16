@@ -179,10 +179,6 @@ begin
     'This takes several minutes and needs an internet connection.');
   DownloadList := TNewMemo.Create(ProgressPage);
   DownloadList.Parent := ProgressPage.Surface;
-  DownloadList.Top := ProgressPage.ProgressBar.Top +
-    ProgressPage.ProgressBar.Height + ScaleY(12);
-  DownloadList.Width := ProgressPage.SurfaceWidth;
-  DownloadList.Height := ProgressPage.SurfaceHeight - DownloadList.Top;
   DownloadList.ReadOnly := True;
   DownloadList.ScrollBars := ssVertical;
 end;
@@ -271,25 +267,15 @@ begin
     Result := IntToStr((Seconds + 30) div 60) + ' min';
 end;
 
-{ List the downloads in the order uv started them, such as
-    • torch (2.3 GiB): downloaded
-    • numpy (15.0 MiB): downloading }
-procedure ShowDownloads();
-var
-  I: Integer;
-  Text, State: String;
+{ One line of the download list, such as
+    • torch (2.3 GiB): downloaded }
+function Bullet(I: Integer): String;
 begin
-  Text := '';
-  for I := 0 to GetArrayLength(Names) - 1 do
-  begin
-    if Done[I] then
-      State := 'downloaded'
-    else
-      State := 'downloading';
-    Text := Text + '• ' + Names[I] + ' (' + ShowSize(Sizes[I]) + '): ' +
-      State + #13#10;
-  end;
-  DownloadList.Text := Text;
+  Result := '• ' + Names[I] + ' (' + ShowSize(Sizes[I]) + '): ';
+  if Done[I] then
+    Result := Result + 'downloaded'
+  else
+    Result := Result + 'downloading';
 end;
 
 { Show the percentage, the downloaded size and an estimate of the time
@@ -319,7 +305,9 @@ begin
     Details := Details + ', ' + ShowSize(DoneKiB) + ' of ' +
       ShowSize(TotalKiB) + ' downloaded';
     Elapsed := GetTickCount() - DownloadTick;
-    if (DoneKiB > 0) and (Elapsed >= 5000) then
+    { Early on, many downloads have started and few finished, so wait
+      for a twentieth of the total before estimating. }
+    if (DoneKiB * 20 >= TotalKiB) and (Elapsed >= 10000) then
       Details := Details + ', about ' + ShowMinutes(Elapsed *
         (TotalKiB - DoneKiB) div DoneKiB div 1000) + ' left';
   end
@@ -367,6 +355,8 @@ begin
     TotalKiB := TotalKiB + Sizes[I];
     if I = 0 then
       DownloadTick := GetTickCount();
+    { The newest download goes on top. }
+    DownloadList.Lines.Insert(0, Bullet(I));
   end
   else if Pos('Downloaded ', Line) = 1 then
   begin
@@ -376,6 +366,8 @@ begin
       begin
         Done[I] := True;
         DoneKiB := DoneKiB + Sizes[I];
+        { Only this line changes, so the list keeps its scroll position. }
+        DownloadList.Lines[GetArrayLength(Names) - 1 - I] := Bullet(I);
         Break;
       end;
   end
@@ -386,7 +378,6 @@ begin
   end
   else if Line <> '' then
     Activity := Line;
-  ShowDownloads();
   UpdateProgress();
 end;
 
@@ -406,7 +397,7 @@ begin
   TotalKiB := 0;
   DoneKiB := 0;
   Installing := False;
-  ShowDownloads();
+  DownloadList.Lines.Clear();
   UpdateProgress();
   Command := 'set "UV_PYTHON_INSTALL_DIR=' + RuntimeRoot() + '\python"' +
     ' && set "UV_CACHE_DIR=' + RuntimeRoot() + '\uv-cache"' +
@@ -444,6 +435,11 @@ begin
   Shown := 0;
   PageTick := GetTickCount();
   ProgressPage.Show();
+  { Fit the list under the bar now that the wizard has its final size. }
+  DownloadList.Top := ProgressPage.ProgressBar.Top +
+    ProgressPage.ProgressBar.Height + ScaleY(12);
+  DownloadList.Width := ProgressPage.SurfaceWidth;
+  DownloadList.Height := ProgressPage.SurfaceHeight - DownloadList.Top;
   Timer := SetTimer(0, 0, 1000, CreateCallback(@OnTimer));
   try
     { --torch-backend auto picks the CUDA build of PyTorch for an NVIDIA

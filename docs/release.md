@@ -128,7 +128,7 @@ to upgrade (a newer installer), reinstall (the same version, for example
 to repair it) or install the older version, or to remove KíLín. While uv installs, a progress
 page shows the percentage, the size downloaded and an estimate of the
 time left, above a list of the large downloads, such as PyTorch, each
-marked downloading or downloaded. The
+marked downloading or downloaded, newest first. The
 first install takes several minutes. On the last page, **Show the install
 log** opens `install.log`, where lines starting with `+` list the
 installed packages and their versions.
