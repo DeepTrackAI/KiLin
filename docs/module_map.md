@@ -211,11 +211,11 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Project workspaces | 6 |
 | Retrieval pipeline | 29 |
 | Source pipeline | 18 |
-| Tool extension contracts | 24 |
+| Tool extension contracts | 25 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: ???.**
+**Total production Python modules: 173.**
 
 ## Non-Python resources and UI assets
 

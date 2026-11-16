@@ -64,7 +64,11 @@ For "check the references of the Smith paper", the tool:
    `\parencite`, `\autocite`, ...) is read as the numbers it prints, the
    rest of the LaTeX is reduced to readable text line by line, and the
    bibliography environment is left out of the text searched for
-   citations. Keys cited but missing from the bibliography are listed in
+   citations. The shared LaTeX reader now normalizes TeX typography
+   in displayed text: for example, ``--`` becomes an en dash and
+   ``---`` becomes an em dash. These are presentation conversions,
+   not changes to bibliography keys or source files.
+   Keys cited but missing from the bibliography are listed in
    a note, not numbered; `\nocite` does not count as a citation.
 5. Checks each claim (a citing sentence and one cited work that is in the
    project) with the answering model (`_shared/claims.py`). The model reads

@@ -659,6 +659,19 @@ class TestProjectTypeLoading(ProjectTypeFixture):
                 with self.assertRaisesRegex(ValueError, "Duplicate IDs"):
                     load_project_types(folder)
 
+    def test_writing_file_types_preserve_approved_defaults(self) -> None:
+        """Keep Writing Assistant source formats from the base branch.
+
+        """
+
+        self.assertEqual(
+            set(project_type("writing").extensions),
+            {
+                ".pdf", ".doc", ".docx", ".md", ".txt", ".tex",
+                ".bib", ".bbl", ".py", ".m", ".ipynb",
+            },
+        )
+
     def test_lookup_reports_unknown_project_type(self) -> None:
         """Include valid type identifiers in an unknown-type error."""
 
