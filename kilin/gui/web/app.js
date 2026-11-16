@@ -4597,11 +4597,26 @@ function selectTurn(item, turn, citation = null) {
   const evidence = turn.evidence || [];
   const { labels, cited } = labelsForTurn(turn);
   const sources = referencedSources(evidence, labels, cited);
-  byId("references-for").textContent = !evidence.length
+  // Use the summary already saved for routing; never summarize in the GUI.
+  const summary = turn.parameters?.representation?.summary;
+  const question = splitAttached(turn.question).question.replace(/\s+/g, " ").trim();
+  const fallback = question.length > 200
+    ? `${question.slice(0, 200).trimEnd()}…` : question || "Question unavailable";
+  const description = typeof summary === "string" && summary.trim()
+    ? summary.trim() : fallback;
+  const heading = byId("references-for");
+  heading.textContent = `Turn ${Number(item.dataset.turnIndex) + 1} — ${description}`;
+  const detail = !evidence.length
     ? "No sources saved for this answer."
     : cited && cited < evidence.length
-      ? `Sources for: ${splitAttached(turn.question).question} · ${cited} cited of ${evidence.length} passages read`
-      : `Sources for: ${splitAttached(turn.question).question}`;
+      ? `${cited} cited of ${evidence.length} passages read`
+      : "";
+  if (detail) {
+    const line = document.createElement("span");
+    line.className = "reference-statistics";
+    line.textContent = detail;
+    heading.append(line);
+  }
   const list = byId("references-list");
   list.replaceChildren();
   for (const source of sources) {

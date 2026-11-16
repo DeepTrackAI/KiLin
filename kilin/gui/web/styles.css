@@ -407,6 +407,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .context-menu button { display: block; width: 100%; min-height: 30px; padding: 5px 9px; border: 0; border-radius: 6px; color: var(--text); background: transparent; font-size: 13px; font-weight: 400; text-align: left; }
 .context-menu button:hover, .context-menu button:focus-visible { background: var(--highlight); }
 .references-panel .hint { margin: 12px 0 18px; overflow-wrap: anywhere; }
+.references-panel .reference-statistics { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
 .reference-entry { margin: 0 0 10px; }
 .reference-entry.expanded { overflow: hidden; border: 1px solid var(--reference-border); border-radius: 9px; background: var(--surface); }
 .reference-item { display: flex; align-items: flex-start; gap: 8px; width: 100%; min-height: 0; margin: 0; padding: 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--surface); font-size: 12px; font-weight: 400; text-align: left; }

@@ -55,11 +55,11 @@ class TestAttachmentsFrontend(unittest.TestCase):
         start = events.index('data.event === "opened"')
         opened = events[start : events.index("data.event ===", start + 1)]
         self.assertIn("sendQuestion(ask);", opened)
-        # The References header names the question without the file list.
-        self.assertIn(
-            "Sources for: ${splitAttached(turn.question).question}",
-            _function(source, "selectTurn"),
-        )
+        # The References header uses the saved summary, not attachments.
+        select = _function(source, "selectTurn")
+        self.assertIn("turn.parameters?.representation?.summary", select)
+        self.assertIn("splitAttached(turn.question).question", select)
+        self.assertNotIn("Sources for:", select)
         start = events.index('data.event === "error"')
         failed = events[start:]
         self.assertIn("setQuestionDraft(attachedAsk.question);", failed)

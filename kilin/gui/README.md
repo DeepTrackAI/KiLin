@@ -638,9 +638,15 @@ previews or source citation numbers. A branch retaining the same turn UUID
 can share feedback and provide another active memory origin.
 
 Clicking an answer selects its evidence when the side panels are visible;
-selecting text does not change the current reference. Ordinary answer clicks
-do not open hidden panels. Clicking a citation opens the panels and requests
-a preview of the cited source through the bridge. Pressing Enter or Space on
+selecting text does not change the current reference. The References panel
+identifies the selected answer as ``Turn N`` followed by its full saved
+router summary; older turns without a summary show a short question excerpt.
+When fewer passages are cited than were read, the citation count appears on a
+separate line below the summary. Answers without evidence retain their
+no-sources notice. No additional model call is made for this display.
+Ordinary answer clicks do not open hidden panels. Clicking a citation opens
+the panels and requests a preview of the cited source through the bridge.
+Pressing Enter or Space on
 a focused answer also explicitly opens its references. Reference responses
 are matched to the currently selected turn and citation before being
 displayed, so a late response does not overwrite a newer selection.
