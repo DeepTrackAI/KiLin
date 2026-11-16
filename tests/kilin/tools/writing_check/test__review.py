@@ -305,5 +305,44 @@ class TestReviewParagraph(unittest.TestCase):
         self.assertEqual(len(kept), 5)
 
 
+class TestScientificClaimSafety(unittest.TestCase):
+    """Reject visible claim reversals without claiming semantic proof.
+
+    """
+
+    def test_model_findings_reject_claim_reversals(self) -> None:
+        """Guard meaning-bearing scientific polarity and direction words.
+
+        """
+
+        from kilin.tools.writing_check._checks import Glossary
+        from kilin.tools.writing_check._review import meaning_change
+
+        for before, after in (
+            ("improved survival", "reduced survival"),
+            ("increased from baseline", "decreased from baseline"),
+            ("correlation was positive", "correlation was negative"),
+            ("treatment was effective", "treatment was ineffective"),
+            ("samples were included", "samples were excluded"),
+            ("significant results", "insignificant results"),
+            ("not measured", "never measured"),
+        ):
+            with self.subTest(before=before, after=after):
+                self.assertTrue(meaning_change(before, after, Glossary()))
+
+    def test_rewrite_options_share_the_same_safeguards(self) -> None:
+        """Reject unsafe options in the paragraph rewrite path.
+
+        """
+
+        from kilin.tools.writing_check._checks import Glossary
+        from kilin.tools.writing_check._followup import option_rejection
+
+        before = "The treatment improved survival."
+        after = "The treatment reduced survival."
+        self.assertTrue(
+            option_rejection(before, after, before, Glossary())
+        )
+
 if __name__ == "__main__":
     unittest.main()

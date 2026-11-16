@@ -300,11 +300,15 @@ def run(
     if isinstance(scope, str):
         context.done("No part chosen", evidence_count=0)
         return ToolResult(scope, (), summary)
-    if scope.text:
-        document = read_document(Path("question.txt"), scope.text)
-        document = Document(path, (), document.paragraphs)
+    # A sentence supplied by the user is not part of the selected file.
+    # Keep that provenance after replacing the parsed paragraphs.
+    from_question = bool(scope.text)
+    if from_question:
+        provided = read_document(Path("question.txt"), scope.text)
+        document = Document(path, (), provided.paragraphs)
         scope = Scope(tuple(range(len(document.paragraphs))), scope.label)
     summary["scope"] = scope.label
+    summary["text_origin"] = "question" if from_question else "source"
     if not scope.paragraphs:
         context.done("No prose in the part", evidence_count=0)
         return ToolResult(
@@ -396,8 +400,12 @@ def run(
     counts = Counter(finding.level for finding in findings)
     saved = save_output_file(
         context.project_root,
-        f"{path.stem}_writing_check.md",
-        report_markdown(document, scope, findings, notes, dropped)
+        ("question_writing_check.md" if from_question else
+         f"{path.stem}_writing_check.md"),
+        report_markdown(
+            document, scope, findings, notes, dropped,
+            from_question=from_question,
+        )
         + incomplete_notice(failures),
     ) if findings or failures or dropped else None
     summary.update({
@@ -415,12 +423,13 @@ def run(
     context.done(f"Checked {len(scope.paragraphs)} paragraphs",
                  evidence_count=0)
     answer, cited = chat_answer(
-        document, scope, findings, settings.chat_findings, notes, saved
+        document, scope, findings, settings.chat_findings, notes, saved,
+        from_question=from_question,
     )
     # The paragraphs behind the findings shown are the answer's evidence,
     # so a follow-up ("suggest a better phrasing for line 75") can reuse
     # them. Text from the question is not in the file: no evidence.
-    evidence = () if scope.text else tuple(
+    evidence = () if from_question else tuple(
         {
             "citation": number,
             "path": document.path,
@@ -530,11 +539,14 @@ def _rewrite(
                   for number, (option, _) in enumerate(kept, start=1)]
     else:
         lines.append(
-            "No rewrite kept the text's meaning, so none is suggested."
+            "No rewrite passed the automated safeguards."
             if dropped else "The model gave no rewrite."
         )
     for option, why in dropped:
         lines += ["", f"*Dropped: “{option}” ({why}).*"]
+    if kept:
+        lines += ["", "*Verify that each rewrite preserves the scientific "
+                  "meaning before using it.*"]
     context.done(f"Rewrote line {line}", evidence_count=1)
     evidence = ({
         "citation": 1,
@@ -715,6 +727,7 @@ def _why_kind(why: str) -> str:
         ("it changes citations", "citations changed"),
         ("it changes a negation", "negations changed"),
         ("it changes a hedge", "hedges changed"),
+        ("it changes a claim-sensitive", "claim terms changed"),
     ):
         if why.startswith(start):
             return kind
@@ -875,6 +888,8 @@ def report_markdown(
     findings: Sequence[Finding],
     notes: Sequence[str],
     dropped: Sequence[tuple[int, str, Dropped]] = (),
+    *,
+    from_question: bool = False,
 ) -> str:
     """Return the full report, to save as Markdown.
 
@@ -892,6 +907,9 @@ def report_markdown(
         Suggestions the model made that were not kept, each with its
         paragraph's first line and its level; those quoting the context
         or changing nothing are not listed. Defaults to ``()``.
+    from_question: bool, optional
+        Whether this text was provided in the question, rather than read
+        from the document. Defaults to False.
 
     Returns
     -------
@@ -903,7 +921,8 @@ def report_markdown(
     """
 
     lines = [
-        f"# Writing check: {document.path.name}", "",
+        ("# Writing check: text supplied in the question" if from_question
+         else f"# Writing check: {document.path.name}"), "",
         f"Checked: {scope.label}. {_counts(findings)}.", "",
     ]
     lines += [f"*{note}*" for note in notes]
@@ -914,7 +933,9 @@ def report_markdown(
             current = name
             lines += [
                 "", f"## {name or 'Findings'}", "",
-                "| Line | Level | Original | Suggestion | Reason |",
+                ("| Question line | Level | Original | Suggestion | Reason |"
+                 if from_question else
+                 "| Line | Level | Original | Suggestion | Reason |"),
                 "| ---: | --- | --- | --- | --- |",
             ]
         lines.append(
@@ -931,7 +952,9 @@ def report_markdown(
             "", "## Dropped suggestions", "",
             "Suggestions the model made that were not kept. The line is "
             "the paragraph's first line.", "",
-            "| Line | Level | Original | Suggestion | Why dropped |",
+            ("| Question line | Level | Original | Suggestion | Why dropped |"
+         if from_question else
+         "| Line | Level | Original | Suggestion | Why dropped |"),
             "| ---: | --- | --- | --- | --- |",
         ]
         lines += [
@@ -949,6 +972,8 @@ def chat_answer(
     limit: int,
     notes: Sequence[str],
     saved: Path | None,
+    *,
+    from_question: bool = False,
 ) -> tuple[str, tuple[int, ...]]:
     """Return the chat answer and the paragraphs it cites.
 
@@ -966,6 +991,9 @@ def chat_answer(
         Notes on how the check ran.
     saved: pathlib.Path | None
         The saved report, if any.
+    from_question: bool, optional
+        True when the text came from the user question, not the source.
+        Defaults to False.
 
     Returns
     -------
@@ -979,7 +1007,9 @@ def chat_answer(
     """
 
     lines = [
-        f"**Writing check of {document.path.name}** ({scope.label})", "",
+        ("**Writing check of text supplied in the question**" if
+         from_question else f"**Writing check of {document.path.name}**")
+        + f" ({scope.label})", "",
         f"{_counts(findings)}.",
     ]
     current = None
@@ -992,18 +1022,24 @@ def chat_answer(
         change = f"“{finding.original}”"
         if finding.suggestion:
             change += f" → “{finding.suggestion}”"
-        if finding.paragraph not in cited:
+        if not from_question and finding.paragraph not in cited:
             cited.append(finding.paragraph)
+        location = ("question text" if from_question else
+                    f"line {finding.line}")
+        citation = ("" if from_question else
+                    f" [{cited.index(finding.paragraph) + 1}]")
         lines.append(
-            f"- line {finding.line} · {finding.level}: {change} "
-            f"({finding.reason.rstrip('.')}) "
-            f"[{cited.index(finding.paragraph) + 1}]"
+            f"- {location} · {finding.level}: {change} "
+            f"({finding.reason.rstrip('.')}){citation}"
         )
     hidden = len(findings) - min(len(findings), limit)
     if hidden:
         lines += ["", f"*… and {hidden} more in the report.*"]
     for note in notes:
         lines += ["", f"*{note}*"]
+    if findings:
+        lines += ["", "*Suggested edits require author verification for "
+                  "scientific meaning.*"]
     if saved is not None:
         lines += ["", f"The full report is saved as `{saved.name}` in "
                   "outputs/."]

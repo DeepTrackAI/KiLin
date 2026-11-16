@@ -29,8 +29,8 @@ Key Features
 
 - **Checked suggestions**
 
-    No suggestion changes a number, a negation, a citation or a term
-    the authors chose.
+    Obvious high-risk edits are rejected before a suggestion is shown;
+    semantic equivalence cannot be established by these checks alone.
 
 Module Structure
 ----------------
@@ -149,6 +149,22 @@ _HEDGE: Final[re.Pattern[str]] = re.compile(
     r"approximately|nearly|almost|roughly|likely|possibly|potentially|"
     r"probably|perhaps|presumably|apparently|largely|mostly|partly|"
     r"somewhat|relatively|typically|usually|often|generally)\b",
+    re.IGNORECASE,
+)
+# Terms whose alteration is especially likely to change a scientific claim.
+# This is a conservative safety screen, not a proof of semantic equivalence.
+_CLAIM_TERMS: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:increas(?:e|es|ed|ing)|decreas(?:e|es|ed|ing)|"
+    r"improv(?:e|es|ed|ing)|reduc(?:e|es|ed|ing)|"
+    r"ris(?:e|es|ing|en)|rose|fall(?:s|ing|en)?|fell|"
+    r"positiv(?:e|ely)|negativ(?:e|ely)|high(?:er|est)?|"
+    r"low(?:er|est)?|great(?:er|est)?|less|least|more|most|fewer|"
+    r"includ(?:e|es|ed|ing)|exclud(?:e|es|ed|ing)|"
+    r"effective|ineffective|beneficial|harmful|safe|unsafe|"
+    r"significant|insignificant|present|absent|"
+    r"consistent|inconsistent|support(?:s|ed|ing)?|"
+    r"refut(?:e|es|ed|ing)|confirm(?:s|ed|ing)?|"
+    r"reject(?:s|ed|ing)?|attribut(?:e|es|ed|ing))\b",
     re.IGNORECASE,
 )
 # Words of shared context kept on each side of a trimmed change.
@@ -629,8 +645,9 @@ def meaning_change(original: str, changed: str, glossary: Glossary) -> str:
     -------
     str
         ``""`` when nothing that carries meaning changes; otherwise the
-        first change found: numbers, citation placeholders, negations,
-        hedges or modal verbs, a defined acronym or preferred term
+        first high-risk change found: numbers, citation placeholders,
+        negations, claim-sensitive terms, hedges or modal verbs, a
+        defined acronym or preferred term
         removed, or a term form the document does not use.
 
     """
@@ -643,10 +660,14 @@ def meaning_change(original: str, changed: str, glossary: Glossary) -> str:
             pattern.findall(suggestion)
         ):
             return f"it changes {what}"
-    if len(_NEGATION.findall(original)) != len(
-        _NEGATION.findall(suggestion)
+    if Counter(word.casefold() for word in _NEGATION.findall(original)) != (
+        Counter(word.casefold() for word in _NEGATION.findall(suggestion))
     ):
         return "it changes a negation"
+    if Counter(word.casefold() for word in _CLAIM_TERMS.findall(original)) != (
+        Counter(word.casefold() for word in _CLAIM_TERMS.findall(suggestion))
+    ):
+        return "it changes a claim-sensitive term"
     if Counter(word.casefold() for word in _HEDGE.findall(original)) != (
         Counter(word.casefold() for word in _HEDGE.findall(suggestion))
     ):

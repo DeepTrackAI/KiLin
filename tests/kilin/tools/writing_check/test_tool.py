@@ -146,6 +146,17 @@ class TestWritingCheckPackage(unittest.TestCase):
             with self.subTest(question=question):
                 self.assertEqual(_cued_intent(reviewing, question),
                                  "review_writing")
+        for question in (
+            "check the wording of my assessment",
+            "check the style of my evaluation",
+            "check the grammar in our critique",
+            "check the English of my feedback",
+            "check the spelling of my recommendation",
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(
+                    _cued_intent(reviewing, question), "review_writing"
+                )
         # Rewriting stays with the writing assistant's own intent.
         writing = project_type("writing")
         for question in ("rewrite this abstract",
@@ -224,6 +235,7 @@ class TestWritingCheckRun(unittest.TestCase):
             "listed in the report.", answer,
         )
         self.assertIn("draft_writing_check.md", answer)
+        self.assertIn("scientific meaning", answer)
         # One brief call (no card), then grammar and style per paragraph.
         self.assertEqual(context.ask_model.call_count, 1 + 4 * 2)
         report = (self.root / "outputs" / "draft_writing_check.md")
@@ -356,6 +368,27 @@ class TestWritingCheckRun(unittest.TestCase):
         self.assertIn("(the text in the question)", result.answer)
         self.assertEqual(result.evidence, ())
         self.assertEqual(context.ask_model.call_count, 1 + 1)
+
+    def test_question_text_is_never_attributed_to_a_source(self) -> None:
+        """Do not cite the selected file for user-provided words.
+
+        """
+
+        result, context = self._run(
+            "check the grammar of this: The the results was clear and "
+            "robust.", level="grammar",
+        )
+        self.assertEqual(result.evidence, ())
+        self.assertEqual(result.summary["text_origin"], "question")
+        self.assertIn("text supplied in the question", result.answer)
+        self.assertNotIn("[1]", result.answer)
+        self.assertNotIn("line 1", result.answer)
+        report = self.root / "outputs" / "question_writing_check.md"
+        self.assertTrue(report.exists())
+        self.assertIn("text supplied in the question", report.read_text())
+        context.done.assert_called_once_with(
+            "Checked 1 paragraphs", evidence_count=0
+        )
 
     def test_unselected_document(self) -> None:
         context = self._context(source_files=lambda: {})

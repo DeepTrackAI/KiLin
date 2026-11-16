@@ -236,3 +236,9 @@ context, paragraph and instructions) and `REPLY_TOKENS` (`150`).
 
 - `THINKING` (default `off`): the tool's paragraph calls are short and
   many, so thinking is off, as for the batch tools.
+
+## Scientific wording safeguards and attribution
+
+Automated checks reject visible changes to numbers, negations, claim-direction terms, citations, and defined terminology. These checks cannot prove that a proposed edit preserves scientific meaning; the researcher must verify suggestions before using them.
+
+When checking text supplied in the question rather than text found in an indexed document, findings are labelled as question text. No citation to the selected source is emitted and question-text line positions are not presented as document line numbers.
