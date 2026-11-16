@@ -29,10 +29,12 @@ try {
 
     Write-Host "Setup complete. The project environment is in .venv"
     Write-Host "No model weights were downloaded."
-    # A script cannot change the PATH of the terminal that started it.
+    # Setup cannot change the calling terminal's PATH, so provide a
+    # command that works without updating the terminal configuration.
     if (-not $uvFound) {
-        Write-Host "uv is in $(Split-Path -Parent $uvCommand). Open a new terminal before running"
-        Write-Host "uv commands such as: uv run kilin --gui"
+        Write-Host "uv is installed at $uvCommand."
+        Write-Host "Open a new terminal, or run:"
+        Write-Host ('  & "{0}" run kilin --gui' -f $uvCommand)
     }
 } finally {
     Pop-Location
