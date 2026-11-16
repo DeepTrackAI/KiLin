@@ -6786,7 +6786,7 @@ function showToolPlan(plan) {
 }
 
 /**
- * Show a tool's question with one button per option, plus Cancel.
+ * Show a choice with options; tool dialogs may also offer Cancel.
  *
  * @param choice Question and option labels from the tool.
  */
@@ -6810,12 +6810,14 @@ function showToolChoice(choice) {
     button.addEventListener("click", () => answer(`option:${index}`, label.replace(/ \(.*\)$/, "")));
     actions.append(button);
   });
-  const cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.className = "secondary tool-choice-cancel";
-  cancel.textContent = "Cancel";
-  cancel.addEventListener("click", () => answer("cancel", ""));
-  actions.append(cancel);
+  if (choice.allow_cancel !== false) {
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "secondary tool-choice-cancel";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => answer("cancel", ""));
+    actions.append(cancel);
+  }
   card.append(question, actions);
   card.setAttribute("role", "group");
   card.setAttribute("aria-label", choice.question);

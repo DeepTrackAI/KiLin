@@ -1684,7 +1684,11 @@ class RAGSession:
                     report_phase(
                         ANSWER_PHASE_PROCESSING,
                         message="Waiting for your choice",
-                        choice={"question": text, "options": list(options)},
+                        choice={
+                            "question": text,
+                            "options": list(options),
+                            "allow_cancel": False,
+                        },
                     )
                     return choice_callback(text, options)
 
@@ -2010,7 +2014,11 @@ class RAGSession:
                     if 0 < number <= len(self.turns)
                     and number not in excluded_turn_ids
                 ]
-                if intent.include_related_evidence and related_turns:
+                if (
+                    intent.include_related_evidence
+                    and related_turns
+                    and not decision.another_way
+                ):
                     # Follow-ups keep the sources their earlier answers
                     # cited, whatever intent the router chose.
                     evidence = _add_related_evidence(

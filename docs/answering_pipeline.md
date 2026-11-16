@@ -138,25 +138,23 @@ not every related ID proposed by the model is automatically accepted.
 Invalid or unusable router output falls back to the project's default
 intent rather than interpreting an arbitrary tool name.
 
-A question with the same distinctive words as an earlier question (case,
-word order, punctuation and common words aside) is still routed by the
-model. A question that points back ("which dataset did they use?") counts
-as a repeat only of the turn just before, where "they" means the same thing;
-asked again later, it may mean something else and is routed as new. The
-prompt adds that it repeats that turn and how the turn was answered, which
-favours the same route; it never suggests another intent.
-`RouteDecision.repeated_turn` records the turn for tracing. Disliked turns
-are never matched. A question asked twice in a row can mean "do it again"
-or "that was not what I meant", and only the user knows which. With
-`ask(choice_callback=...)`, the user picks **Same way again** (the last
-turn's saved intent and related turns, so a repeated inventory stays
-consistent) or **Try another way** (the router without the last intent
-and without intents that reuse earlier passages, so the answer is not
-written from the same evidence again). After **Try another way** only, the
-turn's answer guidance also says that the last answer did not give the user
-what they wanted (`another_way_guidance`): keep what was correct, take a
-different approach, and do not repeat it.
-Cancelling, or no callback (notebooks), leaves the decision to the router.
+A question with the same normalized wording as an earlier question is
+recognized as a repeat; only case, Unicode compatibility, whitespace and
+punctuation are ignored. Word order, negation, inflection, names and numbers
+remain significant. Questions that depend on earlier referents can repeat
+only the immediately preceding turn. Disliked turns are excluded.
+
+A repeated question is still routed by the model. If it immediately follows
+the original and a choice callback is available, the user selects **Same
+way again** (reuse the previous saved route) or **Try another way** (request
+an alternative intent and preserve its new history decision). The second
+choice excludes the previous intent and reuse-only intents. Invalid model
+replies use a suitable allowed fallback, never the excluded default; without
+any suitable alternative, routing fails explicitly. Only the second choice
+adds guidance to take a different approach and suppresses automatic addition
+of previous-turn evidence. The repeated-question dialog has no Cancel button;
+the normal Stop control remains available. Without a callback, the router
+selects the route normally. `RouteDecision.repeated_turn` is traced.
 
 Project types currently package several intents for `code` and `literature`:
 a mixture of normal answering, named-document reading, source inventory,

@@ -948,7 +948,7 @@ class TestRepeatedQuestions(unittest.TestCase):
 
         for question in (
             "List every MRI scanner",
-            "MRI scanner: list every?",
+            "list every mri scanner?",
         ):
             with self.subTest(question=question):
                 decision, prompt = self._route(question)
@@ -1063,15 +1063,79 @@ class TestRepeatedQuestions(unittest.TestCase):
         self.assertEqual(decision.repeated_turn, 3)
         self.assertIn("repeats turn 3", prompt)
 
-    def test_singular_and_plural_are_the_same_question(self) -> None:
-        """"scanners" and "scanner" are the same key word."""
+    def test_singular_and_plural_are_different_for_repeat_matching(
+        self,
+    ) -> None:
+        """Plural heuristics must not trigger a repeat-choice dialog."""
 
         decision, _ = self._route("List every MRI scanners")
-        self.assertEqual(decision.repeated_turn, 2)
+        self.assertIsNone(decision.repeated_turn)
         self.assertEqual(answering._singular("studies"), "study")
         for word in ("analysis", "process", "corpus", "gas"):
             with self.subTest(word=word):
                 self.assertEqual(answering._singular(word), word)
+
+    def test_repeats_preserve_negation_order_names_and_counts(self) -> None:
+        """Avoid offering rerouting for semantically distinct questions."""
+
+        pairs = (
+            ("Use model A", "Do not use model A"),
+            ("The result works", "The result does not work"),
+            ("What is the new result?", "What is the news result?"),
+            ("List 2 scanners", "List 3 scanners"),
+            ("Model A compares with B", "Model B compares with A"),
+            ("Use MRI once", "Use MRI twice"),
+        )
+        for earlier, question in pairs:
+            with self.subTest(question=question):
+                self.turns[1].question = earlier
+                decision, prompt = self._route(question)
+                self.assertIsNone(decision.repeated_turn)
+                self.assertNotIn("repeats turn", prompt)
+
+    def test_another_way_keeps_new_related_turns(self) -> None:
+        """Use rerouting context, not the prior answer's saved context."""
+
+        del self.turns[2]
+        self.turns[0].question = "List every MRI scanner model"
+        self.turns[1].parameters = {
+            "intent": "project_inventory", "standalone": True,
+            "related_turn_ids": [],
+        }
+        reply = (
+            '{"intent": "debugging", "standalone": false, '
+            '"related_turns": [1]}'
+        )
+        with patch.object(answering, "side_reply", return_value=reply):
+            decision = answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=lambda *_: 1,
+            )
+        self.assertEqual(decision.intent, "debugging")
+        self.assertEqual(decision.related_turn_ids, (1,))
+        self.assertFalse(decision.standalone)
+        self.assertTrue(decision.another_way)
+
+    def test_alternative_never_falls_back_to_excluded_default(self) -> None:
+        """An invalid router reply cannot restore the previous method."""
+
+        del self.turns[2]
+        self.turns[1].parameters = {
+            "intent": self.config.default_intent,
+            "standalone": True, "related_turn_ids": [],
+        }
+        for response in ("invalid JSON", '{"intent": "code_explanation"}'):
+            with self.subTest(response=response), patch.object(
+                answering, "side_reply", return_value=response
+            ):
+                decision = answering.route_question(
+                    object(), self.config, self.turns,
+                    "List every MRI scanner", choose=lambda *_: 1,
+                )
+                self.assertNotEqual(
+                    decision.intent, self.config.default_intent
+                )
+                self.assertTrue(decision.another_way)
 
     def test_new_questions_are_not_repeats(self) -> None:
         """A changed name, an added word, or pointing back later is new."""

@@ -14,7 +14,7 @@ them. The router model writes the summary once, when the turn is saved; the
 answer's first sentence is kept when the answer has only one sentence or
 the model gives no usable summary.
 
-A question asked again, with the same distinctive words as an earlier
+A question asked again, with the same normalized wording as an earlier
 question, is still routed by the router model, which is told which turn it
 repeats and how that turn was answered. Asked right after itself, the
 user chooses between the same way again and another way when they can be
@@ -159,6 +159,7 @@ from dataclasses import dataclass
 import json
 from pathlib import PureWindowsPath
 import re
+import unicodedata
 from typing import Final, Literal, Protocol, TypeAlias
 
 from kilin._model_completion import (
@@ -769,6 +770,12 @@ def _router_prompt(
 
     """
 
+    allowed = tuple(
+        intent_id for intent_id in project.intents
+        if intent_id not in exclude
+    )
+    if not allowed:
+        raise ValueError("No available intents for routing.")
     intents = "\n".join(
         f"- {intent_id}: {intent.description}"
         for intent_id, intent in project.intents.items()
@@ -787,6 +794,10 @@ def _router_prompt(
         "answer questions. You reply with one line of JSON only."
     )
     asked = f"{question}\n{note}" if note else question
+    example_intent = (
+        project.default_intent
+        if project.default_intent in allowed else allowed[0]
+    )
     user = f"""Machine state: {MACHINE_STATE_ANSWERING}
 
 Intents:
@@ -808,7 +819,7 @@ turn.
 Only when standalone is false, also add:
 "related_turns": numbers of the earlier turns it refers to.
 
-Example: {{"intent": "{project.default_intent}", "standalone": true}}"""
+Example: {{"intent": "{example_intent}", "standalone": true}}"""
     reuse = next(
         (
             intent_id
@@ -956,9 +967,8 @@ def route_question(
         of other turns remains unchanged. Defaults to empty.
     choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
         ``choose(question, options)`` asks the user to pick one option and
-        returns its index, or None when they cancel. Used only for a
-        question asked twice in a row. Defaults to ``None``: nobody can be
-        asked, and the router decides.
+        returns its index. Used only for a question asked twice in a row.
+        Defaults to ``None``: nobody can be asked, so the router decides.
 
     Returns
     -------
@@ -968,13 +978,13 @@ def route_question(
 
     Notes
     -----
-    A question with the same distinctive words as an earlier question is
+    A question with the same normalized wording as an earlier question is
     marked as repeating it (``_repeated_turn``); the router prompt names
     that turn and its intent. Only
     the user knows why they asked the last question again, so with
     ``choose`` they pick: the same way again (the last turn's saved route,
     so a repeated inventory stays consistent) or another way (the router
-    without the last intent). Cancelling leaves the decision to the router.
+    without the last intent). Without a callback, the router decides.
 
     The router's related turns are checked: a turn is kept only when the
     question points back (``refers_back``) or shares a distinctive term
@@ -1082,7 +1092,7 @@ def route_question(
             retry = _reroute(
                 chat, project, representations, question, len(turns),
                 excluded,
-            )
+            ).intent
             decision = RouteDecision(
                 **{**_fields(decision), "intent": retry}
             )
@@ -1131,48 +1141,67 @@ def route_question(
     )
 
 
+def _repeat_key(question: str) -> str:
+    """Normalize surface wording without changing question semantics.
+
+    Case, Unicode compatibility forms, surrounding whitespace and
+    punctuation do not decide equivalence. Word order, negation, numbers,
+    plural forms and repeated words remain significant: fuzzy similarity
+    is not safe grounds for asking the user to reroute a supposed repeat.
+
+    Parameters
+    ----------
+    question: str
+        Question to normalize.
+
+    Returns
+    -------
+    str
+        Whitespace-separated normalized words.
+
+    """
+
+    text = unicodedata.normalize("NFKC", question).casefold()
+    return " ".join(re.findall(r"\w+", text))
+
+
 def _repeated_turn(
     turns: list[object],
     question: str,
     excluded_turn_ids: frozenset[int],
 ) -> int | None:
-    """Return the newest earlier turn that asked the same question.
+    """Find the newest turn with the same normalized question wording.
 
-    Two questions are the same when they have the same distinctive words
-    (``_content_terms``), so case, word order, punctuation, and common
-    words do not matter, while a different name or number does. A question
-    that points back ("and its methods?") depends on the turn before it:
-    asked right after the same question, "its" means the same thing both
-    times, so it repeats the last turn; asked again later, it may mean
-    something else, so it is not treated as repeated, and neither is an
-    earlier question that pointed back.
+    A context-dependent question can only repeat the immediately prior
+    question; its pronouns may refer to different entities later. Excluded
+    turns, including disliked answers, are never used as repeat candidates.
 
     Parameters
     ----------
     turns: list
         Earlier conversation turns.
     question: str
-        The new question.
+        Current question.
     excluded_turn_ids: frozenset[int]
-        Turns that must not be matched, such as disliked answers.
+        Saved one-based turn numbers to ignore.
 
     Returns
     -------
     int | None
-        One-based number of the matching turn, or None.
+        Matching one-based turn number, or ``None``.
 
     """
 
-    terms = _content_terms(question)
-    if not terms:
+    key = _repeat_key(question)
+    if not key:
         return None
-
     pointing = refers_back(question)
     for number in range(len(turns), 0, -1):
-        earlier = str(getattr(turns[number - 1], "question", ""))
-        if number in excluded_turn_ids or _content_terms(earlier) != terms:
+        if number in excluded_turn_ids:
             continue
-        # Only the last turn shares the context a pointing word refers to.
+        earlier = str(getattr(turns[number - 1], "question", ""))
+        if _repeat_key(earlier) != key:
+            continue
         if number == len(turns) or not (pointing or refers_back(earlier)):
             return number
         return None
@@ -1271,29 +1300,51 @@ def _repeat_choice(
         (f"Same way again ({label})", "Try another way"),
     )
     if index == 0:
-        reason = "the user chose the same way again"
-    elif index == 1:
-        reason = f"the user chose another way than {intent}"
-        # Intents that reuse the last turn's passages would answer from
-        # the same evidence again, so another way leaves them out too.
-        excluded = {
-            other: "it reuses the passages of the last answer"
-            for other, setting in project.intents.items()
-            if setting.retrieval_mode == RETRIEVAL_MODE_REUSE
-        }
-        excluded[intent] = "the user asked for another way"
-        intent = _reroute(
-            chat, project, representations, question, number, excluded
+        return RouteDecision(
+            intent=intent,
+            standalone=standalone,
+            related_turn_ids=tuple(related),
+            fallback="the user chose the same way again",
+            repeated_turn=number,
         )
-    else:
+    if index != 1:
         return None
+
+    # Never include the prior route or a reuse-only route among choices.
+    excluded = {
+        other: "it reuses the passages of the last answer"
+        for other, setting in project.intents.items()
+        if setting.retrieval_mode == RETRIEVAL_MODE_REUSE
+    }
+    excluded[intent] = "the user asked for another way"
+    retry = _reroute(
+        chat, project, representations, question, number, excluded
+    )
+    # Preserve the new router's history judgment, but apply the same
+    # relevance checks used by ordinary routing to its related IDs.
+    terms = _content_terms(question)
+    pointing = refers_back(question)
+    kept = tuple(
+        turn_id for turn_id in retry.related_turn_ids
+        if not representations[turn_id - 1].get("skip")
+        and (
+            pointing or terms & _content_terms(
+                _representation_text(representations[turn_id - 1])
+            )
+        )
+    )
     return RouteDecision(
-        intent=intent,
-        standalone=standalone,
-        related_turn_ids=tuple(related),
-        fallback=reason,
+        intent=retry.intent,
+        standalone=retry.standalone or not kept,
+        related_turn_ids=kept,
+        raw=retry.raw,
+        fallback=(
+            f"the user chose another way than {intent}"
+            + (f"; {retry.fallback}" if retry.fallback else "")
+        ),
+        refers_back=pointing,
         repeated_turn=number,
-        another_way=index == 1,
+        another_way=True,
     )
 
 
@@ -1401,46 +1452,81 @@ def _reroute(
     question: str,
     turn_count: int,
     excluded: Mapping[str, str],
-) -> str:
-    """Ask the router for an intent again, without the excluded intents.
+) -> RouteDecision:
+    """Ask the router again and return an allowed, complete decision.
+
+    An excluded default must never be silently reinstated when the model
+    fails or ignores the allowed intent list. A deterministic fallback
+    prefers the configured default when allowed, otherwise a non-tool,
+    non-reuse intent not contradicted by the wording. If there is no
+    suitable alternative, the request fails explicitly.
 
     Parameters
     ----------
     chat: ChatSession
         Router model session.
     project: ProjectType
-        Current project type with its intents.
+        Available intents and default.
     representations: list[dict[str, object]]
-        One representation per earlier turn.
+        Earlier-turn representations.
     question: str
-        The new question.
+        Current question.
     turn_count: int
         Number of earlier turns.
     excluded: Mapping[str, str]
-        Intents left out of the router's list.
+        Intents excluded from the new selection.
 
     Returns
     -------
-    str
-        The router's new intent, or the default intent when the call
-        fails or names an excluded intent.
+    RouteDecision
+        Checked intent and standalone/related-turn context.
+
+    Raises
+    ------
+    ValueError
+        No suitable alternative intent exists.
 
     """
 
+    available = tuple(
+        key for key in project.intents if key not in excluded
+    )
+    if not available:
+        raise ValueError("No alternative intent is available.")
+    excluded_by_words = _unmeant_intents(project, question)
+    fallback = next(
+        (
+            key for key in (project.default_intent, *available)
+            if key in available and key not in excluded_by_words
+            and project.intents[key].tool is None
+            and project.intents[key].retrieval_mode != RETRIEVAL_MODE_REUSE
+        ),
+        None,
+    )
+    if fallback is None:
+        raise ValueError("No suitable alternative intent is available.")
     system, prompt = _router_prompt(
         project, representations, question, frozenset(excluded)
     )
     try:
-        retry = _parse_route(
-            side_reply(
-                chat, system, prompt, max_new_tokens=_ROUTER_MAX_TOKENS
-            ),
-            project,
-            turn_count,
-        ).intent
-    except Exception:  # The default intent is always safe.
-        return project.default_intent
-    return project.default_intent if retry in excluded else retry
+        raw = side_reply(
+            chat, system, prompt, max_new_tokens=_ROUTER_MAX_TOKENS
+        )
+        decision = _parse_route(raw, project, turn_count)
+    except Exception:
+        return RouteDecision(
+            intent=fallback,
+            standalone=not refers_back(question),
+            fallback="router failed; used an allowed alternative",
+        )
+    if decision.fallback is not None or decision.intent in excluded:
+        return RouteDecision(
+            intent=fallback,
+            standalone=not refers_back(question),
+            raw=decision.raw,
+            fallback="router did not select an allowed intent",
+        )
+    return decision
 
 
 def refers_back(question: str) -> bool:

@@ -140,7 +140,10 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertEqual(phases[-1][0], "processing")
         self.assertEqual(
             phases[-1][1]["choice"],
-            {"question": "How?", "options": ["Same", "Other"]},
+            {
+                "question": "How?", "options": ["Same", "Other"],
+                "allow_cancel": False,
+            },
         )
 
     def test_another_way_tells_the_answer_the_last_one_missed(self) -> None:
