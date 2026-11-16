@@ -103,8 +103,8 @@ class TestWritingCheckPackage(unittest.TestCase):
         intent = project_type("literature").intents["writing_check"]
         self.assertEqual(intent.tool.name, TOOL_WRITING_CHECK)
 
-    def test_writing_questions_are_cued_in_both_project_types(self) -> None:
-        for type_id in ("literature", "writing"):
+    def test_writing_questions_are_cued_in_the_project_types(self) -> None:
+        for type_id in ("literature", "writing", "reviewing"):
             project = project_type(type_id)
             self.assertEqual(
                 project.intents["writing_check"].tool.name,
@@ -133,6 +133,19 @@ class TestWritingCheckPackage(unittest.TestCase):
                 with self.subTest(type_id=type_id, question=question):
                     self.assertNotEqual(_cued_intent(project, question),
                                         "writing_check")
+        # The reviewer's own text stays with review_writing.
+        reviewing = project_type("reviewing")
+        for question in (
+            "proofread my comments",
+            "rewrite my report",
+            "check the grammar of my comments: The author claim that",
+            "check the English of my review",
+            "any typos in my report?",
+            "rephrase my comment on line 75 of the manuscript",
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(_cued_intent(reviewing, question),
+                                 "review_writing")
         # Rewriting stays with the writing assistant's own intent.
         writing = project_type("writing")
         for question in ("rewrite this abstract",

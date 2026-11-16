@@ -9,13 +9,17 @@ paragraph is checked by the answering model, and every suggestion it
 makes is checked before it is reported. A plan is shown for confirmation
 when required by the confirmation policy.
 
-The `writing_check` intent is offered in the literature and the writing
-(Writing Assistant) project types. Its cues send questions such as "check
-the grammar of …", "proofread the manuscript" or "are there typos …" to it
-without the router, ahead of the writing assistant's own rewriting intent;
-"rewrite this", "polish the introduction" or "proofread this: <text>" stay
-with that intent. Other questions reach it only when they use words such as
-grammar, spelling, typos, style or wording (`requires`).
+The `writing_check` intent is offered in the literature, the writing
+(Writing Assistant) and the reviewing (Reviewing Assistant) project types.
+Its cues send questions such as "check the grammar of …", "proofread the
+manuscript" or "are there typos …" to it without the router, ahead of the
+writing assistant's own rewriting intent; "rewrite this", "polish the
+introduction" or "proofread this: <text>" stay with that intent. In the
+Reviewing Assistant it checks the document under review, language only;
+it comes after `review_writing`, so the reviewer's own text ("proofread my
+comments", "check the English of my review") stays with that intent.
+Other questions reach it only when they use words such as grammar,
+spelling, typos, style or wording (`requires`).
 
 For "check the grammar and style of the methods of draft.tex", the tool:
 
@@ -165,7 +169,7 @@ are still checked; without a brief, the paragraphs are checked without it.
 After a check, a question asking to rewrite a line ("suggest a better
 phrasing for line 75", "split the sentence at line 75", or a finding
 pasted with "rephrase it") comes back to `writing_check`
-(`_followup.py`): a cue in both project types matches a rewrite word
+(`_followup.py`): a cue in each of these project types matches a rewrite word
 (rephrase, rewrite, reword, split, shorten, simplify, phrasing,
 alternatives) with "line N", in either order. The general intents
 cannot do it well: they see only the few words the answer showed, and

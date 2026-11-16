@@ -190,7 +190,8 @@
       "description": "Proofread or reorganize substantive reviewer-authored comments only. Never independently draft a review, critique, scientific assessment, or recommendation. If the researcher has not supplied the substance, ask for their own notes.",
       "cues": [
         "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:rewrite|revise|edit|polish|proofread|rephrase|shorten|organize|structure|improve)\\s+(?:my|the|this|these)\\s+(?:reviewer\\s+)?(?:comments?|notes?|report|text|draft)\\b",
-        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|write|prepare|assemble)\\b[^\\n]{0,140}\\b(?:from|using|based\\s+on)\\s+(?:my|the|these)\\s+(?:notes?|comments?|draft)\\b"
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|write|prepare|assemble)\\b[^\\n]{0,140}\\b(?:from|using|based\\s+on)\\s+(?:my|the|these)\\s+(?:notes?|comments?|draft)\\b",
+        "\\b(?:grammar|spelling|typos?|english|wording|style)\\s+(?:of|in)\\s+(?:my|our)\\s+(?:own\\s+)?(?:reviewer\\s+)?(?:comments?|notes?|review|report)\\b"
       ],
       "system_prompt": "You are a copyeditor of researcher-authored text, NOT a review writer. Only proofread, rephrase, shorten, or reorganize substantive comments explicitly supplied by the researcher. Preserve all scientific judgments, degrees of certainty, and recommendations without adding, removing, strengthening, or weakening them. Never generate a review, critique, comment, conclusion, score, or recommendation from source documents or from scratch. If no substantive reviewer-authored text is provided, explicitly state that you cannot write the review and ask for the researcher's own comments.",
       "answer_guidance": "Evidence-only response; no independent scientific judgments, review comments, review drafting, scores, or recommendations. Explicitly state that the researcher must evaluate and write the review if asked to do so. Only edit substantive reviewer-authored text; preserve its meaning and do not add assessments.",
@@ -203,6 +204,32 @@
       "memory": {
         "indexing": "never",
         "read": false
+      }
+    },
+    "writing_check": {
+      "description": "Check the grammar, spelling and style of one document of the project, such as the manuscript or proposal under review, or a part of it, and list language corrections ('check the grammar of manuscript.pdf', 'are there typos in the manuscript?', 'proofread the methods section of the manuscript', 'suggest a better phrasing for line 75'). Language only: no judgment of the science, no review comments, scores or recommendations. Not for the reviewer's own comments (review_writing) and not for references or citations (reference_check).",
+      "cues": [
+        "\\b(?:check|correct|fix|review)\\w*\\s+(?:\\w+\\s+){0,3}?(?:grammar|spelling|typos?|style|wording|english)\\b",
+        "\\bproofread\\w*\\b[^\\n]{0,80}?(?:\\S+\\.(?:tex|md|docx?|txt|pdf)\\b|\\b(?:manuscript|draft|paper|thesis|chapter|document|article|section)s?\\b)",
+        "\\b(?:any|are\\s+there)\\s+(?:\\w+\\s+){0,2}?(?:typos|(?:grammar|grammatical|spelling)\\s+(?:errors|mistakes))\\b",
+        "\\b(?:rephras\\w*|rewrit\\w*|reword\\w*|split\\w*|shorten\\w*|simplif\\w*|phrasing|alternatives?|better\\s+(?:version|wording))\\b[\\s\\S]{0,400}?\\bline\\s+\\d+\\b",
+        "\\bline\\s+\\d+\\b[\\s\\S]{0,400}?\\b(?:rephras\\w*|rewrit\\w*|reword\\w*|split\\w*|shorten\\w*|simplif\\w*|phrasing|alternatives?|better\\s+(?:version|wording))\\b"
+      ],
+      "requires": [
+        "\\b(?:grammar\\w*|proofread\\w*|spelling|typos?|stylistic|style|wording|copy-?edit\\w*)\\b|\\b(?:the|my|its|our)\\s+english\\b"
+      ],
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
+      },
+      "tool": {
+        "name": "writing_check"
       }
     }
   },
