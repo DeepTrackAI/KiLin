@@ -51,12 +51,10 @@ class TestInstallerScript(unittest.TestCase):
         self.assertIn("'kilin[app]=={#AppVersion}'", self.script)
 
     def test_uv_runs_without_setups_redirection_guard(self) -> None:
-        # Exec children inherit RedirectionGuard, which blocks uv's Python
-        # link folder with error 448; ExecAsOriginalUser children do not.
-        start = self.script.index("function RunUv")
-        body = self.script[start:self.script.index("end;\n", start)]
-        self.assertIn("ExecAsOriginalUser(", body)
-        self.assertNotIn(" Exec(", body)
+        # Programs Setup starts inherit RedirectionGuard, which blocks the
+        # folder link uv makes for Python with error 448.
+        self.assertIn("RedirectionGuard=no", self.script)
+        self.assertIn("PrivilegesRequired=lowest", self.script)
 
     def test_failure_stops_setup_before_files_are_copied(self) -> None:
         start = self.script.index("function PrepareToInstall")

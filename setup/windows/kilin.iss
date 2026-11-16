@@ -34,6 +34,11 @@ Compression=lzma2
 SolidCompression=yes
 ; The repair-command variables below change the user environment.
 ChangesEnvironment=yes
+; RedirectionGuard, inherited by every program Setup starts, blocks the
+; folder link uv makes for Python 3.12 (error 448, "untrusted mount
+; point"). It guards elevated installers against link tricks in shared
+; folders; this one runs as the user and writes only to the user's folders.
+RedirectionGuard=no
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
@@ -84,10 +89,7 @@ begin
 #endif
 end;
 
-{ Run uv hidden, appending its output to the log; True when it succeeds.
-  ExecAsOriginalUser, not Exec: processes Exec starts inherit Setup's
-  RedirectionGuard, which blocks the folder link uv makes for Python 3.12
-  (error 448, "untrusted mount point"). Setup runs as the user anyway. }
+{ Run uv hidden, appending its output to the log; True when it succeeds. }
 function RunUv(const Uv, Arguments, Log: String): Boolean;
 var
   Code: Integer;
@@ -96,8 +98,8 @@ begin
   Command := 'set "UV_PYTHON_INSTALL_DIR=' + RuntimeRoot() + '\python"' +
     ' && set "UV_CACHE_DIR=' + RuntimeRoot() + '\uv-cache"' +
     ' && "' + Uv + '" ' + Arguments + ' >> "' + Log + '" 2>&1';
-  Result := ExecAsOriginalUser(ExpandConstant('{cmd}'), '/C "' + Command + '"',
-    '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
+  Result := Exec(ExpandConstant('{cmd}'), '/C "' + Command + '"', '',
+    SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
 end;
 
 { Install Python and KíLín before any file is copied. A failure stops Setup
