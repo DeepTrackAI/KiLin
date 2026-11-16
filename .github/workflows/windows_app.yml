@@ -2,8 +2,7 @@ name: Windows installer smoke
 
 on:
   push:
-    # Every branch, so a stacked installer branch is built on each push.
-    branches: ["**"]
+    branches: [main, develop]
     paths:
       - ".github/workflows/windows_app.yml"
       - "setup/windows/**"
