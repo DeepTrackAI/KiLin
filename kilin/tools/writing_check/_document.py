@@ -5,7 +5,8 @@ and reports each finding with its section and line, so a document is read
 from its source file into:
 
 1. **Sections**: each heading with its level, its number ("2.3", from
-   LaTeX's counters or a numbered Markdown title) and its line range,
+   standard LaTeX counters or a numbered Markdown title) and its line
+   range,
    subsections included. A LaTeX ``abstract`` environment is a section.
 2. **Paragraphs**: runs of prose lines, with their source text, their
    readable text (``_shared.latex_text`` for LaTeX; Markdown links and
@@ -27,7 +28,8 @@ Key Features
 
 - **Section numbers as printed**
 
-    "Section 2.3" means what the reader sees in the compiled document.
+    A standard inferred "Section 2.3" may differ when custom LaTeX
+    counter commands or macros change printed numbering.
 
 Module Structure
 ----------------
@@ -274,10 +276,10 @@ def _latex(
                 skipped = opened[-1]
             prose[number] = ""
             continue
-        if _DISPLAY_OPEN.match(code) and not _DISPLAY_CLOSE.search(
-            code[_DISPLAY_OPEN.match(code).end():]
-        ):
-            display = True
+        opening_math = _DISPLAY_OPEN.match(code)
+        if opening_math is not None:
+            if not _DISPLAY_CLOSE.search(code[opening_math.end():]):
+                display = True
             prose[number] = ""
             continue
         if _ABSTRACT_BEGIN.match(code):
@@ -371,7 +373,11 @@ def _markdown(lines: list[str]) -> tuple[list[Section], dict[int, str]]:
     for number, line in enumerate(lines, start=1):
         opening = _FENCE.match(line)
         if fence is not None:
-            if opening and opening.group(1)[0] == fence[0]:
+            if (
+                opening and opening.group(1)[0] == fence[0]
+                and len(opening.group(1)) >= len(fence)
+                and not line[opening.end():].strip()
+            ):
                 fence = None
             prose[number] = ""
             continue

@@ -150,5 +150,19 @@ class TestChooseScope(unittest.TestCase):
         self.assertEqual(problem.headings, ("Data sources", "Data cleaning"))
 
 
+    def test_appendix_letter_scope(self) -> None:
+        """Select sections inferred from standard LaTeX appendices.
+
+        """
+
+        document = read_document(
+            Path("appendix.tex"),
+            "\\section{Intro}\nText.\n\\appendix\n"
+            "\\section{Extra}\nDetails.\n",
+        )
+        scope = choose_scope("check appendix A", document)
+        self.assertIsInstance(scope, Scope)
+        self.assertEqual(scope.label, "section A Extra")
+
 if __name__ == "__main__":
     unittest.main()

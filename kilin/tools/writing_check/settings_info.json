@@ -16,6 +16,11 @@
       "summary": "Sets how many model calls make a check large.",
       "description": "A check above this number of model calls asks for confirmation when confirmation is when_large."
     },
+    "max_model_calls": {
+      "title": "Maximum model calls",
+      "summary": "Hard limit on logical model requests in one check.",
+      "description": "At most this many requests are made, even when no confirmation interface exists. Includes the document brief and each grammar/style check. Unchecked paragraphs are reported as incomplete. Range: 1 to 500."
+    },
     "quick_paragraphs": {
       "title": "Quick-check paragraphs",
       "summary": "Sets how many paragraphs the quick option checks.",

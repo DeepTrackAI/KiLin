@@ -263,6 +263,35 @@ _LEVELS: Final[dict[str, int]] = {
 _COMMAND_NAME: Final[re.Pattern[str]] = re.compile(
     r"^\s*\\(part|chapter|section|subsection|subsubsection)(\*?)"
 )
+_APPENDIX: Final[re.Pattern[str]] = re.compile(r"^\s*\\appendix\b")
+_SET_COUNTER: Final[re.Pattern[str]] = re.compile(
+    r"^\s*\\setcounter\s*\{"
+    r"(chapter|section|subsection|subsubsection)\}\s*\{(-?\d+)\}"
+)
+
+
+def _appendix_number(number: int) -> str:
+    """Return a standard appendix letter, including AA after Z.
+
+    Parameters
+    ----------
+    number: int
+        One-based appendix counter.
+
+    Returns
+    -------
+    str
+        Uppercase appendix letters.
+
+    """
+
+    parts = []
+    while number > 0:
+        number, remainder = divmod(number - 1, 26)
+        parts.append(chr(ord("A") + remainder))
+    return "".join(reversed(parts))
+
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,8 +308,9 @@ class LatexHeading:
     title: str
         The title as plain words.
     number: str
-        The number LaTeX prints ("2.3"), counted from the document's
-        unstarred commands; ``""`` for a starred command or a part.
+        Number inferred from standard heading counters ("2.3"). Common
+        ``\\appendix`` and ``\\setcounter`` commands are recognized;
+        custom counter macros are not. Empty for starred headings or parts.
 
     """
 
@@ -306,7 +336,9 @@ def latex_headings(text: str) -> tuple[int, int, list[LatexHeading]]:
         ``\\end{document}`` when present), and its headings in order,
         outside comments and verbatim environments. Numbers start at the
         highest level used (chapters when there are any, else sections),
-        and a heading resets the counters below it.
+        and a heading resets the counters below it. Appendix lettering
+        and direct ``\\setcounter`` commands are recognized, but arbitrary
+        macro redefinitions cannot be evaluated.
 
     """
 
@@ -326,16 +358,53 @@ def latex_headings(text: str) -> tuple[int, int, list[LatexHeading]]:
     )
     counters: dict[int, int] = {}
     headings = []
-    for line, level, title, numbered in found:
+    by_line = {line: (level, title, numbered)
+               for line, level, title, numbered in found}
+    appendix = False
+    verbatim: str | None = None
+    for line_number in range(first, last + 1):
+        source = lines[line_number - 1]
+        if verbatim is not None:
+            if re.search(rf"\\end\s*\{{{re.escape(verbatim)}\}}", source):
+                verbatim = None
+            continue
+        if _is_comment(source):
+            continue
+        opening = _VERBATIM.search(source)
+        if opening is not None:
+            name = opening.group(1)
+            if not re.search(
+                rf"\\end\s*\{{{re.escape(name)}\}}",
+                source[opening.end():],
+            ):
+                verbatim = name
+            continue
+        if _APPENDIX.match(source):
+            appendix = True
+            counters.clear()
+        reset = _SET_COUNTER.match(source)
+        if reset is not None:
+            level = _LEVELS[reset.group(1)]
+            counters[level] = int(reset.group(2))
+            for deeper in [key for key in counters if key > level]:
+                del counters[deeper]
+        heading = by_line.get(line_number)
+        if heading is None:
+            continue
+        level, title, numbered = heading
         label = ""
         if numbered and level >= 0:
             counters[level] = counters.get(level, 0) + 1
             for deeper in [key for key in counters if key > level]:
                 del counters[deeper]
-            label = ".".join(
-                str(counters.get(step, 0)) for step in range(top, level + 1)
-            )
-        headings.append(LatexHeading(line, level, title, label))
+            parts = [
+                _appendix_number(counters.get(step, 0))
+                if appendix and step == top
+                else str(counters.get(step, 0))
+                for step in range(top, level + 1)
+            ]
+            label = ".".join(parts)
+        headings.append(LatexHeading(line_number, level, title, label))
     return first, last, headings
 
 

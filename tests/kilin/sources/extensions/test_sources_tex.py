@@ -124,6 +124,32 @@ class TestLatexExtraction(unittest.TestCase):
         )
         self.assertEqual(sources_tex.latex_headings(""), (1, 0, []))
 
+    def test_appendix_and_setcounter_numbering(self) -> None:
+        """Recognize ordinary counter adjustments but not custom macros.
+
+        """
+
+        text = (
+            "\\chapter{Introduction}\n\\section{Methods}\n"
+            "\\appendix\n\\chapter{Extra}\n"
+            "\\section{Data}\n\\setcounter{section}{3}\n"
+            "\\section{More data}\n"
+        )
+        _, _, headings = sources_tex.latex_headings(text)
+        self.assertEqual(
+            [heading.number for heading in headings],
+            ["1", "1.1", "A", "A.1", "A.4"],
+        )
+        _, _, headings = sources_tex.latex_headings(
+            "\\section{First}\n"
+            "\\setcounter{section}{7}\n"
+            "% \\appendix\n"
+            "\\section{Second}\n"
+        )
+        self.assertEqual(
+            [heading.number for heading in headings], ["1", "8"]
+        )
+
     def test_title(self) -> None:
         self.assertEqual(
             sources_tex.latex_title(fixture_text("sample.tex")),

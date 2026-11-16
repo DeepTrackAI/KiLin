@@ -208,6 +208,10 @@ case), and users per project.
   `always`, `when_large` or `never`.
 - `LARGE_BATCHES` (default `30`, range 0–1000): with `when_large`, plans
   with more model calls than this ask first.
+- `MAX_MODEL_CALLS` (default `100`, range 1–500): hard cap on model
+  requests, including the optional document brief and paragraph checks,
+  even without an interactive confirmation callback. Unchecked model
+  work is explicitly reported as incomplete.
 - `QUICK_PARAGRAPHS` (default `10`, range 1–1000): paragraphs checked for
   grammar by the quick version.
 - `CHAT_FINDINGS` (default `20`, range 0–200): findings shown in the chat;
@@ -242,3 +246,13 @@ context, paragraph and instructions) and `REPLY_TOKENS` (`150`).
 Automated checks reject visible changes to numbers, negations, claim-direction terms, citations, and defined terminology. These checks cannot prove that a proposed edit preserves scientific meaning; the researcher must verify suggestions before using them.
 
 When checking text supplied in the question rather than text found in an indexed document, findings are labelled as question text. No citation to the selected source is emitted and question-text line positions are not presented as document line numbers.
+
+## Source-format limits and resource accounting
+
+A selected LaTeX file is checked on its own. Commands such as `\input` and `\include` are not followed, because child files must be independently selected and indexed. A main file containing only child-file commands returns an explicit explanation. Heading numbers are inferred from standard section commands; custom macros and redefined counters can produce different printed numbers.
+
+For PDF and Word sources, line numbers identify lines in extracted text, not positions in the native document. References to passages remain linked to the selected source file.
+
+The confirmation plan is an estimate, not authorization to exceed `MAX_MODEL_CALLS`. The tool counts actual logical model requests, including failures and document-brief calls. When the limit is reached, unreviewed model checks appear as incomplete work; the deterministic checks and completed results remain available.
+
+A check with no findings, dropped suggestions or failed model calls does not create an empty report in `outputs/`.

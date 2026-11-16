@@ -3,6 +3,7 @@
     "LEVEL": "auto",
     "CONFIRMATION": "when_large",
     "LARGE_BATCHES": 30,
+    "MAX_MODEL_CALLS": 100,
     "QUICK_PARAGRAPHS": 10,
     "CHAT_FINDINGS": 20
   },

@@ -67,6 +67,7 @@ __all__ = [
     "DEFAULT_CHAT_FINDINGS",
     "DEFAULT_CONFIRMATION",
     "DEFAULT_LARGE_BATCHES",
+    "DEFAULT_MAX_MODEL_CALLS",
     "DEFAULT_LEVEL",
     "DEFAULT_QUICK_PARAGRAPHS",
     "KNOWN_ACRONYMS",
@@ -86,7 +87,8 @@ _PATH = Path(__file__).with_name("defaults.json")
 _DEFAULTS = load_tool_defaults(_PATH)
 _GROUPS = {
     "SETTINGS": {
-        "LEVEL", "CONFIRMATION", "LARGE_BATCHES", "QUICK_PARAGRAPHS",
+        "LEVEL", "CONFIRMATION", "LARGE_BATCHES", "MAX_MODEL_CALLS",
+        "QUICK_PARAGRAPHS",
         "CHAT_FINDINGS",
     },
     "CHECKS": {
@@ -121,6 +123,9 @@ if DEFAULT_CONFIRMATION not in CONFIRMATION_CHOICES:
     raise ValueError(f"{_WHERE}.CONFIRMATION is not a supported policy.")
 DEFAULT_LARGE_BATCHES: Final[int] = require_int(
     _SETTINGS, "LARGE_BATCHES", _WHERE, 0, 1000
+)
+DEFAULT_MAX_MODEL_CALLS: Final[int] = require_int(
+    _SETTINGS, "MAX_MODEL_CALLS", _WHERE, 1, 500
 )
 DEFAULT_QUICK_PARAGRAPHS: Final[int] = require_int(
     _SETTINGS, "QUICK_PARAGRAPHS", _WHERE, 1, 1000

@@ -18,8 +18,8 @@ project, or a part of it. The tool:
    level ``all`` or ``style``, style (``_review``), with the document's
    card or a one-call brief. Every suggested change is checked before it
    is kept.
-5. Answers with the first findings, by section, and saves the full report
-   to ``outputs/``.
+5. Answers with the first findings, by section. A report is saved to
+   ``outputs/`` when there are findings, dropped suggestions or failures.
 
 The tool never changes the document: it suggests changes for the author.
 
@@ -179,6 +179,9 @@ class WritingCheckSettings:
     large_batches: int
         With ``when_large``, plans with more model calls than this ask
         first (0-1000).
+    max_model_calls: int
+        Absolute cap on logical model requests, including the brief,
+        even without a confirmation callback (1-500).
     quick_paragraphs: int
         Paragraphs checked for grammar by the quick version (1-1000).
     chat_findings: int
@@ -189,6 +192,7 @@ class WritingCheckSettings:
     level: str = _config.DEFAULT_LEVEL
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
+    max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
     quick_paragraphs: int = _config.DEFAULT_QUICK_PARAGRAPHS
     chat_findings: int = _config.DEFAULT_CHAT_FINDINGS
 
@@ -217,8 +221,8 @@ def parse_settings(data: dict, where: str) -> WritingCheckSettings:
 
     reject_unknown(
         where, data,
-        ("level", "confirmation", "large_batches", "quick_paragraphs",
-         "chat_findings"),
+        ("level", "confirmation", "large_batches", "max_model_calls",
+         "quick_paragraphs", "chat_findings"),
     )
     defaults = WritingCheckSettings()
     return WritingCheckSettings(
@@ -230,6 +234,10 @@ def parse_settings(data: dict, where: str) -> WritingCheckSettings:
         ),
         large_batches=check_int(
             where, data, "large_batches", defaults.large_batches, 0, 1000
+        ),
+        max_model_calls=check_int(
+            where, data, "max_model_calls", defaults.max_model_calls,
+            1, 500,
         ),
         quick_paragraphs=check_int(
             where, data, "quick_paragraphs", defaults.quick_paragraphs, 1,
@@ -311,6 +319,15 @@ def run(
     summary["text_origin"] = "question" if from_question else "source"
     if not scope.paragraphs:
         context.done("No prose in the part", evidence_count=0)
+        if path.suffix.lower() == ".tex" and re.search(
+            r"\\(?:input|include)\s*\{", text
+        ):
+            return ToolResult(
+                f"{path.name} contains LaTeX child-file directives but "
+                "no prose in this selected file. KíLín does not assemble "
+                "multi-file manuscripts: select and check the indexed "
+                "child .tex files individually.", (), summary,
+            )
         return ToolResult(
             f"There is no prose to check in {scope.label} of {path.name}.",
             (), summary,
@@ -325,7 +342,10 @@ def run(
     card = card_reader(path) if card_reader is not None else None
     levels = _levels(settings.level, request.question)
     paragraphs = scope.paragraphs
-    calls = len(paragraphs) * len(levels) + (0 if card else 1)
+    # Reserve a scarce request for an actual paragraph, not a brief.
+    use_brief = not card and settings.max_model_calls > 1
+    calls = len(paragraphs) * len(levels) + int(use_brief)
+    allowed_calls = min(calls, settings.max_model_calls)
     quick = min(len(paragraphs), settings.quick_paragraphs)
     plan = ToolPlan(
         tool="writing_check",
@@ -333,26 +353,74 @@ def run(
             f"Check {len(paragraphs)} paragraphs of {scope.label} of "
             f"{path.name} for {' and '.join(levels)}, one model call per "
             "paragraph and check"
-            + ("" if card else ", plus one to describe the document")
+            + (", plus one to describe the document" if use_brief else "")
+            + f"; at most {settings.max_model_calls} model calls"
             + "."
         ),
         scope=f"{scope.label}; acronyms, terms and spelling checked "
         "without the model.",
         items=len(paragraphs),
         batches=calls,
-        batches_to_run=calls,
-        estimated_seconds=calls * _call_seconds(),
+        batches_to_run=allowed_calls,
+        estimated_seconds=allowed_calls * _call_seconds(),
         quick_items=quick,
-        quick_seconds=(quick + (0 if card else 1)) * _call_seconds(),
+        quick_seconds=min(
+            quick + int(use_brief), settings.max_model_calls
+        ) * _call_seconds(),
         quick_label=f"Grammar of the first {quick} paragraphs",
     )
     choice, _asked = confirm_plan(
         plan, settings.confirmation, settings.large_batches, context
     )
     notes = []
+    if path.suffix.lower() in _READ_BY_EXTENSION and not from_question:
+        notes.append(
+            "Line numbers refer to extracted text, not native "
+            "PDF or Word document line numbers."
+        )
+    if path.suffix.lower() == ".tex" and (
+        re.search(r"\\(?:input|include)\s*\{", text)
+    ):
+        notes.append(
+            "Referenced LaTeX child files were not assembled; only this "
+            "selected file was checked."
+        )
     failures: list[dict[str, object]] = []
     dropped: list[tuple[int, str, Dropped]] = []
     checked = 0
+    model_calls = 0
+    omitted = 0
+
+    def ask_limited(system: str, prompt: str, tokens: int | None) -> str:
+        """Apply the hard limit to every model request, even failed ones.
+
+        Parameters
+        ----------
+        system: str
+            System instructions for this logical model request.
+        prompt: str
+            User prompt for this request.
+        tokens: int | None
+            Requested reply-token limit, if specified.
+
+        Returns
+        -------
+        str
+            The model's reply.
+
+        Raises
+        ------
+        RuntimeError
+            If no more model calls are permitted.
+
+        """
+
+        nonlocal model_calls
+        if model_calls >= settings.max_model_calls:
+            raise RuntimeError("writing_check model-call budget exhausted")
+        model_calls += 1
+        return context.ask_model(system, prompt, tokens)
+
     if choice == PLAN_CHOICE_CANCEL:
         notes.append("The model checks were cancelled; only the checks "
                      "done without the model are shown.")
@@ -365,12 +433,15 @@ def run(
                 f"{len(scope.paragraphs)}."
             )
         brief = ""
-        if not card:
+        if use_brief:
             context.progress("Describing the document")
-            brief = document_brief(document, context.ask_model)
+            brief = document_brief(document, ask_limited)
         about = document_context(card, brief, glossary)
+        requested = len(paragraphs) * len(levels)
         for position, index in enumerate(paragraphs, start=1):
             for level in levels:
+                if model_calls >= settings.max_model_calls:
+                    break
                 checked += 1
                 context.progress(
                     f"Checking {level} of paragraph {position} of "
@@ -378,7 +449,7 @@ def run(
                 )
                 kept, rejected, failure = review_paragraph(
                     level, document, index, about, glossary,
-                    context.ask_model,
+                    ask_limited,
                 )
                 findings += kept
                 line = document.paragraphs[index].start_line
@@ -393,6 +464,18 @@ def run(
                         "message": failure,
                         "reason": "model_result",
                     })
+        omitted = requested - checked
+        if omitted:
+            message = (
+                f"{omitted} model checks were not run because the "
+                f"limit of {settings.max_model_calls} calls was reached."
+            )
+            notes.append(message)
+            failures.append({
+                "item": "Unreviewed paragraphs or levels",
+                "message": message,
+                "reason": "model_budget",
+            })
     findings = _unique(findings)
     if dropped:
         notes.append(_dropped_note(dropped))
@@ -417,11 +500,12 @@ def run(
         "dropped_reasons": dict(Counter(
             _why_kind(item.why) for _, _, item in dropped
         )),
-        "model_calls": checked,
+        "model_calls": model_calls,
+        "model_checks": checked,
+        "max_model_calls": settings.max_model_calls,
+        "omitted_model_checks": omitted,
         "report": saved.as_posix() if saved else None,
     })
-    context.done(f"Checked {len(scope.paragraphs)} paragraphs",
-                 evidence_count=0)
     answer, cited = chat_answer(
         document, scope, findings, settings.chat_findings, notes, saved,
         from_question=from_question,
@@ -441,9 +525,15 @@ def run(
         }
         for number, index in enumerate(cited, start=1)
     )
+    context.done(
+        f"Checked {len(scope.paragraphs)} paragraphs",
+        evidence_count=len(evidence),
+    )
     return partial_result(
         ToolResult(answer, evidence, summary), failures,
-        completed=checked == 0 or len(failures) < checked,
+        completed=(checked > sum(
+            item["reason"] == "model_result" for item in failures
+        )),
     )
 
 
@@ -518,6 +608,7 @@ def _rewrite(
     card = card_reader(path) if card_reader is not None else None
     about = document_context(card, "", glossary)
     context.progress(f"Rewriting line {line}")
+    summary["model_calls"] = 1
     try:
         reply = context.ask_model(
             *rewrite_prompt(original, paragraph.text, about, finding), None
@@ -530,8 +621,10 @@ def _rewrite(
         why = option_rejection(original, option, paragraph.text, glossary)
         (dropped if why else kept).append((option, why))
     summary.update({"rewrites": len(kept), "dropped": len(dropped)})
+    line_kind = ("extracted-text line" if path.suffix.lower() in
+                 _READ_BY_EXTENSION else "line")
     lines = [
-        f"**Rewriting line {line} of {path.name}**", "",
+        f"**Rewriting {line_kind} {line} of {path.name}**", "",
         f"Text: “{original}” [1]", "",
     ]
     if kept:
@@ -926,6 +1019,7 @@ def report_markdown(
         f"Checked: {scope.label}. {_counts(findings)}.", "",
     ]
     lines += [f"*{note}*" for note in notes]
+    extracted = document.path.suffix.lower() in _READ_BY_EXTENSION
     current = None
     for finding in findings:
         name = _section_name(document, finding)
@@ -935,7 +1029,9 @@ def report_markdown(
                 "", f"## {name or 'Findings'}", "",
                 ("| Question line | Level | Original | Suggestion | Reason |"
                  if from_question else
-                 "| Line | Level | Original | Suggestion | Reason |"),
+                 ("| Extracted-text line | Level | Original | "
+                  "Suggestion | Reason |" if extracted else
+                  "| Line | Level | Original | Suggestion | Reason |")),
                 "| ---: | --- | --- | --- | --- |",
             ]
         lines.append(
@@ -954,7 +1050,9 @@ def report_markdown(
             "the paragraph's first line.", "",
             ("| Question line | Level | Original | Suggestion | Why dropped |"
          if from_question else
-         "| Line | Level | Original | Suggestion | Why dropped |"),
+         ("| Extracted-text line | Level | Original | Suggestion | "
+          "Why dropped |" if extracted else
+          "| Line | Level | Original | Suggestion | Why dropped |")),
             "| ---: | --- | --- | --- | --- |",
         ]
         lines += [
@@ -1024,8 +1122,12 @@ def chat_answer(
             change += f" → “{finding.suggestion}”"
         if not from_question and finding.paragraph not in cited:
             cited.append(finding.paragraph)
+        line_prefix = (
+            "extracted-text line" if document.path.suffix.lower()
+            in _READ_BY_EXTENSION else "line"
+        )
         location = ("question text" if from_question else
-                    f"line {finding.line}")
+                    f"{line_prefix} {finding.line}")
         citation = ("" if from_question else
                     f" [{cited.index(finding.paragraph) + 1}]")
         lines.append(

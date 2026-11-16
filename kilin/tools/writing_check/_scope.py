@@ -98,7 +98,8 @@ _POSITION_SECTION: Final[re.Pattern[str]] = re.compile(
     re.IGNORECASE,
 )
 _SECTION_NUMBER: Final[re.Pattern[str]] = re.compile(
-    r"(?:\bsection|\bsec\.|§)\s*(\d+(?:\.\d+)*)\b", re.IGNORECASE
+    r"(?:\bsection|\bsec\.|§|\bappendix)\s*"
+    r"(\d+(?:\.\d+)*|[A-Z](?:\.\d+)*)\b", re.IGNORECASE
 )
 _NAMED_SECTION: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(

@@ -98,6 +98,21 @@ class TestLatex(unittest.TestCase):
             with self.subTest(left_out=left_out):
                 self.assertNotIn(left_out, text)
 
+    def test_single_line_display_math_is_not_prose(self) -> None:
+        """Exclude even math blocks that open and close on one line.
+
+        """
+
+        document = read_document(
+            Path("math.tex"),
+            "Before.\n$$ E = mc^2 $$\nBetween.\n"
+            "\\[ x=y \\]\nAfter.\n",
+        )
+        self.assertEqual(
+            [paragraph.text for paragraph in document.paragraphs],
+            ["Before.", "Between.", "After."],
+        )
+
     def test_chapter_file_without_document_environment(self) -> None:
         document = read_document(
             Path("chapter.tex"),
@@ -131,6 +146,27 @@ class TestMarkdownAndText(unittest.TestCase):
             [(0, 1, "Intro with a link and emphasis."),
              (1, 1, "item one"), (1, 2, "item two"),
              (1, 3, "Last paragraph.")],
+        )
+
+    def test_undersized_fence_does_not_end_code(self) -> None:
+        """Ignore text until a closing fence matches opening length.
+
+        """
+
+        document = read_document(
+            Path("notes.md"),
+            "# Heading\n\n````python\nnot prose\n```\n"
+            "still not prose\n# Not a heading\n````\n"
+            "Actual prose.\n",
+        )
+        self.assertEqual(
+            [(section.title, section.level) for section in
+             document.sections],
+            [("Heading", 1)],
+        )
+        self.assertEqual(
+            [paragraph.text for paragraph in document.paragraphs],
+            ["Actual prose."],
         )
 
     def test_plain_text(self) -> None:

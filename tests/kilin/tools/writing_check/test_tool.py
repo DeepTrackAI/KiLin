@@ -94,6 +94,7 @@ class TestWritingCheckPackage(unittest.TestCase):
         for values in (
             {"level": "everything"}, {"unknown": 1}, {"chat_findings": 201},
             {"confirmation": "sometimes"}, {"quick_paragraphs": 0},
+            {"max_model_calls": 0}, {"max_model_calls": 501},
         ):
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
@@ -238,6 +239,11 @@ class TestWritingCheckRun(unittest.TestCase):
         self.assertIn("scientific meaning", answer)
         # One brief call (no card), then grammar and style per paragraph.
         self.assertEqual(context.ask_model.call_count, 1 + 4 * 2)
+        self.assertEqual(result.summary["model_calls"], 9)
+        self.assertEqual(result.summary["model_checks"], 8)
+        context.done.assert_called_once_with(
+            "Checked 4 paragraphs", evidence_count=3
+        )
         report = (self.root / "outputs" / "draft_writing_check.md")
         text = report.read_text(encoding="utf-8")
         self.assertIn("## 2 Methods", text)
@@ -360,6 +366,84 @@ class TestWritingCheckRun(unittest.TestCase):
         self.assertIn("## Findings", report.read_text(encoding="utf-8"))
         self.assertNotIn("**", result.answer.split("\n", 2)[2])
 
+    def test_absolute_call_cap_without_confirmation(self) -> None:
+        """Stop at a hard limit even in a script without callbacks.
+
+        """
+
+        context = self._context(confirm=None)
+        result, _ = self._run(
+            "check grammar and style of draft.tex", context,
+            level="all", max_model_calls=2,
+        )
+        self.assertEqual(context.ask_model.call_count, 2)
+        self.assertEqual(result.summary["model_calls"], 2)
+        self.assertEqual(result.summary["model_checks"], 1)
+        self.assertEqual(result.summary["omitted_model_checks"], 7)
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertIn("7 model checks were not run", result.answer)
+        self.assertIn("Unreviewed paragraphs", result.answer)
+        plan = context.trace.emit.call_args_list[0].kwargs["data"]
+        self.assertEqual(plan["batches"], 9)
+        self.assertEqual(plan["batches_to_run"], 2)
+        self.assertTrue((self.root / "outputs" /
+                         "draft_writing_check.md").exists())
+
+    def test_one_call_is_used_for_review_not_optional_brief(self) -> None:
+        """A tight budget prioritizes checking the requested prose.
+
+        """
+
+        context = self._context(confirm=None)
+        result, _ = self._run(
+            "check the grammar of draft.tex", context,
+            level="grammar", max_model_calls=1,
+        )
+        self.assertEqual(context.ask_model.call_count, 1)
+        self.assertNotIn("Describing the document", [
+            call.args[0] for call in context.progress.call_args_list
+        ])
+        self.assertEqual(result.summary["model_checks"], 1)
+        self.assertEqual(result.summary["model_calls"], 1)
+        self.assertEqual(result.summary["omitted_model_checks"], 3)
+
+    def test_model_failures_still_use_the_budget(self) -> None:
+        """Count failed requests and do not retry past the limit.
+
+        """
+
+        context = self._context(
+            confirm=None, card=Mock(return_value={"title": "Draft"}),
+            ask_model=Mock(side_effect=RuntimeError("offline")),
+        )
+        result, _ = self._run(
+            "check the grammar of draft.tex", context,
+            level="grammar", max_model_calls=2,
+        )
+        self.assertEqual(context.ask_model.call_count, 2)
+        self.assertEqual(result.summary["model_calls"], 2)
+        self.assertEqual(result.summary["omitted_model_checks"], 2)
+        self.assertEqual(result.summary["status"], "incomplete")
+
+    def test_parent_latex_file_is_not_silently_checked_as_empty(self) -> None:
+        """Keep referenced files behind explicit source selection.
+
+        """
+
+        (self.root / "sources" / "main.tex").write_text(
+            "\\begin{document}\n\\input{chapter}\n"
+            "\\end{document}\n", encoding="utf-8"
+        )
+        context = self._context(
+            chunks=[chunk("main", "text", path="main.tex")],
+            source_files=lambda: {Path("main.tex"): 1},
+        )
+        result, _ = self._run("check the grammar of main.tex", context)
+        self.assertIn(
+            "does not assemble multi-file manuscripts", result.answer
+        )
+        context.ask_model.assert_not_called()
+
     def test_quoted_text_not_in_the_document(self) -> None:
         result, context = self._run(
             "check the grammar of this sentence: The results was clear "
@@ -409,6 +493,10 @@ class TestWritingCheckRun(unittest.TestCase):
                               level="grammar")
         self.assertIn("**Methods**", result.answer)
         self.assertIn("“We tracks” → “We tracked”", result.answer)
+        self.assertIn("extracted-text line", result.answer)
+        self.assertIn("not native PDF or Word", result.answer)
+        self.assertEqual(context.done.call_args.kwargs["evidence_count"],
+                         len(result.evidence))
 
 
 if __name__ == "__main__":
