@@ -66,6 +66,8 @@ class TestInstallerScript(unittest.TestCase):
             "' left'",
             "SetTimer(0, 0, 1000",
             "TNewMemo.Create(ProgressPage)",
+            "external 'GetIfTable@iphlpapi.dll stdcall'",
+            "Logged := 'Downloaded ' + Names[I]",
             "'downloaded'",
             "'downloading'",
         ):

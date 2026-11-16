@@ -87,6 +87,10 @@ var
   Sizes: array of Int64;
   Done: array of Boolean;
   TotalKiB, DoneKiB: Int64;
+  { Bytes received per network interface, to follow downloads that have
+    not finished: uv only says when a file starts and when it ends. }
+  NetPrevious, NetReceived: array of Int64;
+  ReceivedKiB: Int64;
   Installing: Boolean;
   PageTick, DownloadTick, Timer: LongWord;
 
@@ -96,6 +100,8 @@ function SetTimer(Wnd, Id, Elapse, TimerFunc: LongWord): LongWord;
   external 'SetTimer@user32.dll stdcall';
 function KillTimer(Wnd, Id: LongWord): BOOL;
   external 'KillTimer@user32.dll stdcall';
+function GetIfTable(Table: AnsiString; var Size: LongWord; Order: BOOL): LongWord;
+  external 'GetIfTable@iphlpapi.dll stdcall';
 
 { The number at the start of a version part, such as 2 for '2rc1'. }
 function PartNumber(const Part: String): Integer;
@@ -278,19 +284,91 @@ begin
     Result := Result + 'downloading';
 end;
 
+{ The little-endian 32-bit number at a zero-based offset of a buffer. }
+function ReadDWord(const Buffer: AnsiString; Offset: Integer): Int64;
+begin
+  Result := Ord(Buffer[Offset + 4]);
+  Result := Result * 256 + Ord(Buffer[Offset + 3]);
+  Result := Result * 256 + Ord(Buffer[Offset + 2]);
+  Result := Result * 256 + Ord(Buffer[Offset + 1]);
+end;
+
+{ Add the bytes each network interface received since the last sample.
+  The download uses one interface, and Windows lists some interfaces more
+  than once, so the busiest interface counts, not the sum. Each MIB_IFROW
+  is 860 bytes: its type is at 516 (24 is loopback) and the received
+  bytes, a 32-bit counter that wraps, at 552. }
+procedure SampleNetwork();
+var
+  Buffer: AnsiString;
+  Size: LongWord;
+  Count, I, Row: Integer;
+  Octets, Delta: Int64;
+begin
+  Size := 0;
+  GetIfTable('', Size, True);
+  if Size = 0 then
+    Exit;
+  SetLength(Buffer, Size);
+  if GetIfTable(Buffer, Size, True) <> 0 then
+    Exit;
+  Count := ReadDWord(Buffer, 0);
+  if 4 + Count * 860 > Length(Buffer) then
+    Exit;
+  if Count <> GetArrayLength(NetPrevious) then
+  begin
+    SetArrayLength(NetPrevious, Count);
+    SetArrayLength(NetReceived, Count);
+    for I := 0 to Count - 1 do
+    begin
+      NetPrevious[I] := -1;
+      NetReceived[I] := 0;
+    end;
+  end;
+  for I := 0 to Count - 1 do
+  begin
+    Row := 4 + I * 860;
+    if ReadDWord(Buffer, Row + 516) = 24 then
+      Continue;
+    Octets := ReadDWord(Buffer, Row + 552);
+    if NetPrevious[I] >= 0 then
+    begin
+      Delta := Octets - NetPrevious[I];
+      if Delta < 0 then
+        Delta := Delta + 4294967296;
+      NetReceived[I] := NetReceived[I] + Delta;
+    end;
+    NetPrevious[I] := Octets;
+    if NetReceived[I] div 1024 > ReceivedKiB then
+      ReceivedKiB := NetReceived[I] div 1024;
+  end;
+end;
+
+{ What has been downloaded: at least the finished files, and the bytes
+  received while files are still coming, short of the whole total. }
+function DownloadedKiB(): Int64;
+begin
+  Result := ReceivedKiB;
+  if Result > TotalKiB * 99 div 100 then
+    Result := TotalKiB * 99 div 100;
+  if Result < DoneKiB then
+    Result := DoneKiB;
+end;
+
 { Show the percentage, the downloaded size and an estimate of the time
-  left. Downloads fill nine tenths of the step; installing them the rest. }
+  left. Downloads fill 95% of the step; installing them the rest. }
 procedure UpdateProgress();
 var
   Position: Integer;
-  Elapsed: Int64;
+  Elapsed, Downloaded: Int64;
   Heading, Details: String;
 begin
+  Downloaded := DownloadedKiB();
   Position := StepLow;
   if Installing then
-    Position := StepLow + (StepHigh - StepLow) * 9 div 10
+    Position := StepLow + (StepHigh - StepLow) * 19 div 20
   else if TotalKiB > 0 then
-    Position := StepLow + (StepHigh - StepLow) * 9 * DoneKiB div TotalKiB div 10;
+    Position := StepLow + (StepHigh - StepLow) * 19 * Downloaded div TotalKiB div 20;
   { New downloads add to the total; the bar never moves back. }
   if Position > Shown then
     Shown := Position;
@@ -302,14 +380,13 @@ begin
     Heading := 'Downloading packages';
   if (TotalKiB > 0) and not Installing then
   begin
-    Details := Details + ', ' + ShowSize(DoneKiB) + ' of ' +
+    Details := Details + ', ' + ShowSize(Downloaded) + ' of ' +
       ShowSize(TotalKiB) + ' downloaded';
     Elapsed := GetTickCount() - DownloadTick;
-    { Early on, many downloads have started and few finished, so wait
-      for a twentieth of the total before estimating. }
-    if (DoneKiB * 20 >= TotalKiB) and (Elapsed >= 10000) then
+    { Estimate from the download speed once it has settled. }
+    if (Downloaded * 50 >= TotalKiB) and (Elapsed >= 10000) then
       Details := Details + ', about ' + ShowMinutes(Elapsed *
-        (TotalKiB - DoneKiB) div DoneKiB div 1000) + ' left';
+        (TotalKiB - Downloaded) div Downloaded div 1000) + ' left';
   end
   else
     Details := Details + ', ' + ShowMinutes((GetTickCount() - PageTick) div 1000)
@@ -320,6 +397,7 @@ end;
 { Refresh the time every second, also while uv prints nothing. }
 procedure OnTimer(Arg1, Arg2, Arg3, Arg4: LongWord);
 begin
+  SampleNetwork();
   UpdateProgress();
 end;
 
@@ -331,17 +409,18 @@ begin
     Result := Result - 1;
 end;
 
-{ Each line uv prints: keep it in the log and follow the downloads. uv
+{ Each line uv prints: follow the downloads and keep it in the log. uv
   prints 'Downloading torch (2.3GiB)' when a large download starts,
   'Downloaded torch' when it ends and 'Prepared 152 packages' before
-  installing them; other lines are shown as they are. }
+  installing them; other lines are shown as they are. The log keeps what
+  was downloaded, as 'Downloaded torch (2.3 GiB)', not what started. }
 procedure ShowUvLine(const S: String; const Error, FirstLine: Boolean);
 var
-  Line, Name: String;
+  Line, Name, Logged: String;
   I, Cut: Integer;
 begin
-  SaveStringToFile(InstallLog, S + #13#10, True);
   Line := Trim(S);
+  Logged := S;
   Cut := LastParen(Line);
   if (Pos('Downloading ', Line) = 1) and (Cut > 12) then
   begin
@@ -353,6 +432,7 @@ begin
     Sizes[I] := SizeKiB(Copy(Line, Cut + 2, Length(Line) - Cut - 2));
     Done[I] := False;
     TotalKiB := TotalKiB + Sizes[I];
+    Logged := '';
     if I = 0 then
       DownloadTick := GetTickCount();
     { The newest download goes on top. }
@@ -368,6 +448,7 @@ begin
         DoneKiB := DoneKiB + Sizes[I];
         { Only this line changes, so the list keeps its scroll position. }
         DownloadList.Lines[GetArrayLength(Names) - 1 - I] := Bullet(I);
+        Logged := 'Downloaded ' + Names[I] + ' (' + ShowSize(Sizes[I]) + ')';
         Break;
       end;
   end
@@ -378,6 +459,8 @@ begin
   end
   else if Line <> '' then
     Activity := Line;
+  if Logged <> '' then
+    SaveStringToFile(InstallLog, Logged + #13#10, True);
   UpdateProgress();
 end;
 
@@ -398,6 +481,10 @@ begin
   DoneKiB := 0;
   Installing := False;
   DownloadList.Lines.Clear();
+  SetArrayLength(NetPrevious, 0);
+  SetArrayLength(NetReceived, 0);
+  ReceivedKiB := 0;
+  SampleNetwork();
   UpdateProgress();
   Command := 'set "UV_PYTHON_INSTALL_DIR=' + RuntimeRoot() + '\python"' +
     ' && set "UV_CACHE_DIR=' + RuntimeRoot() + '\uv-cache"' +
