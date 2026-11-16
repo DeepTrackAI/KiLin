@@ -126,8 +126,9 @@ and from the history policies configured in project types.
 Owned by `kilin/rag.py`. These settings affect RAG execution and the number
 of evidence items retained when reusing or supplementing earlier answers.
 They are package-level policies, not retrieval counts stored in a project
-profile. All four evidence limits, the extra searches and the embedding
-batch size must be positive integers.
+profile. All four evidence limits and the embedding batch size must be positive
+integers. `EXTRA_SEARCHES` may be zero to disable the check; the two
+check-size limits must be positive.
 
 | Key | Current value | Meaning |
 | --- | --- | --- |
@@ -136,7 +137,9 @@ batch size must be positive integers.
 | `MAX_RELATED_EVIDENCE` | `10` | Maximum extra items from related answers added to newly retrieved evidence. |
 | `UNCITED_RELATED_EVIDENCE` | `3` | Number of items taken from a related turn when its answer cites none of its evidence. |
 | `MAX_EARLIER_TURNS` | `6` | Most earlier turns inspected when a tool request refers to earlier conversation content; this does not configure individual tools. |
-| `EXTRA_SEARCHES` | `1` | Most times an ordinary search answer reads further down its ranking when the answering model says the passages found do not answer the question. Each round asks for one more page of `retrieval_count` results. Applies only when routing is on; tools have their own settings. |
+| `EXTRA_SEARCHES` | `1` | Maximum additional ranked pages for an ordinary routed *hybrid* search answer, after a bounded yes/no check. `0` disables checking; source-first answers already fill their configured hard budget and are not re-searched. |
+| `MAX_EVIDENCE_CHECK_CHARACTERS` | `12000` | Maximum characters in the complete evidence-check prompt; oversize checks are skipped without dropping passages. Character limits are deterministic, not exact tokenizer limits. |
+| `MAX_EXPANDED_RESULTS` | `64` | Maximum hybrid retrieval-result count requested when expanding a search, unless the initial `retrieval_count` is already higher. Does not cap the user's initial retrieval request. |
 | `PROGRESS_MIN_INTERVAL_SECONDS` | `0.15` | Minimum interval between ordinary user-facing progress notifications; must be a finite positive number. |
 | `PROGRESS_TRACE_PERCENT_STEP` | `5.0` | Percentage-point increment used to throttle progress trace events; must be finite, positive, and no greater than 100. |
 

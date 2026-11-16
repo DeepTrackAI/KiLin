@@ -49,6 +49,27 @@ class TestPassagesAnswer(unittest.TestCase):
         self.assertIn("Question: Which software?", prompt)
         self.assertLess(tokens, 16)
 
+    def test_large_prompt_skips_check_without_dropping_passages(
+        self,
+    ) -> None:
+        """A partial check must not give a false negative."""
+
+        ask = Mock(return_value="no")
+        result = passages_answer(
+            "Which software?", ["X" * 2000], ask,
+            max_characters=500,
+        )
+        self.assertIsNone(result)
+        ask.assert_not_called()
+
+    def test_invalid_check_budget_is_rejected(self) -> None:
+        """Require a positive exact integer input cap."""
+
+        for value in (0, -1, True, 1.3):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                passages_answer("Question", ["Evidence"], Mock(),
+                                max_characters=value)
+
     def test_failed_call_is_unclear(self) -> None:
         """A router error never stops the answer."""
 
@@ -107,6 +128,17 @@ class TestRankUntilAnswered(unittest.TestCase):
 
         picked, searches, _ = self._rank(["perhaps"])
         self.assertEqual((picked, searches), ([4, 3], 0))
+
+    def test_oversized_check_does_not_expand_results(self) -> None:
+        """Keep the first page when the prompt is too long to judge."""
+
+        ask = Mock(return_value="no")
+        picked, searches = rank_until_answered(
+            "Q", self.ranked, ["X" * 1000] * 5,
+            page=2, rounds=1, ask=ask, max_characters=200,
+        )
+        self.assertEqual((picked, searches), ([4, 3], 0))
+        ask.assert_not_called()
 
     def test_zero_rounds_and_short_rankings_skip_the_check(self) -> None:
         """Ask nothing when no search again is possible."""

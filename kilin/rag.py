@@ -187,6 +187,7 @@ from kilin.answer_timeline import (
 from kilin.defaults import (
     load_defaults_section,
     require_default_int,
+    require_default_nonnegative_int,
     require_default_number,
 )
 from kilin.answering import (
@@ -456,8 +457,14 @@ _MAX_EARLIER_TURNS: Final[int] = require_default_int(
 )
 # Most times a search reads further down its ranking when the answering
 # model says the passages found do not answer the question.
-_EXTRA_SEARCHES: Final[int] = require_default_int(
+_EXTRA_SEARCHES: Final[int] = require_default_nonnegative_int(
     _RAG_DEFAULTS, "EXTRA_SEARCHES", "RAG"
+)
+_MAX_EVIDENCE_CHECK_CHARACTERS: Final[int] = require_default_int(
+    _RAG_DEFAULTS, "MAX_EVIDENCE_CHECK_CHARACTERS", "RAG"
+)
+_MAX_EXPANDED_RESULTS: Final[int] = require_default_int(
+    _RAG_DEFAULTS, "MAX_EXPANDED_RESULTS", "RAG"
 )
 # A citation group in an answer, such as "[2]" or "[1, 3]".
 _CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
@@ -1947,9 +1954,18 @@ class RAGSession:
                     # A single inferred focus must not silently narrow an
                     # explicit request about every source in the project.
                     scope = ()
+                # The query embedding is shared by initial and wider
+                # hybrid retrieval. Source-first already selects passages
+                # within its full hard budget, so it never widens here.
+                query_vectors: dict[str, list[float]] = {}
                 search = partial(
                     self._retrieve,
                     search_text,
+                    **(
+                        {"_query_vectors": query_vectors}
+                        if source_limits is None and use_router
+                        and _EXTRA_SEARCHES else {}
+                    ),
                     trace_turn_id=turn_id,
                     status_callback=lambda message: report_phase(
                         ANSWER_PHASE_RETRIEVING, message=message
@@ -1979,11 +1995,23 @@ class RAGSession:
                 # answering model says the passages found do not answer,
                 # read further down the same ranking of the user's words.
                 searches = 0
-                while use_router and searches < _EXTRA_SEARCHES:
+                # Source-first already uses its complete source and
+                # passage budget, so asking for more results cannot help.
+                # Hybrid searches can widen within a separate hard cap.
+                while (
+                    use_router and source_limits is None
+                    and searches < _EXTRA_SEARCHES and evidence
+                ):
+                    next_count = min(
+                        page * (searches + 2),
+                        max(page, _MAX_EXPANDED_RESULTS),
+                    )
+                    if next_count <= page * (searches + 1):
+                        break
                     texts = [item.text for item in evidence]
-                    # Only a clear "no" reads further.
                     if passages_answer(
-                        question, texts, self._ask_check
+                        question, texts, self._ask_check,
+                        max_characters=_MAX_EVIDENCE_CHECK_CHARACTERS,
                     ) is not False:
                         break
                     searches += 1
@@ -1991,13 +2019,13 @@ class RAGSession:
                         ANSWER_PHASE_RETRIEVING,
                         message="Searching further",
                     )
-                    wider = search(page * (searches + 1))
+                    wider = search(next_count)
                     trace.emit(
                         "retrieval.search_again",
                         component="rag",
                         data={
                             "round": searches,
-                            "retrieval_count": page * (searches + 1),
+                            "retrieval_count": next_count,
                             "evidence_count": len(wider),
                         },
                         turn_id=turn_id,
@@ -3944,6 +3972,7 @@ class RAGSession:
         source_limits: EvidenceLimits | None = None,
         source_report: dict[str, object] | None = None,
         card_kinds: tuple[str, ...] = (),
+        _query_vectors: dict[str, list[float]] | None = None,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -3989,6 +4018,10 @@ class RAGSession:
         card_kinds: tuple[str, ...], optional
             Only these card kinds participate in source-first discovery.
             Empty permits every kind. Defaults to ``()``.
+        _query_vectors: dict[str, list[float]] | None, optional
+            Request-local cache of embeddings for repeated retrieval of
+            the exact same formatted question. Never persisted or reused
+            across turns. Defaults to ``None``.
 
         Returns
         -------
@@ -4094,7 +4127,10 @@ class RAGSession:
             report("Embedding the query and running semantic search")
             # Source-card ranking reuses the semantic query embedding.
             vector_index = getattr(self, "source_card_vectors", None)
-            query_vector = None
+            query_vector = (
+                _query_vectors.get(query_text)
+                if _query_vectors is not None else None
+            )
             has_source_cards = (
                 isinstance(vector_index, SourceCardVectorIndex)
                 and any(
@@ -4102,7 +4138,10 @@ class RAGSession:
                     for entry in vector_index.records
                 )
             )
-            if source_first is not None and has_source_cards:
+            if query_vector is None and (
+                _query_vectors is not None
+                or (source_first is not None and has_source_cards)
+            ):
                 query_vector = (
                     self.embedding_session.embed_query(query_text)
                     if trace_turn_id is None
@@ -4110,6 +4149,8 @@ class RAGSession:
                         query_text, trace_turn_id=trace_turn_id
                     )
                 )
+                if _query_vectors is not None:
+                    _query_vectors[query_text] = query_vector
             # The loop scorer already ranks every chunk. Retain its scores
             # for focused retrieval and expansion, without embedding again.
             semantic_results = semantic_search(

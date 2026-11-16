@@ -161,6 +161,9 @@ class FactSettings:
         For a quick answer from ranked passages, most times the next-ranked
         passages are added when the answering model says the passages found
         do not answer (0-5; 0 turns the check off).
+    max_check_characters: int
+        Maximum characters in the evidence-check prompt (128-100000).
+        Oversized checks are skipped without dropping evidence.
 
     """
 
@@ -169,6 +172,7 @@ class FactSettings:
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
     extra_searches: int = _config.DEFAULT_EXTRA_SEARCHES
+    max_check_characters: int = _config.DEFAULT_MAX_CHECK_CHARACTERS
 
 
 def parse_settings(data: dict, where: str) -> FactSettings:
@@ -199,6 +203,7 @@ def parse_settings(data: dict, where: str) -> FactSettings:
         "confirmation",
         "large_batches",
         "extra_searches",
+        "max_check_characters",
     )
     reject_unknown(where, data, names)
 
@@ -222,6 +227,10 @@ def parse_settings(data: dict, where: str) -> FactSettings:
         ),
         extra_searches=check_int(
             where, data, "extra_searches", defaults.extra_searches, 0, 5
+        ),
+        max_check_characters=check_int(
+            where, data, "max_check_characters",
+            defaults.max_check_characters, 128, 100000,
         ),
     )
 
@@ -333,11 +342,11 @@ def run(
     budget = all_parts[: settings.max_model_calls]
 
     order = {chunk.identifier: index for index, chunk in enumerate(passages)}
-    ranking = [
+    ranking = list(dict.fromkeys(
         order[result.chunk.identifier]
         for result in context.rank(request.text)
         if result.chunk.identifier in order
-    ]
+    ))
     ranked = ranking[: context.retrieval_count]
 
     # Quick: when the question names exact terms, only the passages that
@@ -374,11 +383,26 @@ def run(
         )
         if missing:
             note = f"{term_label(missing, ())[1]}. {note}"
+        # Estimate the worst-case selected passages, including the one
+        # optional check and further ranked pages, before confirmation.
+        quick_limit = min(
+            len(ranking),
+            context.retrieval_count * (settings.extra_searches + 1),
+        )
+        potential = ranking[:quick_limit]
+        if settings.extra_searches and len(ranking) > len(ranked):
+            note += f"; may inspect up to {len(potential)} passages"
         quick_seconds = (
             _QUICK_ANSWER_SECONDS
-            + sum(estimate_tokens(texts[index]) for index in ranked)
+            + sum(estimate_tokens(texts[index]) for index in potential)
             / _PROMPT_TOKENS_PER_SECOND
         )
+        if settings.extra_searches and len(ranking) > len(ranked):
+            quick_seconds += (
+                _CALL_SECONDS
+                + settings.max_check_characters
+                / 4 / _PROMPT_TOKENS_PER_SECOND
+            )
 
     plan = ToolPlan(
         tool="find_fact",
@@ -396,7 +420,7 @@ def run(
         batches=len(all_parts),
         batches_to_run=len(budget),
         estimated_seconds=round(_estimate(budget, texts), 1),
-        quick_items=len(hits) if terms else len(ranked),
+        quick_items=len(hits) if terms else len(potential),
         quick_seconds=round(quick_seconds, 1),
         details=(f"Model: {context.model_id}",),
         quick_label=label,
@@ -441,6 +465,7 @@ def run(
             page=context.retrieval_count,
             rounds=settings.extra_searches,
             ask=context.ask_check or context.ask_router,
+            max_characters=settings.max_check_characters,
         )
         summary["extra_searches"] = searches
         numbering = {

@@ -61,6 +61,7 @@ __all__ = ["passages_answer", "rank_until_answered"]
 
 # The model replies with one word; a few tokens leave room for "Yes.".
 _CHECK_MAX_TOKENS: Final[int] = 8
+_MAX_CHECK_CHARACTERS: Final[int] = 12000
 _FIRST_WORD: Final[re.Pattern[str]] = re.compile(r"[a-z]+")
 
 
@@ -68,6 +69,8 @@ def passages_answer(
     question: str,
     passages: Sequence[str],
     ask: Callable[[str, str, int], str],
+    *,
+    max_characters: int = _MAX_CHECK_CHARACTERS,
 ) -> bool | None:
     """Tell whether passages answer a question, according to a model.
 
@@ -80,15 +83,21 @@ def passages_answer(
     ask: Callable[[str, str, int], str]
         Asks a model ``(system, prompt, max_new_tokens)`` with thinking
         off, such as ``ToolContext.ask_check``.
+    max_characters: int, optional
+        Maximum characters in the complete checking prompt. Larger
+        evidence selections skip the check, not silently omit passages.
+        Defaults to ``12000``.
 
     Returns
     -------
     bool | None
-        True for "yes", False for "no"; None when the call fails or the
-        reply starts with neither word.
+        True for "yes", False for "no"; None when the call fails, the
+        prompt is too long, or the reply starts with neither word.
 
     """
 
+    if type(max_characters) is not int or max_characters < 1:
+        raise ValueError("max_characters must be positive.")
     system = (
         "You check search results for KíLín. You never answer the "
         "question. You reply with one word: yes or no."
@@ -108,6 +117,10 @@ Question: {question}
 
 Do these passages state what is needed to answer the question? Reply yes
 or no."""
+    if len(system) + len(prompt) > max_characters:
+        # A partial selection could create a spurious "no" and widen
+        # retrieval unnecessarily. Preserve the evidence and answer.
+        return None
     try:
         reply = ask(system, prompt, _CHECK_MAX_TOKENS)
     except Exception:  # A failed check must not stop the answer.
@@ -126,6 +139,7 @@ def rank_until_answered(
     page: int,
     rounds: int,
     ask: Callable[[str, str, int], str],
+    max_characters: int = _MAX_CHECK_CHARACTERS,
 ) -> tuple[list[int], int]:
     """Take more ranked passages until they answer the question.
 
@@ -143,6 +157,9 @@ def rank_until_answered(
         Most searches again; zero takes the first page without a check.
     ask: Callable[[str, str, int], str]
         Asks a model with thinking off, as for ``passages_answer``.
+    max_characters: int, optional
+        Maximum characters of the complete check prompt. Defaults to
+        ``12000``.
 
     Returns
     -------
@@ -152,12 +169,18 @@ def rank_until_answered(
 
     """
 
+    if type(page) is not int or page < 1:
+        raise ValueError("page must be positive.")
+    if type(rounds) is not int or rounds < 0:
+        raise ValueError("rounds must be nonnegative.")
     picked = list(ranked[:page])
     searches = 0
     while searches < rounds and len(picked) < len(ranked):
         found = [texts[index] for index in picked]
         # Only a clear "no" reads further; an unclear reply is enough.
-        if passages_answer(question, found, ask) is not False:
+        if passages_answer(
+            question, found, ask, max_characters=max_characters
+        ) is not False:
             break
         searches += 1
         picked = list(ranked[: page * (searches + 1)])

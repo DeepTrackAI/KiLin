@@ -324,6 +324,10 @@ class TestCoreDefaultIntegration(unittest.TestCase):
             "UNCITED_RELATED_EVIDENCE": rag._UNCITED_RELATED_EVIDENCE,
             "MAX_EARLIER_TURNS": rag._MAX_EARLIER_TURNS,
             "EXTRA_SEARCHES": rag._EXTRA_SEARCHES,
+            "MAX_EVIDENCE_CHECK_CHARACTERS": (
+                rag._MAX_EVIDENCE_CHECK_CHARACTERS
+            ),
+            "MAX_EXPANDED_RESULTS": rag._MAX_EXPANDED_RESULTS,
         }
         self.assertEqual(values, settings)
 

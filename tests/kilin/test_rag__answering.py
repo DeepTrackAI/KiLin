@@ -200,6 +200,62 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertEqual(len(turn.evidence), 2)
         self.assertEqual(turn.parameters["extra_searches"], 1)
 
+    def test_source_first_does_not_retry_a_fixed_evidence_budget(
+        self,
+    ) -> None:
+        """No redundant check or embedding when limits fix the result."""
+
+        session = _session()
+        intent = replace(_intent(), retrieval_strategy="source_first")
+        with _answer_patches(session, intent) as mocks, patch.object(
+            session, "_ask_check", return_value="no"
+        ) as ask, patch.object(rag, "summarize_answer", return_value=None):
+            session.ask("Which software?", use_router=True)
+        mocks.retrieve.assert_called_once()
+        ask.assert_not_called()
+        self.assertNotIn(
+            "extra_searches", session.turns[-1].parameters
+        )
+
+    def test_oversize_check_and_zero_searches_skip_model_calls(self) -> None:
+        """Avoid model calls that cannot usefully expand evidence."""
+
+        for zero, oversized in ((True, False), (False, True)):
+            with self.subTest(zero=zero, oversized=oversized):
+                session = _session()
+                evidence = _evidence(
+                    text="X" * 20000 if oversized else "X"
+                )
+                with _answer_patches(session, _intent()) as mocks, \
+                        patch.object(session, "_ask_check") as ask, \
+                        patch.object(rag, "summarize_answer",
+                                     return_value=None), \
+                        patch.object(rag, "_EXTRA_SEARCHES",
+                                     0 if zero else 1):
+                    mocks.retrieve.return_value = (evidence,)
+                    session.ask("Which software?", use_router=True)
+                mocks.retrieve.assert_called_once()
+                ask.assert_not_called()
+
+    def test_wider_search_respects_the_global_result_cap(self) -> None:
+        """Expansion never requests more than the configured count cap."""
+
+        session = _session()
+        with _answer_patches(session, _intent()) as mocks, patch.object(
+            session, "_ask_check", return_value="no"
+        ), patch.object(rag, "summarize_answer", return_value=None), \
+                patch.object(rag, "_MAX_EXPANDED_RESULTS", 3):
+            mocks.retrieve.side_effect = [
+                (_evidence(),),
+                (_evidence(), _evidence(start=10)),
+            ]
+            session.ask("Which software?", retrieval_count=2,
+                        use_router=True)
+        self.assertEqual(
+            [call.args[1] for call in mocks.retrieve.call_args_list],
+            [2, 3],
+        )
+
     def test_check_asks_the_answering_model_without_thinking(self) -> None:
         """Judge the passages with the user's model, thinking off."""
         session = _session()

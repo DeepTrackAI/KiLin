@@ -25,6 +25,11 @@
       "title": "Extra searches",
       "summary": "Sets how many times a quick answer reads further down the search results.",
       "description": "Before a quick answer from the best-ranked passages, the answering model checks whether they answer the question. If not, the next-ranked passages are added, up to this many times. Zero turns the check off."
+    },
+    "max_check_characters": {
+      "title": "Maximum check characters",
+      "summary": "Caps evidence-check prompt length for quick answers.",
+      "description": "An oversized evidence-check prompt is skipped; the selected passages are not truncated."
     }
   }
 }

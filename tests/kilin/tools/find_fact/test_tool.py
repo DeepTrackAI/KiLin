@@ -180,6 +180,43 @@ class TestFindFact(unittest.TestCase):
         self.assertEqual(plan.quick_label, "Quick answer")
         self.assertIn("No passage mentions", plan.quick_note)
 
+    def test_quick_plan_estimates_optional_extra_page(self) -> None:
+        """Show a worst-case passage count before the user confirms."""
+
+        passages = [
+            chunk(str(i), f"Passage number {i}", path="paper.md")
+            for i in range(5)
+        ]
+        context = _quick_context(passages, [])
+        context.retrieval_count = 2
+        context.ask_check = Mock(return_value="yes")
+        tool.run(
+            tool.FactSettings(), ToolRequest("Which?", "Which?"),
+            context,
+        )
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual(plan.quick_items, 4)
+        self.assertIn("up to 4 passages", plan.quick_note)
+        self.assertGreater(plan.quick_seconds, 0)
+        context.ask_check.assert_called_once()
+
+    def test_quick_search_zero_disables_check(self) -> None:
+        """One extra page is a default, not a mandatory model call."""
+
+        passages = [
+            chunk(str(i), f"Passage number {i}", path="paper.md")
+            for i in range(5)
+        ]
+        context = _quick_context(passages, [])
+        context.ask_check = Mock(return_value="no")
+        result = tool.run(
+            tool.FactSettings(extra_searches=0),
+            ToolRequest("Which?", "Which?"), context,
+        )
+        context.ask_check.assert_not_called()
+        self.assertEqual(result.summary["extra_searches"], 0)
+        self.assertEqual(context.confirm.call_args.args[0].quick_items, 2)
+
     def test_quick_answer_reads_further_when_not_enough(self) -> None:
         """Add the next-ranked passages when the router says no.
 

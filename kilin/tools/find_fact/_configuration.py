@@ -58,6 +58,7 @@ __all__ = [
     "DEFAULT_CONFIRMATION",
     "DEFAULT_LARGE_BATCHES",
     "DEFAULT_EXTRA_SEARCHES",
+    "DEFAULT_MAX_CHECK_CHARACTERS",
     "PROMPT_TOKENS_PER_SECOND",
     "REPLY_TOKENS_PER_SECOND",
     "NOTES_PROMPT_TOKENS",
@@ -83,6 +84,7 @@ require_keys(
         "CONFIRMATION",
         "LARGE_BATCHES",
         "EXTRA_SEARCHES",
+        "MAX_CHECK_CHARACTERS",
     }, "find_fact.SETTINGS"
 )
 DEFAULT_PART_TOKENS: Final[int] = (
@@ -101,6 +103,12 @@ DEFAULT_LARGE_BATCHES: Final[int] = (
 )
 DEFAULT_EXTRA_SEARCHES: Final[int] = (
     require_int(_SETTINGS, "EXTRA_SEARCHES", "find_fact.SETTINGS", 0, 5)
+)
+DEFAULT_MAX_CHECK_CHARACTERS: Final[int] = (
+    require_int(
+        _SETTINGS, "MAX_CHECK_CHARACTERS", "find_fact.SETTINGS",
+        128, 100000,
+    )
 )
 _ESTIMATES = require_section(
     _DEFAULTS, "ESTIMATES", "find_fact"
