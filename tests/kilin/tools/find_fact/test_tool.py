@@ -36,6 +36,7 @@ def _quick_context(passages, terms):
     return SimpleNamespace(
         chunks=passages,
         ask_router=Mock(return_value=reply),
+        ask_check=None,
         rank=Mock(return_value=[
             HybridResult(1.0, passage, ("semantic",))
             for passage in reversed(passages)
@@ -178,6 +179,72 @@ class TestFindFact(unittest.TestCase):
         plan = context.confirm.call_args.args[0]
         self.assertEqual(plan.quick_label, "Quick answer")
         self.assertIn("No passage mentions", plan.quick_note)
+
+    def test_quick_plan_estimates_optional_extra_page(self) -> None:
+        """Show a worst-case passage count before the user confirms."""
+
+        passages = [
+            chunk(str(i), f"Passage number {i}", path="paper.md")
+            for i in range(5)
+        ]
+        context = _quick_context(passages, [])
+        context.retrieval_count = 2
+        context.ask_check = Mock(return_value="yes")
+        tool.run(
+            tool.FactSettings(), ToolRequest("Which?", "Which?"),
+            context,
+        )
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual(plan.quick_items, 4)
+        self.assertIn("up to 4 passages", plan.quick_note)
+        self.assertGreater(plan.quick_seconds, 0)
+        context.ask_check.assert_called_once()
+
+    def test_quick_search_zero_disables_check(self) -> None:
+        """One extra page is a default, not a mandatory model call."""
+
+        passages = [
+            chunk(str(i), f"Passage number {i}", path="paper.md")
+            for i in range(5)
+        ]
+        context = _quick_context(passages, [])
+        context.ask_check = Mock(return_value="no")
+        result = tool.run(
+            tool.FactSettings(extra_searches=0),
+            ToolRequest("Which?", "Which?"), context,
+        )
+        context.ask_check.assert_not_called()
+        self.assertEqual(result.summary["extra_searches"], 0)
+        self.assertEqual(context.confirm.call_args.args[0].quick_items, 2)
+
+    def test_quick_answer_reads_further_when_not_enough(self) -> None:
+        """Add the next-ranked passages when the router says no.
+
+        """
+
+        passages = [
+            chunk("a", "Introduction to brain networks.", path="a.md"),
+            chunk("b", "Graph measures and statistics.", path="a.md"),
+            chunk("c", "Implemented in MATLAB with C++ parts.", path="a.md"),
+        ]
+        question = "Which languages are used?"
+        context = _quick_context(passages, [])
+        context.retrieval_count = 1
+        context.ask_check = Mock(return_value="No.")
+
+        result = tool.run(
+            tool.FactSettings(), ToolRequest(question, question), context
+        )
+
+        prompt = context.write.call_args.args[1]
+        self.assertIn("[1] Graph measures", prompt)
+        self.assertIn("[2] Implemented in MATLAB", prompt)
+        self.assertEqual(result.summary["extra_searches"], 1)
+        check = context.ask_check.call_args.args[1]
+        self.assertIn("not the whole documents", check)
+        self.assertIn("[1] Implemented in MATLAB", check)
+        self.assertNotIn("Graph measures", check)
+        context.ask_router.assert_called_once()  # Only to name terms.
 
 
 if __name__ == "__main__":

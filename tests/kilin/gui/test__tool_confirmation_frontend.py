@@ -192,6 +192,24 @@ buttons[0].events.click();
 assert.deepEqual(commands, ['cancel']);
 """)
 
+    def test_repeat_choice_has_no_cancel_button(self) -> None:
+        """Routing choices require one of the two explicit options."""
+
+        self._run(r"""
+begin();
+showToolChoice({
+  question: 'How should I answer?',
+  options: ['Same way again', 'Try another way'],
+  allow_cancel: false,
+});
+const buttons = pendingTurn.prompt.querySelectorAll('button');
+assert.equal(buttons.length, 2);
+assert.equal(buttons[0].textContent, 'Same way again');
+assert.equal(buttons[1].textContent, 'Try another way');
+buttons[1].events.click();
+assert.deepEqual(commands, ['option:1']);
+""")
+
     def test_model_and_network_plans_require_an_explicit_choice(self):
         self._run(r"""
 for (const operation of ['model', 'network']) {

@@ -182,8 +182,8 @@ plan**, and prepares the selected source snapshots and provenance. The
 final initialization step. No tool-specific resource selection occurs in the GUI.
 
 The bundled types are Code Repository, Literature Collection, Writing,
-Creative Brainstorming (`brainstorming`), Grounded Brainstorming
-(`grounded_brainstorming`), and Reviewing Assistant. The two
+Brainstorming (Creative) (`creative_brainstorming`), Brainstorming
+(Grounded) (`grounded_brainstorming`), and Reviewing Assistant. The two
 brainstorming types share the same source layout but differ in
 whether ordinary ideation retrieves project evidence by default.
 

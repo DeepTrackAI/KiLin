@@ -3,6 +3,8 @@
   "description": "A scientific writing workspace for drafting, revising, researching, and checking manuscript text.",
   "extensions": [
     ".pdf",
+    ".doc",
+    ".docx",
     ".md",
     ".txt",
     ".py",

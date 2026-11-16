@@ -62,6 +62,12 @@ To open the desktop GUI, run the command:
 uv run kilin --gui
 ```
 
+If `uv: command not found` appears after setup, `uv` may be installed
+outside this terminal's `PATH` or reused from an earlier installation.
+Try opening a new terminal. If the command is still unavailable, use
+the full executable-path command printed by setup, or add that directory
+to `PATH`.
+
 The launcher installs missing GUI/backend dependencies; follow the setup
 panel to download the required models.
 

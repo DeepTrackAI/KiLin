@@ -245,6 +245,37 @@ class TestPackagedProjectTypes(unittest.TestCase):
                 self.assertTrue(definition.description)
                 self.assertTrue(definition.display_name)
 
+    def test_brainstorming_ids_and_labels_are_explicit(self) -> None:
+        """Creative and grounded brainstorming keep distinct type contracts.
+
+        """
+
+        types = load_project_types()
+        self.assertNotIn("brainstorming", types)
+        self.assertEqual(next(iter(types)), "code")
+        self.assertEqual(
+            types["creative_brainstorming"].display_name,
+            "Brainstorming (Creative)",
+        )
+        self.assertEqual(
+            types["grounded_brainstorming"].display_name,
+            "Brainstorming (Grounded)",
+        )
+        self.assertIn(
+            "open_ideation", types["creative_brainstorming"].intents
+        )
+        self.assertNotIn(
+            "open_ideation", types["grounded_brainstorming"].intents
+        )
+        for type_id in (
+            "creative_brainstorming", "grounded_brainstorming"
+        ):
+            with self.subTest(type_id=type_id):
+                self.assertEqual(
+                    project.default_project_profile(type_id).type_id,
+                    type_id,
+                )
+
     def test_packaged_intents_are_valid_and_usable(self) -> None:
         """Exercise parsed options for every current and future intent."""
 
@@ -283,7 +314,7 @@ class TestPackagedProjectTypes(unittest.TestCase):
         """Type defaults are explicit, including reviewing and writing."""
 
         expected_enabled = {
-            "writing", "brainstorming", "grounded_brainstorming",
+            "writing", "creative_brainstorming", "grounded_brainstorming",
             "reviewing",
         }
         for name, definition in load_project_types().items():
@@ -304,7 +335,7 @@ class TestPackagedProjectTypes(unittest.TestCase):
                         for intent in definition.intents.values())
                 )
         for name in (
-            "code", "literature", "brainstorming",
+            "code", "literature", "creative_brainstorming",
             "grounded_brainstorming",
         ):
             intent = project_type(name).intents["small_talk"]

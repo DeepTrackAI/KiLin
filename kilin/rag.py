@@ -146,6 +146,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import partial
 from hashlib import sha256
 import json
 from math import isfinite
@@ -186,11 +187,13 @@ from kilin.answer_timeline import (
 from kilin.defaults import (
     load_defaults_section,
     require_default_int,
+    require_default_nonnegative_int,
     require_default_number,
 )
 from kilin.answering import (
     MACHINE_STATE_ANSWERING,
     RouteDecision,
+    another_way_guidance,
     extract_thinking,
     history_messages,
     route_question,
@@ -198,6 +201,7 @@ from kilin.answering import (
     select_history,
     side_reply,
     strip_thinking,
+    summarize_answer,
     turn_representation,
 )
 from kilin.chat import (
@@ -222,6 +226,7 @@ from kilin.model_settings import read_router_model, validate_model_id
 from kilin.project_layout import source_scan_exclusions
 from kilin.workspace import include_explicit_imports
 from kilin.project_type import (
+    HISTORY_POLICY_NONE,
     HISTORY_POLICY_RECENT,
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_NONE,
@@ -331,6 +336,7 @@ from kilin.tools import (
 )
 from kilin.tools._shared.model_results import incomplete_notice
 from kilin.tools._shared.choose_document import document_scope
+from kilin.tools._shared.enough_evidence import passages_answer
 from kilin.tool_settings import with_project_settings
 from kilin.trace_logging import (
     TRACE_EVENT_PROGRESS_UPDATED,
@@ -448,6 +454,17 @@ _UNCITED_RELATED_EVIDENCE: Final[int] = require_default_int(
 # Earlier turns made available when resolving references in tool requests.
 _MAX_EARLIER_TURNS: Final[int] = require_default_int(
     _RAG_DEFAULTS, "MAX_EARLIER_TURNS", "RAG"
+)
+# Most times a search reads further down its ranking when the answering
+# model says the passages found do not answer the question.
+_EXTRA_SEARCHES: Final[int] = require_default_nonnegative_int(
+    _RAG_DEFAULTS, "EXTRA_SEARCHES", "RAG"
+)
+_MAX_EVIDENCE_CHECK_CHARACTERS: Final[int] = require_default_int(
+    _RAG_DEFAULTS, "MAX_EVIDENCE_CHECK_CHARACTERS", "RAG"
+)
+_MAX_EXPANDED_RESULTS: Final[int] = require_default_int(
+    _RAG_DEFAULTS, "MAX_EXPANDED_RESULTS", "RAG"
 )
 # A citation group in an answer, such as "[2]" or "[1, 3]".
 _CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
@@ -1644,10 +1661,45 @@ class RAGSession:
             excluded_turn_ids = self._excluded_history_turns(
                 self.turns, config=config
             )
-            route_options = (
+            route_options: dict[str, object] = (
                 {"excluded_turn_ids": excluded_turn_ids}
                 if excluded_turn_ids else {}
             )
+            if choice_callback is not None:
+                # Only the user knows why a question was asked twice. The
+                # page shows a choice from the processing phase that
+                # precedes it, as for tools (``ask_choice``).
+                def ask_user(
+                    text: str, options: tuple[str, ...]
+                ) -> int | None:
+                    """Show a routing question on the page, then wait.
+
+                    Parameters
+                    ----------
+                    text: str
+                        The question shown above the options.
+                    options: tuple[str, ...]
+                        The options, shown as buttons.
+
+                    Returns
+                    -------
+                    int | None
+                        The chosen index, or None when cancelled.
+
+                    """
+
+                    report_phase(
+                        ANSWER_PHASE_PROCESSING,
+                        message="Waiting for your choice",
+                        choice={
+                            "question": text,
+                            "options": list(options),
+                            "allow_cancel": False,
+                        },
+                    )
+                    return choice_callback(text, options)
+
+                route_options["choose"] = ask_user
             decision = self._route(
                 question, config, use_router, turn_id, report_phase,
                 **route_options,
@@ -1710,6 +1762,13 @@ class RAGSession:
                 resolved_guidance = answer_guidance
             else:
                 resolved_guidance = config.answer_guidance
+            if decision.another_way and decision.repeated_turn is not None:
+                # Only after the user chose "Try another way": say that the
+                # last answer missed, so the new one is not a copy of it.
+                resolved_guidance = " ".join(filter(None, (
+                    resolved_guidance,
+                    another_way_guidance(decision.repeated_turn),
+                )))
             if resolved_guidance or answer_guidance is not None:
                 effective["answer_guidance"] = resolved_guidance
             mode = intent.retrieval_mode
@@ -1895,9 +1954,18 @@ class RAGSession:
                     # A single inferred focus must not silently narrow an
                     # explicit request about every source in the project.
                     scope = ()
-                evidence = self._retrieve(
+                # The query embedding is shared by initial and wider
+                # hybrid retrieval. Source-first already selects passages
+                # within its full hard budget, so it never widens here.
+                query_vectors: dict[str, list[float]] = {}
+                search = partial(
+                    self._retrieve,
                     search_text,
-                    retrieval_count,
+                    **(
+                        {"_query_vectors": query_vectors}
+                        if source_limits is None and use_router
+                        and _EXTRA_SEARCHES else {}
+                    ),
                     trace_turn_id=turn_id,
                     status_callback=lambda message: report_phase(
                         ANSWER_PHASE_RETRIEVING, message=message
@@ -1921,6 +1989,52 @@ class RAGSession:
                         if source_limits is not None else {}
                     ),
                 )
+                page = effective["retrieval_count"]
+                evidence = search(page)
+                # The answer may rank just below the first page. When the
+                # answering model says the passages found do not answer,
+                # read further down the same ranking of the user's words.
+                searches = 0
+                # Source-first already uses its complete source and
+                # passage budget, so asking for more results cannot help.
+                # Hybrid searches can widen within a separate hard cap.
+                while (
+                    use_router and source_limits is None
+                    and searches < _EXTRA_SEARCHES and evidence
+                ):
+                    next_count = min(
+                        page * (searches + 2),
+                        max(page, _MAX_EXPANDED_RESULTS),
+                    )
+                    if next_count <= page * (searches + 1):
+                        break
+                    texts = [item.text for item in evidence]
+                    if passages_answer(
+                        question, texts, self._ask_check,
+                        max_characters=_MAX_EVIDENCE_CHECK_CHARACTERS,
+                    ) is not False:
+                        break
+                    searches += 1
+                    report_phase(
+                        ANSWER_PHASE_RETRIEVING,
+                        message="Searching further",
+                    )
+                    wider = search(next_count)
+                    trace.emit(
+                        "retrieval.search_again",
+                        component="rag",
+                        data={
+                            "round": searches,
+                            "retrieval_count": next_count,
+                            "evidence_count": len(wider),
+                        },
+                        turn_id=turn_id,
+                    )
+                    if len(wider) <= len(evidence):
+                        break  # The ranking has nothing further to add.
+                    evidence = wider
+                if searches:
+                    effective["extra_searches"] = searches
                 found = len(evidence)
                 related_turns = [
                     number
@@ -1928,7 +2042,11 @@ class RAGSession:
                     if 0 < number <= len(self.turns)
                     and number not in excluded_turn_ids
                 ]
-                if intent.include_related_evidence and related_turns:
+                if (
+                    intent.include_related_evidence
+                    and related_turns
+                    and not decision.another_way
+                ):
                     # Follow-ups keep the sources their earlier answers
                     # cited, whatever intent the router chose.
                     evidence = _add_related_evidence(
@@ -2381,6 +2499,23 @@ class RAGSession:
                 temperature=self.chat_session.temperature,
                 max_new_tokens=self.chat_session.max_new_tokens,
             )
+            # The router model writes the one-sentence summary the router
+            # reads for this turn later. Only routed turns are read by the
+            # router; small talk and failed answers keep the first sentence.
+            summary = None
+            if (
+                use_router
+                and not (
+                    intent.tool is None
+                    and intent.history_policy == HISTORY_POLICY_NONE
+                    and intent.retrieval_mode == RETRIEVAL_MODE_NONE
+                )
+                and effective.get("completion", {}).get("status")
+                != "incomplete"
+            ):
+                summary = summarize_answer(
+                    self._router_chat(), question, answer
+                )
             # Tokens the models read and generated for this answer.
             effective["usage"] = self.usage_since(usage)
             # The last recorded activity is the checkpoint boundary. Its
@@ -2399,7 +2534,11 @@ class RAGSession:
                 timeline=timeline,
             )
             # A compact summary lets the router find this turn later.
-            representation = turn_representation(turn, len(self.turns) + 1)
+            representation = turn_representation(
+                turn, len(self.turns) + 1, summary=summary
+            )
+            if summary is not None:
+                representation["summary_model"] = self.router_model
             effective["representation"] = representation
             trace.emit(
                 "conversation.turn.representation",
@@ -3833,6 +3972,7 @@ class RAGSession:
         source_limits: EvidenceLimits | None = None,
         source_report: dict[str, object] | None = None,
         card_kinds: tuple[str, ...] = (),
+        _query_vectors: dict[str, list[float]] | None = None,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -3878,6 +4018,10 @@ class RAGSession:
         card_kinds: tuple[str, ...], optional
             Only these card kinds participate in source-first discovery.
             Empty permits every kind. Defaults to ``()``.
+        _query_vectors: dict[str, list[float]] | None, optional
+            Request-local cache of embeddings for repeated retrieval of
+            the exact same formatted question. Never persisted or reused
+            across turns. Defaults to ``None``.
 
         Returns
         -------
@@ -3983,7 +4127,10 @@ class RAGSession:
             report("Embedding the query and running semantic search")
             # Source-card ranking reuses the semantic query embedding.
             vector_index = getattr(self, "source_card_vectors", None)
-            query_vector = None
+            query_vector = (
+                _query_vectors.get(query_text)
+                if _query_vectors is not None else None
+            )
             has_source_cards = (
                 isinstance(vector_index, SourceCardVectorIndex)
                 and any(
@@ -3991,7 +4138,10 @@ class RAGSession:
                     for entry in vector_index.records
                 )
             )
-            if source_first is not None and has_source_cards:
+            if query_vector is None and (
+                _query_vectors is not None
+                or (source_first is not None and has_source_cards)
+            ):
                 query_vector = (
                     self.embedding_session.embed_query(query_text)
                     if trace_turn_id is None
@@ -3999,6 +4149,8 @@ class RAGSession:
                         query_text, trace_turn_id=trace_turn_id
                     )
                 )
+                if _query_vectors is not None:
+                    _query_vectors[query_text] = query_vector
             # The loop scorer already ranks every chunk. Retain its scores
             # for focused retrieval and expansion, without embedding again.
             semantic_results = semantic_search(
@@ -4722,6 +4874,7 @@ class RAGSession:
             source_files=self._source_files,
             ask_router=self._ask_router,
             ask_model=ask_model,
+            ask_check=self._ask_check,
             model_attempt_count=lambda: len(model_calls),
             write=write,
             model_id=str(getattr(self.chat_session, "model_id", "")),
@@ -5499,6 +5652,7 @@ class RAGSession:
         report_phase: Callable[..., None],
         *,
         excluded_turn_ids: frozenset[int] = frozenset(),
+        choose: Callable[[str, tuple[str, ...]], int | None] | None = None,
     ) -> RouteDecision:
         """Classify a question's intent and trace the resulting decision.
 
@@ -5519,6 +5673,9 @@ class RAGSession:
             Callback notifying the frontend when intent classification starts.
         excluded_turn_ids: frozenset[int], optional
             Rejected saved turns, without changing their original numbers.
+        choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
+            Asks the user to pick one option, for a question asked twice in
+            a row. Defaults to ``None``: the router decides.
 
         Returns
         -------
@@ -5564,6 +5721,7 @@ class RAGSession:
                         {"excluded_turn_ids": excluded_turn_ids}
                         if excluded_turn_ids else {}
                     ),
+                    **({"choose": choose} if choose is not None else {}),
                 )
         intent = config.intents[decision.intent]
         data: dict[str, object] = {
@@ -5584,6 +5742,7 @@ class RAGSession:
             },
             "fallback": decision.fallback,
             "shortcut": decision.shortcut,
+            "repeated_turn": decision.repeated_turn,
             "duration_ms": round((perf_counter() - started) * 1000, 3),
         }
         if trace.include_content:
@@ -5659,6 +5818,36 @@ class RAGSession:
         """
 
         return self.router_reply(system, prompt, max_new_tokens=max_new_tokens)
+
+    def _ask_check(
+        self: RAGSession, system: str, prompt: str, max_new_tokens: int
+    ) -> str:
+        """Ask the answering model a short check, in the tools' call form.
+
+        The model that writes the answer judges best whether the passages
+        found are enough. A check needs one word, so thinking is off and
+        decoding greedy whatever the answer's settings; the answering
+        conversation and settings are restored afterwards.
+
+        Parameters
+        ----------
+        system: str
+            System instruction for the check only.
+        prompt: str
+            The check question.
+        max_new_tokens: int
+            Maximum length of the reply.
+
+        Returns
+        -------
+        str
+            The answering model's reply, without thinking text.
+
+        """
+
+        return side_reply(
+            self.chat_session, system, prompt, max_new_tokens=max_new_tokens
+        )
 
     def _new_chat_session(
         self: RAGSession, model_id: str, **settings: object
@@ -6725,6 +6914,9 @@ def _answer_prompt(
         "An alternative name match is not proof of identity: attribute it to "
         "its actual source and do not equate differently qualified symbols "
         "without supporting evidence. "
+        "The evidence is a search selection, not the whole documents: when "
+        "it does not state something, say the evidence does not state it, "
+        "not that the documents do not. "
         "Answer using the evidence above. Put [1], [2], and so on immediately "
         "after the claims they support. Cite only the evidence numbers "
         f"{cited}: numbers in brackets inside the evidence text are the "

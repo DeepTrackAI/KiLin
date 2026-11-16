@@ -18,7 +18,7 @@ from pathlib import Path
 import re
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from kilin import answering
 from kilin.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
@@ -206,6 +206,10 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
             "MAX_RELATED_TURNS": answering.MAX_RELATED_TURNS,
             "MAX_LISTED_TURNS": answering.MAX_LISTED_TURNS,
             "ROUTER_MAX_TOKENS": answering._ROUTER_MAX_TOKENS,
+            "SUMMARY_MAX_TOKENS": answering._SUMMARY_MAX_TOKENS,
+            "SUMMARY_ANSWER_MAX_CHARACTERS": (
+                answering._SUMMARY_ANSWER_MAX_CHARACTERS
+            ),
             "REPRESENTATION_MAX_CHARACTERS": (
                 answering._REPRESENTATION_MAX_CHARACTERS
             ),
@@ -247,6 +251,8 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
                 "MAX_RELATED_TURNS",
                 "MAX_LISTED_TURNS",
                 "ROUTER_MAX_TOKENS",
+                "SUMMARY_MAX_TOKENS",
+                "SUMMARY_ANSWER_MAX_CHARACTERS",
                 "REPRESENTATION_MAX_CHARACTERS",
                 "REPRESENTATION_MAX_SOURCES",
                 "SHORT_QUESTION_MAX_WORDS",
@@ -892,6 +898,269 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(decision.intent, self.config.default_intent)
 
 
+class TestRepeatedQuestions(unittest.TestCase):
+    """Test that the router is told when a question repeats a turn."""
+
+    def setUp(self) -> None:
+        """Create a conversation whose second of three turns used a tool."""
+
+        self.config = project_type("code")
+        self.turns = [
+            _turn("Explain the fit function", "Fit trains [1]. More."),
+            _turn("List every MRI scanner", "Two scanners [1]. More."),
+            _turn("Explain the predict function", "It predicts [1]. More."),
+        ]
+        self.turns[1].parameters = {"intent": "code_generation"}
+
+    def _route(
+        self,
+        question: str,
+        excluded: frozenset[int] = frozenset(),
+    ) -> tuple[answering.RouteDecision, str]:
+        """Route a question and return the router's user prompt.
+
+        Parameters
+        ----------
+        question: str
+            User question being classified.
+        excluded: frozenset[int], optional
+            Turns excluded from routing. Defaults to none.
+
+        Returns
+        -------
+        tuple[answering.RouteDecision, str]
+            The decision, and the prompt the router model received.
+
+        """
+
+        reply = '{"intent": "debugging", "standalone": true}'
+        with patch.object(
+            answering, "side_reply", return_value=reply
+        ) as side:
+            decision = answering.route_question(
+                object(), self.config, self.turns, question,
+                excluded_turn_ids=excluded,
+            )
+        return decision, side.call_args.args[2]
+
+    def test_router_is_told_about_a_repeat_and_decides(self) -> None:
+        """Name the turn and its intent; keep the router's choice."""
+
+        for question in (
+            "List every MRI scanner",
+            "list every mri scanner?",
+        ):
+            with self.subTest(question=question):
+                decision, prompt = self._route(question)
+                self.assertIn(
+                    "repeats turn 2, which was answered as code_generation.",
+                    prompt,
+                )
+                self.assertEqual(decision.repeated_turn, 2)
+                self.assertEqual(decision.intent, "debugging")
+
+    def test_repeat_of_the_last_turn_only_names_it(self) -> None:
+        """Without the user, the note never suggests another intent."""
+
+        del self.turns[2]
+        decision, prompt = self._route("List every MRI scanner")
+        self.assertIn(
+            "repeats turn 2, which was answered as code_generation.", prompt
+        )
+        self.assertNotIn("different", prompt.split("New question:")[1])
+        self.assertEqual(decision.repeated_turn, 2)
+
+    def test_user_chooses_how_to_answer_a_back_to_back_repeat(self) -> None:
+        """Same way reuses the saved route; another way reroutes."""
+
+        del self.turns[2]
+        self.turns[1].parameters = {
+            "intent": "project_inventory",
+            "standalone": True,
+            "related_turn_ids": [],
+        }
+        reply = '{"intent": "debugging", "standalone": true}'
+        for choice, intent, asked in (
+            (0, "project_inventory", False),
+            (1, "debugging", True),
+        ):
+            with self.subTest(choice=choice):
+                choose = Mock(return_value=choice)
+                with patch.object(
+                    answering, "side_reply", return_value=reply
+                ) as side:
+                    decision = answering.route_question(
+                        object(), self.config, self.turns,
+                        "List every MRI scanner", choose=choose,
+                    )
+                question, options = choose.call_args.args
+                self.assertIn("right after the last answer", question)
+                self.assertEqual(
+                    options,
+                    ("Same way again (Project inventory)", "Try another way"),
+                )
+                self.assertEqual(decision.intent, intent)
+                self.assertEqual(decision.repeated_turn, 2)
+                self.assertEqual(decision.another_way, asked)
+                self.assertEqual(side.called, asked)
+                if asked:
+                    intents = side.call_args.args[2].split("Earlier")[0]
+                    self.assertNotIn("- project_inventory:", intents)
+                    # Reuse intents would answer from the same passages.
+                    self.assertNotIn("- conversation_followup:", intents)
+                    self.assertNotIn("- rephrase_previous:", intents)
+                    self.assertIn("- debugging:", intents)
+
+    def test_cancelled_or_unusable_choice_leaves_it_to_the_router(
+        self,
+    ) -> None:
+        """Route with the repeat note when the user cancels."""
+
+        del self.turns[2]
+        self.turns[1].parameters = {
+            "intent": "project_inventory",
+            "standalone": True,
+            "related_turn_ids": [],
+        }
+        choose = Mock(return_value=None)
+        reply = '{"intent": "debugging", "standalone": true}'
+        with patch.object(answering, "side_reply", return_value=reply):
+            decision = answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=choose,
+            )
+        self.assertEqual(decision.intent, "debugging")
+
+        # Without a saved route there is nothing to repeat, so no question.
+        self.turns[1].parameters = {}
+        choose.reset_mock()
+        with patch.object(answering, "side_reply", return_value=reply):
+            answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=choose,
+            )
+        choose.assert_not_called()
+
+    def test_earlier_repeats_are_not_asked_about(self) -> None:
+        """Only a question asked twice in a row asks the user."""
+
+        choose = Mock(return_value=0)
+        reply = '{"intent": "debugging", "standalone": true}'
+        with patch.object(answering, "side_reply", return_value=reply):
+            answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=choose,
+            )
+        choose.assert_not_called()
+
+    def test_back_to_back_repeat_counts_even_when_it_points_back(
+        self,
+    ) -> None:
+        """Right after the same question, "they" means the same thing."""
+
+        self.turns[2].question = "Which dataset did they use?"
+        decision, prompt = self._route("which dataset did they use")
+        self.assertEqual(decision.repeated_turn, 3)
+        self.assertIn("repeats turn 3", prompt)
+
+    def test_singular_and_plural_are_different_for_repeat_matching(
+        self,
+    ) -> None:
+        """Plural heuristics must not trigger a repeat-choice dialog."""
+
+        decision, _ = self._route("List every MRI scanners")
+        self.assertIsNone(decision.repeated_turn)
+        self.assertEqual(answering._singular("studies"), "study")
+        for word in ("analysis", "process", "corpus", "gas"):
+            with self.subTest(word=word):
+                self.assertEqual(answering._singular(word), word)
+
+    def test_repeats_preserve_negation_order_names_and_counts(self) -> None:
+        """Avoid offering rerouting for semantically distinct questions."""
+
+        pairs = (
+            ("Use model A", "Do not use model A"),
+            ("The result works", "The result does not work"),
+            ("What is the new result?", "What is the news result?"),
+            ("List 2 scanners", "List 3 scanners"),
+            ("Model A compares with B", "Model B compares with A"),
+            ("Use MRI once", "Use MRI twice"),
+        )
+        for earlier, question in pairs:
+            with self.subTest(question=question):
+                self.turns[1].question = earlier
+                decision, prompt = self._route(question)
+                self.assertIsNone(decision.repeated_turn)
+                self.assertNotIn("repeats turn", prompt)
+
+    def test_another_way_keeps_new_related_turns(self) -> None:
+        """Use rerouting context, not the prior answer's saved context."""
+
+        del self.turns[2]
+        self.turns[0].question = "List every MRI scanner model"
+        self.turns[1].parameters = {
+            "intent": "project_inventory", "standalone": True,
+            "related_turn_ids": [],
+        }
+        reply = (
+            '{"intent": "debugging", "standalone": false, '
+            '"related_turns": [1]}'
+        )
+        with patch.object(answering, "side_reply", return_value=reply):
+            decision = answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=lambda *_: 1,
+            )
+        self.assertEqual(decision.intent, "debugging")
+        self.assertEqual(decision.related_turn_ids, (1,))
+        self.assertFalse(decision.standalone)
+        self.assertTrue(decision.another_way)
+
+    def test_alternative_never_falls_back_to_excluded_default(self) -> None:
+        """An invalid router reply cannot restore the previous method."""
+
+        del self.turns[2]
+        self.turns[1].parameters = {
+            "intent": self.config.default_intent,
+            "standalone": True, "related_turn_ids": [],
+        }
+        for response in ("invalid JSON", '{"intent": "code_explanation"}'):
+            with self.subTest(response=response), patch.object(
+                answering, "side_reply", return_value=response
+            ):
+                decision = answering.route_question(
+                    object(), self.config, self.turns,
+                    "List every MRI scanner", choose=lambda *_: 1,
+                )
+                self.assertNotEqual(
+                    decision.intent, self.config.default_intent
+                )
+                self.assertTrue(decision.another_way)
+
+    def test_new_questions_are_not_repeats(self) -> None:
+        """A changed name, an added word, or pointing back later is new."""
+
+        self.turns[1].question = "List every MRI scanner it uses"
+        for question in (
+            "List every CT scanner",
+            "List every MRI scanner model",
+            "List every MRI scanner it uses",
+        ):
+            with self.subTest(question=question):
+                decision, prompt = self._route(question)
+                self.assertIsNone(decision.repeated_turn)
+                self.assertNotIn("repeats turn", prompt)
+
+    def test_excluded_turns_are_not_matched(self) -> None:
+        """A disliked answer is never named as the repeated turn."""
+
+        decision, prompt = self._route(
+            "List every MRI scanner", frozenset({2})
+        )
+        self.assertIsNone(decision.repeated_turn)
+        self.assertNotIn("repeats turn", prompt)
+
+
 class TestRouterPrompt(unittest.TestCase):
     """Test the router prompt's scope and conversation representation."""
 
@@ -1421,6 +1690,15 @@ class TestHistory(unittest.TestCase):
         self.assertEqual(representation["sources"], ["file2.py:fit"])
         self.assertEqual(representation["summary"], "Fit trains the model.")
 
+    def test_representation_uses_a_given_summary(self) -> None:
+        """Replace the first sentence with a model-written summary."""
+
+        turn = _turn("Explain fit", "Fit trains [1]. More.")
+        representation = answering.turn_representation(
+            turn, 1, summary="S" * 250
+        )
+        self.assertEqual(representation["summary"], "S" * 200)
+
     def test_representation_handles_foreign_platform_paths(self) -> None:
         """Read POSIX and Windows evidence labels on every host platform."""
 
@@ -1487,3 +1765,47 @@ class TestHistory(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnswerSummary(unittest.TestCase):
+    """Test the router model's one-sentence answer summary."""
+
+    def test_long_answer_is_summarized_without_citations(self) -> None:
+        """Send the visible answer only and collapse the reply."""
+
+        chat = _FakeChat(response="  Fit trains\n the model.  ")
+        summary = answering.summarize_answer(
+            chat, "Explain fit",
+            "<think>Inspect [1]</think>Status line [1]. Fit trains it [2].",
+        )
+        self.assertEqual(summary, "Fit trains the model.")
+        prompt = chat.observations[0]["message"]
+        self.assertIn("Status line. Fit trains it.", prompt)
+        self.assertNotIn("Inspect", prompt)
+        self.assertEqual(
+            chat.observations[0]["max_new_tokens"],
+            answering._SUMMARY_MAX_TOKENS,
+        )
+        self.assertEqual(chat.messages[0]["content"], "Original instructions")
+
+    def test_one_sentence_answer_needs_no_model(self) -> None:
+        """Keep the first sentence when it is the whole answer."""
+
+        chat = _FakeChat()
+        self.assertIsNone(
+            answering.summarize_answer(chat, "Q", "Only one sentence [1].")
+        )
+        self.assertEqual(chat.observations, [])
+
+    def test_failed_or_empty_summaries_are_none(self) -> None:
+        """A failed call never stops saving the turn."""
+
+        for chat in (
+            _FakeChat(reply_error=RuntimeError("out of memory")),
+            _FakeChat(response="<think>unfinished"),
+            _FakeChat(response="   "),
+        ):
+            with self.subTest(response=chat.response):
+                self.assertIsNone(
+                    answering.summarize_answer(chat, "Q", "One. Two.")
+                )

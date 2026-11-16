@@ -224,10 +224,13 @@ remain the effective configuration.
 ## Project types
 
 Project types live in `kilin/project_types/`, one JSON file per type
-(currently `brainstorming.json`, `code.json`,
+(currently `code.json`, `creative_brainstorming.json`,
 `grounded_brainstorming.json`, `literature.json`, `reviewing.json`,
 and `writing.json`). The filename is the type ID; types
-are listed in filename order. Each file sets the display name shown in the
+are listed in filename order. After renaming the creative type to
+`creative_brainstorming`, `code` is the first (new-project default) type.
+Legacy saved creative projects need the explicit migration described in
+[Project workspaces](../../docs/project_workspaces.md). Each file sets the display name shown in the
 type menu, a one-line description (shown to the router), default file
 suffixes and size limit for new projects, the retrieval instruction added
 to Qwen3-format embedding queries, the base system prompt, the answer

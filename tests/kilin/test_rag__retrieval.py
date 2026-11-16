@@ -69,6 +69,24 @@ class TestRAGRetrieval(unittest.TestCase):
         )
         session._format_query.assert_called_once_with("question")
 
+    def test_retrieval_widening_reuses_one_query_embedding(self) -> None:
+        """Request-local cache avoids embedding the same text twice."""
+
+        session = _session()
+        session.chunks = [chunk("indexed")]
+        session.embedding_session.embed_query.return_value = [1.0, 0.0]
+        vectors = {}
+        with _search_patches() as mocks:
+            session._retrieve("question", 2, _query_vectors=vectors)
+            session._retrieve("question", 4, _query_vectors=vectors)
+        session.embedding_session.embed_query.assert_called_once_with(
+            "question"
+        )
+        self.assertEqual(mocks["semantic_search"].call_count, 2)
+        for call in mocks["semantic_search"].call_args_list:
+            self.assertEqual(call.kwargs["query_vector"], [1.0, 0.0])
+        self.assertEqual(vectors, {"question": [1.0, 0.0]})
+
     def test_retrieval_reports_all_search_stages(self) -> None:
         """Report the expected retrieval stages in execution order."""
         session = _session()

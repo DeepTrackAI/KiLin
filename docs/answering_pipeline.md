@@ -138,6 +138,24 @@ not every related ID proposed by the model is automatically accepted.
 Invalid or unusable router output falls back to the project's default
 intent rather than interpreting an arbitrary tool name.
 
+A question with the same normalized wording as an earlier question is
+recognized as a repeat; only case, Unicode compatibility, whitespace and
+punctuation are ignored. Word order, negation, inflection, names and numbers
+remain significant. Questions that depend on earlier referents can repeat
+only the immediately preceding turn. Disliked turns are excluded.
+
+A repeated question is still routed by the model. If it immediately follows
+the original and a choice callback is available, the user selects **Same
+way again** (reuse the previous saved route) or **Try another way** (request
+an alternative intent and preserve its new history decision). The second
+choice excludes the previous intent and reuse-only intents. Invalid model
+replies use a suitable allowed fallback, never the excluded default; without
+any suitable alternative, routing fails explicitly. Only the second choice
+adds guidance to take a different approach and suppresses automatic addition
+of previous-turn evidence. The repeated-question dialog has no Cancel button;
+the normal Stop control remains available. Without a callback, the router
+selects the route normally. `RouteDecision.repeated_turn` is traced.
+
 Project types currently package several intents for `code` and `literature`:
 a mixture of normal answering, named-document reading, source inventory,
 mention finding/classification, report generation, related-turn reuse and
@@ -169,7 +187,13 @@ latency; see [Package defaults](package_defaults.md).
 
 Saved turns include original question, answer, evidence, timestamp and
 parameters. `turn_representation()` constructs a compact summary used when
-routing later questions. `refers_back()` identifies follow-up phrasing;
+routing later questions: the question, cited sources and a one-sentence
+answer summary. When the router is used, `summarize_answer()` asks the
+router model for that sentence once, before the turn is saved, and the
+representation records the model under `summary_model`. The answer's
+first sentence is kept for one-sentence answers, small talk, incomplete
+answers, unrouted turns, and when the summary call fails. Saved summaries
+are reused, never regenerated. `refers_back()` identifies follow-up phrasing;
 `search_text()` incorporates earlier user wording according to the verified
 decision. `select_history()` applies the intent's policy:
 
@@ -261,6 +285,27 @@ The retrieved evidence supplies exact text and source coordinates, with
 citation numbers referenced by the answer. A named-document operation may
 use extra document-scoped ranking or a full-document token budget; its
 semantics cannot be emulated reliably by global top-k alone.
+
+For ordinary **hybrid** `search` intents, routed answers make at most
+one evidence-sufficiency check per search round (one by default) using the
+selected answering model, greedy decoding and thinking off. The check
+receives the complete selected evidence only when its prompt fits within
+`RAG.MAX_EVIDENCE_CHECK_CHARACTERS`; otherwise it is skipped without
+truncating passages. A clear "no" requests one further page of
+`retrieval_count` results, bounded by `RAG.MAX_EXPANDED_RESULTS`, and
+records `extra_searches`. All rounds reuse the same query embedding for
+this turn; the model never rewrites the query. Set `RAG.EXTRA_SEARCHES=0`
+to disable checks. Unclear or failed checks retain current evidence.
+
+**Source-first** retrieval already selects evidence within its configured
+source and token budget. Asking for more results without changing that
+budget cannot expand the evidence, so the model check and retry are
+skipped for source-first. Tool-owned searches retain independent limits;
+`find_fact` defaults to one additional ranked page and reports a
+worst-case quick-plan estimate before the user confirms. Its check also
+skips prompts beyond its configured character limit. Evidence remains a
+selection from the documents, not the entire corpus; the answer must not
+claim a missing detail is absent from the underlying documents.
 
 The evidence budget is not a guaranteed universal hard cap for every
 prompt. Retrieved chunks, related evidence, full-document selection, chat

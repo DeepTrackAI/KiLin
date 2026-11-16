@@ -267,6 +267,12 @@ class ToolContext:
         ``aim``, ``methods``, ``findings``, ``limitations``), as indexed;
         None when the source has no valid card. Reading a card calls no
         model. None for contexts without cards. Defaults to ``None``.
+    ask_check: Callable[[str, str, int], str] | None, optional
+        Asks the selected answering model a short check
+        ``(system, prompt, max_new_tokens)`` with thinking off and greedy
+        decoding, such as whether the passages found answer the question;
+        the conversation is untouched. None for contexts without it, where
+        tools fall back to ``ask_router``. Defaults to ``None``.
 
     """
 
@@ -292,6 +298,7 @@ class ToolContext:
     model_attempt_count: Callable[[], int] | None = None
     source_root: Path | None = None
     card: Callable[[Path], Mapping[str, str] | None] | None = None
+    ask_check: Callable[[str, str, int], str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
