@@ -204,7 +204,7 @@ card representation, indexing and persistence. See
 The [standard tool layout](tool_packages.md#standard-tool-layout) specifies
 the package, configuration and resource files. `tools/_registry.py` pairs a
 canonical `TOOL_*` identifier with its parser, runner, optional `follows_up`
-behavior and optional `workspace_resources` callback. Project-type JSON can
+or `follows_up_when` behavior and optional `workspace_resources` callback. Project-type JSON can
 select an existing entry, not load another implementation by string.
 
 Implement an extension in this order:
@@ -267,6 +267,7 @@ callback, so document the default policy and cost.
 | `paper_overview` | Produce a structured overview of a paper. | [README](../kilin/tools/paper_overview/README.md) |
 | `reference_check` | Check a paper's references against the project's files, find their citations, and judge each claim against the cited paper. | [README](../kilin/tools/reference_check/README.md) |
 | `suggest_reference` | Suggest papers for a statement from model-assessed passages; include checked quotations when available. | [README](../kilin/tools/suggest_reference/README.md) |
+| `writing_check` | Check a document's grammar and style paragraph by paragraph, with consistency checks in code; suggest changes and save the report. | [README](../kilin/tools/writing_check/README.md) |
 | `show_source` | Display requested exact source context. | [README](../kilin/tools/show_source/README.md) |
 | `generate_paper_summary` | Create template-driven reports and saved artifacts. | [README](../kilin/tools/generate_paper_summary/README.md) |
 

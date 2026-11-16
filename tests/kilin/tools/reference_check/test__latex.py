@@ -105,7 +105,7 @@ class TestBib(unittest.TestCase):
             bib_entry_text(entries["rubinov10"]),
             "Rubinov, Mikail; Sporns, Olaf (2010). Complex network "
             "measures of brain connectivity: Uses. NeuroImage, 52, "
-            "1059--1069. doi:10.1016/j.neuroimage.2009.10.003",
+            "1059–1069. doi:10.1016/j.neuroimage.2009.10.003",
         )
         many = " and ".join(f"Author{i}, A." for i in range(8))
         text = bib_entry_text(

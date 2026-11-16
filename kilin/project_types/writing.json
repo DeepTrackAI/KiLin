@@ -39,6 +39,28 @@
   },
   "default_intent": "writing",
   "intents": {
+    "writing_check": {
+      "description": "Check the grammar, spelling and style of a manuscript or document in the project, or a part of it, and list suggested corrections without rewriting it ('check the grammar and style of draft.tex', 'proofread the methods section', 'check the English of the second paragraph of the introduction', 'are there typos in my manuscript?'). Asks which document when none is named. Not for rewriting, polishing or shortening text (writing), and not for whether claims are supported by the sources (verification).",
+      "cues": [
+        "\\b(?:check|correct|fix|review)\\w*\\s+(?:\\w+\\s+){0,3}?(?:grammar|spelling|typos?|style|wording|english)\\b",
+        "\\bproofread\\w*\\b[^\\n]{0,80}?(?:\\S+\\.(?:tex|md|docx?|txt|pdf)\\b|\\b(?:manuscript|draft|paper|thesis|chapter|document|article|section)s?\\b)",
+        "\\b(?:any|are\\s+there)\\s+(?:\\w+\\s+){0,2}?(?:typos|(?:grammar|grammatical|spelling)\\s+(?:errors|mistakes))\\b",
+        "\\b(?:rephras\\w*|rewrit\\w*|reword\\w*|split\\w*|shorten\\w*|simplif\\w*|phrasing|alternatives?|better\\s+(?:version|wording))\\b[\\s\\S]{0,400}?\\bline\\s+\\d+\\b",
+        "\\bline\\s+\\d+\\b[\\s\\S]{0,400}?\\b(?:rephras\\w*|rewrit\\w*|reword\\w*|split\\w*|shorten\\w*|simplif\\w*|phrasing|alternatives?|better\\s+(?:version|wording))\\b"
+      ],
+      "requires": [
+        "\\b(?:grammar\\w*|proofread\\w*|spelling|typos?|stylistic|style|wording|copy-?edit\\w*)\\b|\\b(?:the|my|its|our)\\s+english\\b"
+      ],
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "writing_check"
+      }
+    },
     "grounded_writing": {
       "description": "Write or expand manuscript text using indexed project sources when the requested scientific or technical details are not already established by the supplied text or conversation. Examples: \"write a section describing the architecture using project documentation\", \"draft a methods overview from the indexed sources\", \"expand this section with evidence\", \"write a technical section on indexing\". Retrieve evidence before drafting and identify unsupported details. Not for purely stylistic editing or drafting from adequate supplied notes (writing), a standalone factual question (research), or a claim check without drafting (verification).",
       "cues": [

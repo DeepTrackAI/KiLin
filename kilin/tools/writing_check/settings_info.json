@@ -1,0 +1,40 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "level": {
+      "title": "Checking level",
+      "summary": "Chooses whether paragraphs are checked for grammar, style, or both.",
+      "description": "auto checks grammar, and style too when the question asks for it; grammar or style checks only that; all checks both. Each level is one model call per paragraph."
+    },
+    "confirmation": {
+      "title": "Confirm large checks",
+      "summary": "Controls when the tool asks before checking many paragraphs.",
+      "description": "With when_large, a check needing more model calls than the large-check limit shows an estimated time and offers a quick check or cancelling first."
+    },
+    "large_batches": {
+      "title": "Large-check limit",
+      "summary": "Sets how many model calls make a check large.",
+      "description": "A check above this number of model calls asks for confirmation when confirmation is when_large."
+    },
+    "max_model_calls": {
+      "title": "Maximum model calls",
+      "summary": "Hard limit on logical model requests in one check.",
+      "description": "At most this many requests are made, even when no confirmation interface exists. Includes the document brief and each grammar/style check. Unchecked paragraphs are reported as incomplete. Range: 1 to 500."
+    },
+    "max_prompt_characters": {
+      "title": "Maximum prompt characters",
+      "summary": "Hard size limit for each model request, including the system prompt.",
+      "description": "Requests exceeding this total character length are not sent to the model. The document brief is optional; oversized paragraph checks are reported as incomplete, and oversized rewrites are skipped. Text is never silently truncated. Default: 16000; range: 2000 to 100000. This is a character limit, not a model token limit."
+    },
+    "quick_paragraphs": {
+      "title": "Quick-check paragraphs",
+      "summary": "Sets how many paragraphs the quick option checks.",
+      "description": "The quick option offered for a large check checks only the grammar of this many paragraphs from the start of the chosen part."
+    },
+    "chat_findings": {
+      "title": "Findings shown in chat",
+      "summary": "Caps the findings listed in the chat answer.",
+      "description": "The chat answer lists at most this many findings; the saved report in outputs/ lists all of them."
+    }
+  }
+}

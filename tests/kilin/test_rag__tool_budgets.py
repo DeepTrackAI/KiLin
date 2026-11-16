@@ -28,7 +28,7 @@ class TestToolUserBudgets(unittest.TestCase):
     def test_all_tool_adapters_inherit_user_ceiling(self) -> None:
         off = {
             "batch_classify", "batch_review", "filter_results",
-            "find_passages", "generate_paper_summary",
+            "find_passages", "generate_paper_summary", "writing_check",
         }
         for name in TOOL_REGISTRY:
             for thinking in (True, False):

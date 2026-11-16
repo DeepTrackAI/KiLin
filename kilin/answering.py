@@ -1108,7 +1108,7 @@ def route_question(
             intent.retrieval_mode == RETRIEVAL_MODE_REUSE
             or (
                 intent.tool is not None
-                and TOOL_REGISTRY[intent.tool.name].follows_up
+                and _tool_follows_up(intent.tool.name, question)
             )
         )
     ):
@@ -1527,6 +1527,31 @@ def _reroute(
             fallback="router did not select an allowed intent",
         )
     return decision
+
+
+def _tool_follows_up(name: str, question: str) -> bool:
+    """Tell whether a tool works on an earlier answer for a question.
+
+    Parameters
+    ----------
+    name: str
+        The registered tool's name.
+    question: str
+        The new question.
+
+    Returns
+    -------
+    bool
+        True for a tool marked ``follows_up``, or one whose
+        ``follows_up_when`` accepts the question ("rephrase line 75" for
+        ``writing_check``).
+
+    """
+
+    tool = TOOL_REGISTRY[name]
+    return tool.follows_up or (
+        tool.follows_up_when is not None and tool.follows_up_when(question)
+    )
 
 
 def refers_back(question: str) -> bool:
