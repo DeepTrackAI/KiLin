@@ -42,3 +42,9 @@ fi
 
 echo "Setup complete. The project environment is in .venv"
 echo "No model weights were downloaded."
+# A script cannot change the PATH of the terminal that started it, so a
+# uv installed here is unknown to that terminal until a new one opens.
+if ! command -v uv >/dev/null 2>&1; then
+    echo "uv is in $uv_install_dir. Open a new terminal before running"
+    echo "uv commands such as: uv run kilin --gui"
+fi
