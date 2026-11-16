@@ -192,6 +192,7 @@ from kilin.defaults import (
 from kilin.answering import (
     MACHINE_STATE_ANSWERING,
     RouteDecision,
+    another_way_guidance,
     extract_thinking,
     history_messages,
     route_question,
@@ -1658,8 +1659,36 @@ class RAGSession:
                 if excluded_turn_ids else {}
             )
             if choice_callback is not None:
-                # Only the user knows why a question was asked twice.
-                route_options["choose"] = choice_callback
+                # Only the user knows why a question was asked twice. The
+                # page shows a choice from the processing phase that
+                # precedes it, as for tools (``ask_choice``).
+                def ask_user(
+                    text: str, options: tuple[str, ...]
+                ) -> int | None:
+                    """Show a routing question on the page, then wait.
+
+                    Parameters
+                    ----------
+                    text: str
+                        The question shown above the options.
+                    options: tuple[str, ...]
+                        The options, shown as buttons.
+
+                    Returns
+                    -------
+                    int | None
+                        The chosen index, or None when cancelled.
+
+                    """
+
+                    report_phase(
+                        ANSWER_PHASE_PROCESSING,
+                        message="Waiting for your choice",
+                        choice={"question": text, "options": list(options)},
+                    )
+                    return choice_callback(text, options)
+
+                route_options["choose"] = ask_user
             decision = self._route(
                 question, config, use_router, turn_id, report_phase,
                 **route_options,
@@ -1722,6 +1751,13 @@ class RAGSession:
                 resolved_guidance = answer_guidance
             else:
                 resolved_guidance = config.answer_guidance
+            if decision.another_way and decision.repeated_turn is not None:
+                # Only after the user chose "Try another way": say that the
+                # last answer missed, so the new one is not a copy of it.
+                resolved_guidance = " ".join(filter(None, (
+                    resolved_guidance,
+                    another_way_guidance(decision.repeated_turn),
+                )))
             if resolved_guidance or answer_guidance is not None:
                 effective["answer_guidance"] = resolved_guidance
             mode = intent.retrieval_mode

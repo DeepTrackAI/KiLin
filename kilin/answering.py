@@ -17,8 +17,8 @@ the model gives no usable summary.
 A question asked again, with the same distinctive words as an earlier
 question, is still routed by the router model, which is told which turn it
 repeats and how that turn was answered. Asked right after itself, the
-router is also told the last answer likely missed, so it may choose
-another intent.
+user chooses between the same way again and another way when they can be
+asked.
 
 The router's judgement of which turns a question relates to is checked
 before it is used: a related turn is kept only when the question points
@@ -110,6 +110,10 @@ Module Structure
 
     Ask the router model for a one-sentence summary of an answer.
 
+- ``another_way_guidance``
+
+    Tell the answer that the user wants another way than an earlier turn.
+
 - ``side_reply``
 
     Ask a chat model a side question, then restore its conversation.
@@ -186,6 +190,7 @@ __all__ = [
     "MAX_RELATED_TURNS",
     "MachineState",
     "RouteDecision",
+    "another_way_guidance",
     "extract_thinking",
     "history_messages",
     "refers_back",
@@ -359,6 +364,10 @@ class RouteDecision:
     repeated_turn: int | None
         The earlier turn that asked the same question, which the router
         was told about.
+    another_way: bool
+        True when the user chose "Try another way" for a question asked
+        twice in a row; the answer is then told that the last one missed
+        (``another_way_guidance``).
 
     """
 
@@ -371,6 +380,7 @@ class RouteDecision:
     refers_back: bool = False
     dropped_turns: tuple[tuple[int, str], ...] = ()
     repeated_turn: int | None = None
+    another_way: bool = False
 
 
 def extract_thinking(text: str) -> str:
@@ -960,7 +970,7 @@ def route_question(
     -----
     A question with the same distinctive words as an earlier question is
     marked as repeating it (``_repeated_turn``); the router prompt names
-    that turn and its intent, and says so when it was the last turn. Only
+    that turn and its intent. Only
     the user knows why they asked the last question again, so with
     ``choose`` they pick: the same way again (the last turn's saved route,
     so a repeated inventory stays consistent) or another way (the router
@@ -1182,9 +1192,10 @@ def _repeat_note(turns: list[object], number: int) -> str:
     Returns
     -------
     str
-        One or two sentences for the router prompt, naming the earlier
-        turn and its intent. Asked right after itself, the user likely
-        did not get what they wanted, which the note says.
+        One sentence for the router prompt, naming the earlier turn and its
+        intent, so the same question tends to take the same route. Only the
+        user can say that the last answer missed ("Try another way" in
+        ``_repeat_choice``); the note never suggests another intent.
 
     """
 
@@ -1193,16 +1204,9 @@ def _repeat_note(turns: list[object], number: int) -> str:
         parameters.get("intent") if isinstance(parameters, dict) else None
     )
     note = f"The new question repeats turn {number}"
-    note += f", which was answered as {intent}." if isinstance(
-        intent, str
-    ) else "."
-    if number == len(turns):
-        note += (
-            " It is asked again right after that answer, so the answer "
-            "likely missed what the user wanted; choose the intent that "
-            "best serves the question, which may be a different one."
-        )
-    return note
+    if isinstance(intent, str):
+        return f"{note}, which was answered as {intent}."
+    return f"{note}."
 
 
 def _repeat_choice(
@@ -1238,7 +1242,8 @@ def _repeat_choice(
     -------
     RouteDecision | None
         The last turn's saved route for "Same way again", or the router's
-        choice without the last intent for "Try another way". None when
+        choice for "Try another way", without the last intent and without
+        intents that reuse earlier passages (``reuse`` retrieval). None when
         the user cancels or the last turn's saved route is unusable; the
         router then decides.
 
@@ -1269,9 +1274,16 @@ def _repeat_choice(
         reason = "the user chose the same way again"
     elif index == 1:
         reason = f"the user chose another way than {intent}"
+        # Intents that reuse the last turn's passages would answer from
+        # the same evidence again, so another way leaves them out too.
+        excluded = {
+            other: "it reuses the passages of the last answer"
+            for other, setting in project.intents.items()
+            if setting.retrieval_mode == RETRIEVAL_MODE_REUSE
+        }
+        excluded[intent] = "the user asked for another way"
         intent = _reroute(
-            chat, project, representations, question, number,
-            {intent: "the user asked for another way"},
+            chat, project, representations, question, number, excluded
         )
     else:
         return None
@@ -1281,6 +1293,37 @@ def _repeat_choice(
         related_turn_ids=tuple(related),
         fallback=reason,
         repeated_turn=number,
+        another_way=index == 1,
+    )
+
+
+def another_way_guidance(number: int) -> str:
+    """Tell the answer that the user wants another way than turn ``number``.
+
+    Used only after the user chose "Try another way" for a question asked
+    twice in a row: without it, the model sees the same question and its
+    earlier answer, and writes that answer again.
+
+    Parameters
+    ----------
+    number: int
+        The turn the user asked again right after.
+
+    Returns
+    -------
+    str
+        Answer guidance asking for a different approach, while keeping
+        what was correct.
+
+    """
+
+    return (
+        f"The user asked this again right after turn {number} and chose "
+        "another way: that answer did not give them what they wanted. If "
+        "it was correct, keep it and say so briefly, then add what it "
+        "missed; otherwise take a different approach, such as more "
+        "specific details from other parts of the documents or a "
+        "different structure. Do not repeat that answer."
     )
 
 

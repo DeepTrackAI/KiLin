@@ -956,16 +956,18 @@ class TestRepeatedQuestions(unittest.TestCase):
                     "repeats turn 2, which was answered as code_generation.",
                     prompt,
                 )
-                self.assertNotIn("asked again right after", prompt)
                 self.assertEqual(decision.repeated_turn, 2)
                 self.assertEqual(decision.intent, "debugging")
 
-    def test_repeat_of_the_last_turn_says_the_answer_missed(self) -> None:
-        """A question asked twice in a row may need another intent."""
+    def test_repeat_of_the_last_turn_only_names_it(self) -> None:
+        """Without the user, the note never suggests another intent."""
 
         del self.turns[2]
         decision, prompt = self._route("List every MRI scanner")
-        self.assertIn("asked again right after that answer", prompt)
+        self.assertIn(
+            "repeats turn 2, which was answered as code_generation.", prompt
+        )
+        self.assertNotIn("different", prompt.split("New question:")[1])
         self.assertEqual(decision.repeated_turn, 2)
 
     def test_user_chooses_how_to_answer_a_back_to_back_repeat(self) -> None:
@@ -999,10 +1001,15 @@ class TestRepeatedQuestions(unittest.TestCase):
                 )
                 self.assertEqual(decision.intent, intent)
                 self.assertEqual(decision.repeated_turn, 2)
+                self.assertEqual(decision.another_way, asked)
                 self.assertEqual(side.called, asked)
                 if asked:
                     intents = side.call_args.args[2].split("Earlier")[0]
                     self.assertNotIn("- project_inventory:", intents)
+                    # Reuse intents would answer from the same passages.
+                    self.assertNotIn("- conversation_followup:", intents)
+                    self.assertNotIn("- rephrase_previous:", intents)
+                    self.assertIn("- debugging:", intents)
 
     def test_cancelled_or_unusable_choice_leaves_it_to_the_router(
         self,
@@ -1054,7 +1061,7 @@ class TestRepeatedQuestions(unittest.TestCase):
         self.turns[2].question = "Which dataset did they use?"
         decision, prompt = self._route("which dataset did they use")
         self.assertEqual(decision.repeated_turn, 3)
-        self.assertIn("asked again right after that answer", prompt)
+        self.assertIn("repeats turn 3", prompt)
 
     def test_singular_and_plural_are_the_same_question(self) -> None:
         """"scanners" and "scanner" are the same key word."""

@@ -142,15 +142,20 @@ A question with the same distinctive words as an earlier question (case,
 word order, punctuation and common words aside) is still routed by the
 model. A question that points back ("which dataset did they use?") counts
 as a repeat only of the turn just before, where "they" means the same thing;
-asked again later, it may mean something else and is routed as new. The prompt adds that it repeats that
-turn and how the turn was answered, and, when it is the turn just before,
-that the last answer likely missed, so another intent may serve better.
+asked again later, it may mean something else and is routed as new. The
+prompt adds that it repeats that turn and how the turn was answered, which
+favours the same route; it never suggests another intent.
 `RouteDecision.repeated_turn` records the turn for tracing. Disliked turns
 are never matched. A question asked twice in a row can mean "do it again"
 or "that was not what I meant", and only the user knows which. With
 `ask(choice_callback=...)`, the user picks **Same way again** (the last
 turn's saved intent and related turns, so a repeated inventory stays
-consistent) or **Try another way** (the router without the last intent).
+consistent) or **Try another way** (the router without the last intent
+and without intents that reuse earlier passages, so the answer is not
+written from the same evidence again). After **Try another way** only, the
+turn's answer guidance also says that the last answer did not give the user
+what they wanted (`another_way_guidance`): keep what was correct, take a
+different approach, and do not repeat it.
 Cancelling, or no callback (notebooks), leaves the decision to the router.
 
 Project types currently package several intents for `code` and `literature`:

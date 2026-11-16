@@ -122,13 +122,49 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertEqual(unrouted["summary"], "model answer")
         self.assertNotIn("summary_model", unrouted)
 
-    def test_choice_dialog_reaches_routing(self) -> None:
-        """Pass the user's choice dialog to the router step."""
+    def test_choice_dialog_reaches_routing_and_the_page(self) -> None:
+        """Show the routing question on the page before waiting for it."""
         session = _session()
-        choose = Mock()
+        choose = Mock(return_value=0)
+        phases = []
         with _answer_patches(session, _intent()) as mocks:
-            session.ask("Question", use_router=True, choice_callback=choose)
-        self.assertIs(mocks.route.call_args.kwargs["choose"], choose)
+            session.ask(
+                "Question", use_router=True, choice_callback=choose,
+                phase_callback=lambda phase, details: phases.append(
+                    (phase, details)
+                ),
+            )
+            ask_user = mocks.route.call_args.kwargs["choose"]
+            self.assertEqual(ask_user("How?", ("Same", "Other")), 0)
+        choose.assert_called_once_with("How?", ("Same", "Other"))
+        self.assertEqual(phases[-1][0], "processing")
+        self.assertEqual(
+            phases[-1][1]["choice"],
+            {"question": "How?", "options": ["Same", "Other"]},
+        )
+
+    def test_another_way_tells_the_answer_the_last_one_missed(self) -> None:
+        """Add the hint only after the user chose "Try another way"."""
+        for another_way in (True, False):
+            with self.subTest(another_way=another_way):
+                session = _session()
+                decision = RouteDecision(
+                    "test_intent", True, repeated_turn=3,
+                    another_way=another_way,
+                )
+                with _answer_patches(session, _intent(), decision):
+                    session.ask(
+                        "Question", use_router=False,
+                        answer_guidance="Be brief.",
+                    )
+                prompt = session.chat_session.reply.call_args.args[0]
+                guidance = session.turns[-1].parameters["answer_guidance"]
+                self.assertIn("Be brief.", prompt)
+                self.assertEqual(
+                    "right after turn 3 and chose another way" in prompt,
+                    another_way,
+                )
+                self.assertEqual("chose another way" in guidance, another_way)
 
     def test_small_talk_keeps_the_first_sentence(self) -> None:
         """Skip the summary for turns the router never lists."""
