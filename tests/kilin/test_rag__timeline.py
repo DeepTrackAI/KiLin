@@ -109,6 +109,7 @@ class TestRAGAnswerTimeline(unittest.TestCase):
         self.addCleanup(logger.close)
         self.session.trace = logger
         events: list[dict[str, object]] = []
+        phases: list[tuple[str, dict[str, object]]] = []
         with _answer_patches(
             self.session, _intent(RETRIEVAL_MODE_NONE)
         ) as mocks:
@@ -118,8 +119,19 @@ class TestRAGAnswerTimeline(unittest.TestCase):
             self.session.ask(
                 "Check the references", use_router=False,
                 activity_callback=events.append,
+                phase_callback=lambda phase, details: phases.append(
+                    (phase, details)
+                ),
             )
+        routed = next(
+            details for phase, details in phases
+            if phase == rag.ANSWER_PHASE_ROUTED
+        )
+        self.assertNotIn("tool_name", routed)
         steps = self.session.turns[-1].timeline.steps
+        self.assertEqual(
+            steps[0].label, "Test intent identified (test_intent)"
+        )
         self.assertEqual(
             [(item["phase"], item["label"]) for item in events],
             [(step.phase, step.label) for step in steps],
@@ -244,6 +256,40 @@ class TestRAGAnswerTimeline(unittest.TestCase):
             self.session.turns[0].timeline.elapsed_ms,
         )
         self.session.chat_session.reply.assert_not_called()
+
+    def test_tool_name_is_reported_live_and_saved(self) -> None:
+        """Use the selected tool in phases, live events and saved timing."""
+        intent = _intent(
+            RETRIEVAL_MODE_NONE,
+            tool=ToolUse("project_inventory", object()),
+        )
+        observed: list[dict[str, object]] = []
+        phases: list[tuple[str, dict[str, object]]] = []
+        with _answer_patches(self.session, intent) as mocks:
+            mocks.save.side_effect = lambda **options: (
+                rag.RAGSession._save_conversation(self.session, **options)
+            )
+            self.session.ask(
+                "Inventory", use_router=False,
+                activity_callback=observed.append,
+                phase_callback=lambda phase, details: phases.append(
+                    (phase, details)
+                ),
+            )
+        routed = next(
+            details for phase, details in phases
+            if phase == rag.ANSWER_PHASE_ROUTED
+        )
+        self.assertEqual(routed["intent"], "test_intent")
+        self.assertEqual(routed["tool_name"], "project_inventory")
+        expected = (
+            "Test intent identified (test_intent using project_inventory)"
+        )
+        self.assertEqual(observed[0]["label"], expected)
+        self.assertEqual(self.session.turns[0].timeline.steps[0].label,
+                         expected)
+        self.assertEqual(self._stored_turn()["timeline"]["steps"][0]
+                         ["label"], expected)
 
     def test_tool_processing_messages_are_timed_in_order(self) -> None:
         """Record detailed tool steps carried through existing callbacks."""

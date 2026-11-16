@@ -224,23 +224,33 @@ remain the effective configuration.
 ## Project types
 
 Project types live in `kilin/project_types/`, one JSON file per type
-(`code.json`, `literature.json`); the file name is the type's ID and types
-are listed in file-name order. Each file sets the display name shown in the
+(currently `code.json`, `creative_brainstorming.json`,
+`grounded_brainstorming.json`, `literature.json`, `reviewing.json`,
+and `writing.json`). The filename is the type ID; types
+are listed in filename order. After renaming the creative type to
+`creative_brainstorming`, `code` is the first (new-project default) type.
+Legacy saved creative projects need the explicit migration described in
+[Project workspaces](../../docs/project_workspaces.md). Each file sets the display name shown in the
 type menu, a one-line description (shown to the router), default file
 suffixes and size limit for new projects, the retrieval instruction added
 to Qwen3-format embedding queries, the base system prompt, the answer
 guidance the desktop app adds to each question (for example the 150-300
 word target), `capabilities.code_graph` (true, false, or "auto": only when
-selected files include Python or MATLAB), `history.recent_turns`, the
-`default_intent`, the `intents`, and the empty-chat headings and
-suggestions. The first suggestion is always shown with two others; a "…"
-in a suggestion is selected when it is clicked, ready to be replaced.
+selected files include Python or MATLAB), `history.recent_turns`,
+`default_intent`, `intents`, and the empty-chat headings and suggestions.
+An optional `generation` object sets initial `temperature` and `thinking`
+for new projects. Explicit creation settings take precedence, and saved
+profiles are not overwritten. The first suggestion is always displayed
+alongside two others; a "…" in a suggestion is selected when clicked,
+ready to be replaced.
 
 Each intent has a description, a system prompt added to the base prompt, an
 optional answer guidance that replaces the type's (and always applies, also
 in notebooks), a `history.policy` (none, recent, or relevant), and
 `retrieval.mode` (search, document, reuse, or none) with
-`retrieval.strategy` (only "hybrid" exists). An intent can also list
+`retrieval.strategy` (`hybrid` or `source_first`). Source-first search
+can additionally set source, passage and evidence-token limits. An intent
+can also list
 `shortcuts`: case-insensitive regular expressions for whole messages that
 obviously have that intent (the default `small_talk` lists greetings,
 thanks, and "how are you"). A match selects the intent without a router
@@ -356,10 +366,11 @@ the normal project-opening path; it is not replaced by a new-project default.
 If switching projects fails after the former session has been released, the
 GUI returns to the start screen and displays the error. A profile rejected
 before the former session is released leaves that session open.
-The Project part has five tabs: General (the project's name and Delete),
-Indexing (file types, file size and chunk sizes), Models (effort levels,
-intent model, embedding model), Answers (temperature, answer length,
-search depth, thinking) and Tools. Changes are submitted when chosen or
+The Project part has seven tabs: General (the project's name and Delete),
+Indexing (file types, chunking and advanced index capabilities), Memory
+(conversation policy and index status), Models (effort levels, intent
+model, embedding model), Answers (temperature, answer length, search
+depth, thinking), Intents, and Tools. Changes are submitted when chosen or
 when a typed field is committed (Enter or leaving the field). Answer settings
 are not considered saved until the engine acknowledges the profile write.
 While one answer-settings save is pending, later edits remain available and
@@ -377,6 +388,54 @@ the previous conversation. If recovery also fails, the project is closed
 where possible and the GUI asks for inspection and reopening. Rollback
 covers the profile file, **not** every intermediate index artifact; those
 are validated when the project reopens.
+
+Settings field labels and ⓘ help popovers come from the core and
+registered tools' `settings_info.json` resources. The desktop GUI receives
+these descriptions through the existing engine protocol; it does not
+maintain a second copy of the explanation strings. Hover, focus or click
+an information icon for a brief description. Click elsewhere or press
+Escape to close an opened popup. Help metadata has no effect on saved
+settings or answer generation. The longer `description` in each metadata
+record is also available to other clients through KíLín's public API.
+
+The **Intents** tab edits the effective behavior of the opened project.
+The Project-wide section contains shared description, instructions,
+guidance, embedding instruction, recent-turn limit, default intent, and
+welcome prompts and suggestions. Individual intent panels expose routing
+patterns, history, retrieval policy, thinking, and prompts. Tool-backed
+intents keep immutable tool bindings and omit incompatible editing controls.
+Each editor has **Save settings**, **Restore defaults**, and a separate
+**Reload settings** control for resolving stale revisions. A prompt preview
+shows the base project instructions with the intent's system instructions.
+Only project-local overrides are saved, never packaged project types.
+
+The dedicated **Memory** tab contains the project-wide conversation
+memory policy and index status. Controls select automatic user-question
+and assistant-answer inclusion, bound retrieved memory hits and token budget,
+and configure exclusion of disliked answers from ordinary chat context.
+**Manage remembered messages** lists active saved messages, including
+currently excluded entries, with eligibility status and a short preview.
+Exclude/Restore updates one message without changing its saved reaction or
+removing it from the underlying conversation; restoring respects all other
+indexing policies. The inventory is read-only until a confirmed action and
+does not load embeddings or rebuild source indexes. Index changes take
+effect on the next memory synchronization.
+Memory is enabled by default for new Writing, both Brainstorming types,
+and Reviewing projects, and disabled by default for Code and Literature. **Update memory
+index** explicitly synchronizes eligible saved discussions with the loaded
+embedding model; the status shows the last indexed message and embedding
+counts. This action does **not** rebuild source indexes. Saving memory policy
+alone likewise does not trigger ordinary source reindexing. Intent panels
+add separate memory controls: automatic/explicit/never indexing, and whether
+that intent can retrieve previous conversations. The same project revision
+protects all behavior editors against simultaneous conflicting writes.
+
+Advanced Indexing lets users change code-graph policy (Automatic, Enabled,
+Disabled) and scientific-paper document-header extraction. These settings
+require confirmation and an index rebuild. If rebuilding fails, the GUI
+restores the previous project configuration and retries the original index;
+failed recovery requires reopening the project. Existing source filters
+and source-card policies remain in `profile.ini`.
 
 The line under the tabs reports save status. On the start screen nothing
 is saved: the Project values set there are kept on the page and written only
@@ -505,12 +564,16 @@ finite context limit. The values used for a completed answer are recorded with
 that turn. Temperature, thinking, and answer length belong to the project:
 a change is saved and acknowledged when committed in Settings or the
 Thinking control. Every chat uses the confirmed project-wide settings,
-switching chats keeps them, and another project loads its own values. A
+switching chats keeps them, and another project loads its own values.
+The completed-turn model line is formatted by the core and includes the
+model ID, effective thinking mode (when recorded), temperature (`T=`),
+and maximum output tokens. The GUI reuses this saved description and
+falls back to saved fields for older conversations. A
 question never silently commits unconfirmed settings; it must wait until
 the corresponding profile save has been acknowledged.
 
 An ordinary answer intent can override thinking for that reply without
-changing these controls or the saved project setting. Both packaged
+changing these controls or the saved project setting. Packaged
 `small_talk` intents disable thinking; an omitted or null intent policy
 inherits the configured value. A following intent without an override
 therefore uses the configured value again. This uses the selected model/template
@@ -553,6 +616,26 @@ writer. Restoration requires moving the JSON back while KíLín is closed;
 the original lock companion is reused. See
 [conversation-file ownership](../../docs/conversation_ownership.md) for the
 error and recovery contract.
+
+Completed questions and answers have independent **Save**, **Like**, and
+**Dislike** buttons beneath the message. Save explicitly selects the message
+for memory without asserting correctness; Like can increase a relevant
+memory hit's priority; Dislike excludes it from memory and, by default,
+removes its associated turn from future automatic chat context. Reactions
+and selection can be reversed. These controls save authoritative feedback
+in the project's `memory/feedback.json`, independently of conversation
+checkpoints. A stale or invalid update shows an error and reloads the saved
+feedback. Controls remain unavailable while an answer is in progress.
+
+When an answer uses conversation memory, its action row shows a compact
+memory icon with a count of retrieved messages next to the feedback controls.
+The details are collapsed by default; activating the icon expands the
+**Earlier conversation memory** references below the action row. The
+references navigate to the original saved conversation and highlight its
+turn when still active; otherwise the link is unavailable. They are
+explicitly **not scientific source citations** and do not alter evidence
+previews or source citation numbers. A branch retaining the same turn UUID
+can share feedback and provide another active memory origin.
 
 Clicking an answer selects its evidence when the side panels are visible;
 selecting text does not change the current reference. Ordinary answer clicks

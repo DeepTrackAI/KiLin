@@ -58,9 +58,9 @@ ask(question, options)
 ```
 
 The state machine uses `ANSWER_PHASE_*` identifiers (`routing`, `routed`,
-`retrieving`, `evidence_ready`, `generating`, `saving`, `completed`, and
-`processing`). Not every intent performs every phase; tools may control
-additional progress and confirmation. See [GUI protocol](gui_protocol.md)
+`retrieving`, `evidence_ready`, `memory_retrieving`, `memory_ready`,
+`generating`, `saving`, `completed`, and `processing`). Not every intent
+performs every phase; tools may control additional progress and confirmation. See [GUI protocol](gui_protocol.md)
 for event wire fields and the distinction between backend and frontend
 operation states. A callback's failure **before** commitment can abort the
 turn; a failure in the final completed notification is traced but should not
@@ -75,8 +75,19 @@ skipped retrieval, detailed tool messages, and generation transitions. It
 reports each start through the optional `activity_callback` with an index,
 phase, label, and monotonic start offset (`started_ms`). The GUI uses these
 labels unchanged; it never derives, suppresses, or renames timeline entries.
+The routed activity shows the intent identifier in parentheses after its
+readable name, with `using <tool_name>` when the selected intent has a tool.
 Repeated notifications for an activity already in progress update that
 activity rather than creating artificial duplicate starts.
+
+When conversation memory is enabled for the current answering intent, the
+core adds `memory_retrieving` immediately before the index synchronization
+and memory query. The following `memory_ready` phase reports both the number
+of retrieved **messages** and the number of distinct originating **turns**,
+including zero results. The retrieval activity has its own measured duration
+in the saved timeline, separate from documentary source retrieval and model
+generation. No memory activities appear when memory is disabled, denied by
+the intent, or unavailable to a tool-owned answer.
 
 When diagnostic tracing is enabled, those same activity starts appear as
 `answer.activity` events, with the identical fields and order.
@@ -183,12 +194,58 @@ that it found no earlier answer. The router is then asked once more with
 the ruled-out intents left out of the list; when that call fails or still
 names one of them, the default intent is used.
 
+Disliked-answer exclusion is controlled by the saved project setting
+`history.exclude_disliked_answers` and is enabled by default for every
+project type, independently of long-term memory indexing. At the start of
+an answer, the core reads project-local feedback for the saved turn UUIDs.
+A rejected assistant answer excludes the **complete question/answer pair**
+from automatic model context, while leaving the original saved turn intact.
+The router never receives the rejected turn's question, summary or sources.
+Related-turn numbers are not renumbered; references to rejected turns are
+dropped, recent history selects the last eligible turns, and deterministic
+fallback skips rejected last turns.
+
+The same eligibility set controls follow-up search wording, source-evidence
+reuse and merging, tool `EarlierTurn` records, transitive related-turn links,
+and model/tool language context. Reopening a conversation or switching chat
+models rebuilds safe history as necessary. Invalid feedback causes an error,
+not permissive fallback. Disabling the project policy or resetting Dislike
+restores ordinary context behavior; the stored conversation is unchanged.
+The feedback store adds only local file reads and no model calls. Details
+are in [Conversation memory](conversation_memory.md).
+
 The prompt history contains selected prior **questions and answers**, not
 full prior evidence payloads. Related-turn evidence may be carried forward
 separately when an intent permits it. This distinction affects privacy,
 context size and the interpretation of follow-up answers. The router's
-summary is derived from saved turns; it is not an automatically generated
-long-term memory system.
+summary is derived from saved turns; it is distinct from the separate,
+project-local long-term conversation-memory index.
+
+For an enabled memory policy and an intent allowing `memory.read`, the core
+synchronizes eligible saved messages and performs independent memory
+retrieval before direct model generation. The previous conversation text
+appears under a dedicated `CONVERSATION MEMORY` heading, never within
+numbered source `Evidence`. A system-level provenance rule distinguishes
+historical assistant assertions from current documentary evidence. Search
+hits have separate relevance, preference weights and an independent token
+budget. Completed turns retain only the resulting navigation identities
+under `parameters.memory_references` (memory labels, UUID/role, and active
+conversation/one-based turn origins); source `Evidence` remains separate.
+When no memory hits are supplied, the original answer prompt is
+unchanged **for ordinary requests**. For explicit conversation-history
+questions (such as *"Did we discuss optical tweezers?"*), the core selects a
+non-tool, memory-reading default intent when the routed intent cannot read
+memory, and skips documentary retrieval. It checks eligible indexed saved
+messages lexically, including recent turns that already appear in chat
+context, without another model call. A matching question establishes that
+the topic was raised, not that its answer was accepted. When there is no
+match the model is instructed to report uncertainty, not to claim the topic
+was never discussed. Historical lookup remains subject to project and intent
+memory policies. Eligible question/answer pairs stay adjacent within the
+memory hit and text budgets, so matching questions cannot fill the result
+list while crowding out all corresponding saved replies. Tool-owned answer
+generation does not receive blended
+memory or source passages. See [Conversation memory](conversation_memory.md).
 
 ## Retrieval options and evidence
 
@@ -216,6 +273,12 @@ calls `ChatSession.reply()`. Generation settings permit validated
 chat history if a pre-commit failure would otherwise leave uncommitted
 messages in memory. A model's `finish_reason = length` is checked by the completion contract
 below; truncated text is not accepted as a successful final answer.
+
+The core also records `model_summary` in completed-turn parameters,
+using the active chat model ID and the recorded thinking, temperature and
+maximum output tokens. For direct answers it reports effective per-intent
+thinking when present. The GUI renders the saved description rather than
+reconstructing it; older turns use their separately saved fields.
 
 When the question is about several documents (a number of them, "review
 the five articles", or all of them, "all the papers") and the evidence

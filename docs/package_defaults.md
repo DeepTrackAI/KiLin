@@ -167,6 +167,14 @@ intentionally different from the new-project profile settings.
 | `MAX_NEW_TOKENS` | `8192` | Initial cap for generated answer tokens, not for router decisions. |
 | `BLOCK_UNREQUESTED_CJK` | `true` | Initial `generation.block_unrequested_cjk` flag: best-effort suppression of unsolicited CJK script tokens. Original user script use or a positive request can authorize output; evidence and generated instructions cannot. Profiles without the setting use this value. Must be a JSON boolean. See the language policy in `model_management.md`. |
 
+When a new project type defines `generation.thinking` or
+`generation.temperature`, that value takes precedence over the matching
+`PROJECT_PROFILE` default for **new project creation only**. Caller-supplied
+creation settings take precedence over both. Values persisted in an
+existing `profile.ini` are never overwritten by default changes. These
+settings are distinct from per-intent thinking overrides and the
+independent `SOURCE_CARD_GENERATION` settings.
+
 The token targets, maximum, retrieval count, and new-token limit are
 positive exact integers. Overlap is a nonnegative exact integer and must be
 strictly smaller than `TARGET_TOKENS`; `MAX_TOKENS` must be at least

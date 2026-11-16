@@ -221,7 +221,8 @@ class TestExclusiveProjectCreation(unittest.TestCase):
     def test_mirror_source_cannot_alias_workspace_state(self):
         """A mirror copies into sources/, never over core folders."""
         for name in (
-            "indexes", "logs", "outputs", "templates", "profile.ini",
+            "indexes", "logs", "memory", "outputs", "templates",
+            "profile.ini",
             "sources.json", "source_snapshot.json", ".kilin-creating",
         ):
             with self.subTest(name=name):
@@ -295,7 +296,8 @@ class TestExclusiveProjectCreation(unittest.TestCase):
     def test_open_is_read_only_even_when_managed_folders_are_missing(self):
         """Inspection must not recreate directories or resources."""
         project = kilin.prepare_sources_workspace([], "code", self.destination)
-        for name in ("indexes", "logs", "outputs", "templates"):
+        for name in ("indexes", "logs", "memory", "outputs",
+                     "templates"):
             (project.root / name).rmdir()
         before = self.snapshot(project.root)
         opened = kilin.open_project(project.root)

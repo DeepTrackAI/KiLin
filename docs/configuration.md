@@ -11,11 +11,12 @@ rewrite an existing project's configuration.
 | Layer | Source | Scope and owner | Mutability |
 | --- | --- | --- | --- |
 | Core packaged defaults | `kilin/kilin_defaults.json` | Initial models, project profile, chunking, retrieval, routing, scanner heuristics | Read-only packaged resource; loaded/validated by core |
-| Project types | `kilin/project_types/<type_id>.json` | Eligible sources, intents, prompts, routing/retrieval behavior for a project type | Packaged declarations; not editable user profiles |
+| Project types | `kilin/project_types/<type_id>.json` | Eligible sources, intents, prompts, retrieval and memory policies, optional new-project generation defaults | Packaged declarations; not editable user profiles |
 | Tool defaults | `kilin/tools/<tool>/defaults.json` | Parameter defaults owned by each built-in tool | Packaged and validated by that tool |
 | GUI packaged defaults | `kilin/gui/defaults.json` | Appearance and initial GUI model/search preferences | Read-only application resource |
 | User GUI preferences | Per-user `preferences.json` | Sparse overrides of GUI defaults, e.g. appearance | Atomic user-owned write |
 | Project profile | `<workspace>/profile.ini` | Backend, model IDs, source filters, chunk sizes, search and generation values; GUI effort choices and core-owned router settings | Persistent, authoritative for the opened project |
+| Project behavior | `<workspace>/project_behavior.json` | Sparse project-wide, per-intent, memory and source-index-capability overrides | Optional project-owned validated settings |
 | Per-answer arguments | `RAGSession.ask(...)` | Retrieval count, routing choice, generation updates, answer guidance | In-memory until saved according to the parameter contract |
 | Runtime state | Backend availability, cached revisions, loaded sessions | Selected implementation state | Resolved at execution, not a package default |
 
@@ -29,11 +30,171 @@ use its README and `_configuration.py`.
 
 *Figure: Packaged creation defaults do not overwrite saved project profiles; application-wide GUI preferences and tool-owned defaults have separate roles.*
 
+## Settings information: explanations, not configuration
+
+The public core API exposes explanatory metadata in
+`kilin/settings_info.json`, while each registered tool owns its own
+`kilin/tools/<name>/settings_info.json`. These resources describe **all
+public configurable settings**, including settings that are not displayed
+in the desktop GUI. The files use `format: "settings-info-v1"` and map
+canonical dotted setting identifiers to `title`, `summary`, and
+`description` strings. They do not store values, accepted ranges,
+serialization policy or validation rules.
+
+The core provides three functions independent of GUI, model initialization
+and project creation:
+
+```python
+import kilin
+
+catalog = kilin.get_settings_info()
+entry = kilin.get_setting_info("project.profile.temperature")
+tool = kilin.get_tool_settings_info("reference_check")
+```
+
+`get_settings_info()` returns one versioned document with a `settings`
+mapping. Tool entries have IDs such as
+`tools.reference_check.max_checked_claims`; the tool-specific function
+returns the tool's own unprefixed lowercase keys. Each read returns a
+separate copy of cached resource contents. Metadata parsers reject
+malformed or incomplete records, duplicates and tool keys that do not
+match that tool's `defaults.json` `SETTINGS` section. Invalid metadata
+is an error only when a client explicitly requests metadata: answering,
+retrieval, loading a project and validating its settings do not depend
+on these descriptions. Repository tests enforce coverage of public
+project/profile, behavior, source-card and registered tool settings.
+
+Consumers may render `title` as a field label and `summary` as brief
+contextual help; `description` is available for CLI help and documentation.
+The GUI uses the public core API via its engine and does not read these
+JSON files itself. This resource does not supersede the separately owned
+[package defaults](package_defaults.md) or project-specific overrides.
+
+## Project behavior overrides
+
+Each existing project's optional `project_behavior.json` changes only that
+project's shared and per-intent behavior. Packaged project types remain
+immutable. `profile.ini` still owns backend, model, indexing filters, and
+answer settings. `[tool.<name>]` owns shared tool settings.
+
+The behavior file uses the **`project-behavior`** format, a fixed
+`project_type_id`, and four required sparse objects: `global`, `intents`,
+`capabilities`, and `memory`. Only differences from the packaged defaults
+are stored. `capabilities` controls source indexing (`code_graph` and
+`document_headers`); `memory` controls conversation-memory indexing,
+retrieval and disliked-history exclusion. Intent-local memory settings
+are stored inside `intents.<id>.memory`, independently of the same intent's
+ordinary routing, tool and retrieval settings. Nested differences merge
+into packaged settings before the normal project-type validation.
+An explicit `{ "$delete": true }` removes an optional inherited field
+when changing retrieval strategy. This is an internal marker, not an
+editor value.
+
+The APIs `kilin.effective_project_type()`,
+`kilin.project_behavior_settings()` and `kilin.save_project_behavior()`
+resolve and edit these settings without depending on the GUI. Saving an
+entire global, intent, capability or memory editor computes sparse differences and
+checks an optional SHA-256 expected revision to reject stale changes.
+Prompts and routing edits apply to subsequent requests without model
+reload or index rebuild. New turns preserve original intent history and
+retrieval classifications so changes do not reinterpret their behavior.
+
+The additional core editor scopes are `memory` for the complete
+project-wide conversation-memory policy and `intent_memory` for one
+intent's `indexing`/`read` pair. Existing `global` and `intent` payloads
+remain unchanged. The current core validates and persists these settings;
+turn UUIDs, feedback persistence and disliked-history filtering are
+implemented independently of the editor. Conversation-memory indexing
+and retrieval are core operations, independent of the GUI. The desktop
+**Memory** tab edits project-wide policy, inspects eligible saved messages,
+provides Exclude/Restore, and explicitly synchronizes the derived index
+through an idle-phase Update action. The **Intents** tab edits indexing and
+reading permissions for each intent. These controls use the core's validated
+editors and revision checks; the GUI does not own memory persistence.
+See [Conversation memory](conversation_memory.md) for their contracts.
+
+### Source-first retrieval limits
+
+Packaged project types define the source-first search caps per intent:
+`max_sources`, `passages_per_source`, `max_passages`, and
+`evidence_tokens`. The caps are upper bounds, not quotas: a question
+with only a few relevant sources may return fewer passages. Writing
+uses larger evidence budgets for drafting, research, and verification;
+the two brainstorming types prioritize different behavior. Brainstorming (Creative)
+defaults to source-free ideation and searches when its
+selected intent calls for evidence. Brainstorming (Grounded) searches
+the indexed project sources for every substantive ideation intent.
+Code Repository uses hybrid search and the saved project-profile
+`retrieval_count` instead of these source-first limits. Larger evidence
+budgets may improve coverage but consume more model context and increase
+latency; projects can override per-intent limits in Settings → Intents.
+
+The revised Writing Assistant definition now includes Word documents,
+LaTeX manuscripts and bibliographies, Python/MATLAB code, and notebooks
+among its default source suffixes, alongside PDF, Markdown, and text.
+These are creation defaults; existing projects retain their saved
+`profile.ini` extension list until explicitly reconfigured.
+
+### Conversation memory policies
+
+Every current project-type JSON defines `conversation_memory` with five
+required values and `history.exclude_disliked_answers` with a required
+Boolean. Values are deliberately independent of the source-retrieval
+pipeline:
+
+| Setting | Accepted values | Purpose |
+| --- | --- | --- |
+| `enabled` | Boolean | Enables project-local conversation-memory indexing and retrieval |
+| `questions` | `all`, `none` | Automatic indexing of eligible user questions |
+| `answers` | `none`, `selected`, `all` | Forbid answer indexing, require explicit Save/Like, or index eligible non-disliked answers automatically |
+| `max_hits` | Integer 1–20 | Maximum retrieved memory entries per answer |
+| `max_tokens` | Integer 128–20,000 | Independent memory-context token budget |
+| `history.exclude_disliked_answers` | Boolean | Exclude rejected question/answer pairs from ordinary conversational context, routing, evidence reuse and tools; defaults to true |
+
+The packaged defaults use `questions: all`, `answers: selected`,
+`max_hits: 4`, and `max_tokens: 2000` for every project type.
+Conversation memory is enabled by default for new `writing`,
+`creative_brainstorming` (Brainstorming (Creative)), `grounded_brainstorming`,
+and `reviewing` projects and disabled for new `code`
+and `literature` projects. Every type defaults to excluding disliked
+answers from chat context, independently of memory enablement.
+
+An intent may set `memory.indexing` to `automatic`, `explicit`, or `never`.
+`automatic` follows the project-wide content policies; `explicit` requires
+Save/Like before indexing the eligible content; `never` forbids indexing,
+even after Save/Like. `memory.read` independently controls whether the
+intent may retrieve earlier memories. Intents omitting `memory` default
+to `automatic` and `read: true`. The built-in small-talk intents use
+`never` and `read: false`; file inventories and whole-document overviews
+are typically `explicit`, some with memory reading disabled. The reviewing
+type has no small-talk intent and retains its strict no-review-writing
+role boundary regardless of memory settings.
+
+Source passages, retrieved memories, and recent conversation history
+have different purposes. Memory cannot constitute primary evidence or
+produce numbered scientific citations; answering integration must place
+source evidence and remembered discussions in distinct prompt
+sections with independent budgets and provenance.
+
+The policy scopes do not affect the document index compatibility
+signature. Changing memory settings will not refresh or invalidate
+document/source-card indexes. The behavior format is defined once for this prerelease. A file with an
+unknown format raises an error without being rewritten. Existing workspace
+data is never silently deleted.
+
+Advanced indexing exposes `code_graph` (true, false, or `"auto"`) and
+`document_headers` (true or false). Changes alter index metadata and require
+reindexing. In the desktop GUI, failed refreshes restore the previous
+behavior configuration and retry the old index. Other index settings and
+source-card policy remain owned by the project profile.
+
 ## Initialization versus reopening
 
 A new project's `type_id` selects a validated `ProjectType`; the core then
 constructs and validates a `ProjectProfile` using `PROJECT_PROFILE` defaults
-and the type's file-selection defaults. This initializes saved state; it is
+and the type's file-selection and optional generation defaults. Explicit
+creation settings take precedence over those defaults. This initializes
+saved state; it is
 not permission to overwrite an existing profile or reinstall user resources.
 Creation, read-only reopening and explicit updates are different operations,
 owned by [Project workspaces](project_workspaces.md#creation-opening-and-explicit-updates).
@@ -114,8 +275,10 @@ cards. See [Retrieval pipeline](retrieval_pipeline.md#automatic-source-card-inde
 - **Default chunking vs profile chunking:** direct `chunk_source_units()`
   defaults are not identical to a newly created project's persisted sizes.
 - **Project-type defaults vs project overrides:** type JSON affects intent
-  resolution, instruction and default scope, while saved profile values
-  determine current model, filters and indexing settings.
+  resolution, instructions and new-project generation defaults. The saved
+  profile determines active models, temperature, thinking, filters and
+  indexing settings; `project_behavior.json` may override an existing
+  project's prompts, routing and per-intent retrieval behavior.
 - **Router/effort/depth:** routing selects an intent, effort chooses an
   answering model as supported by the backend, and search depth chooses the
   number of passages; these are separate controls.
@@ -159,8 +322,8 @@ The type loader reads `project_types/*.json` in filename order, uses each
 filename stem as its type ID and caches validated records. An invalid
 project type is an error, not silently skipped. The top-level object defines
 its display metadata, extensions, size limit, base prompts,
-retrieval instruction, code-graph policy, history defaults, default intent,
-intents, welcome prompts and suggestions.
+retrieval instruction, capabilities, history defaults, optional
+generation defaults, default intent, intents, welcome prompts and suggestions.
 
 An intent can override inherited prompt/history/retrieval settings, specify
 shortcut regexes and select a registered tool. The parser gives missing
@@ -169,6 +332,29 @@ fields documented defaults (including `search` for ordinary intents and
 combinations. A project type cannot load arbitrary Python code by naming
 it in JSON; only registered tool IDs are accepted. See
 [Extension interfaces](extension_interfaces.md).
+
+### New-project generation defaults
+
+A project type can optionally set `generation.temperature` (a finite,
+nonnegative number) and `generation.thinking` (a boolean). Each field is
+independent. When omitted, the corresponding value comes from the
+packaged `PROJECT_PROFILE` defaults. For example:
+
+```json
+{
+  "generation": {
+    "temperature": 0.9,
+    "thinking": false
+  }
+}
+```
+
+These settings initialize `profile.ini` only when creating a project.
+Explicit creation settings override them. Once saved, a project's own
+profile is authoritative; reopening it never re-applies project-type
+or packaged creation defaults. An ordinary intent may separately
+override thinking for a single direct reply, while tool-internal model
+settings remain tool-owned.
 
 ### Source-first evidence limits per intent
 
@@ -182,13 +368,14 @@ and related-turn evidence. `coverage` accepts `bounded` (default) or
 source coverage regardless of that default. Omitted sources cause a
 saved coverage record and, in exhaustive mode, a deterministic notice.
 
-These settings are owned by the **selected project-type intent**, not the
-answering model's context-token setting, the GUI, or a tool's internal
-batch parameters. Missing values have validated core defaults; packaged
+These settings belong to the **selected effective intent**, not the
+answering model's context-token setting or a tool's internal batch
+parameters. Missing values have validated core defaults; packaged
 literature intent values are documented in
 [Retrieval pipeline](retrieval_pipeline.md#per-intent-source-first-configuration).
-Changing the project type changes future retrieval; a saved project does
-not acquire a separate per-project override for these per-intent limits.
+An existing project can change them through its validated per-intent
+`project_behavior.json` overrides, without modifying the packaged type.
+Changes affect subsequent retrieval, not previously saved answers.
 A tool-backed intent instead uses its tool's validated settings and does
 not automatically execute source-first retrieval. See the tool precedence
 section below.
@@ -205,7 +392,7 @@ setting for **that reply only**, including a thinking setting passed in
 `RAGSession.ask(generation_settings=...)`. Those generation updates still
 persist on the session; the intent override never rewrites them, the project
 profile, or GUI preferences. It does not switch models, change token budgets,
-or add a model call. Both packaged `small_talk` intents set `thinking` to
+or add a model call. Packaged `small_talk` intents set `thinking` to
 `false`; other packaged intents inherit the session setting.
 
 For example, a minimal ordinary intent can declare:

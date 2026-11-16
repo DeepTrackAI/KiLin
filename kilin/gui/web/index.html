@@ -181,11 +181,11 @@
             </div>
             <div class="setup-app">
               <!-- For new projects; an open project keeps the one it was made with. -->
-              <label for="backend">Computation backend</label>
+              <label for="backend" data-settings-key="interface.backend">Computation backend</label>
               <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
-              <label for="appearance">Appearance</label>
+              <label for="appearance" data-settings-key="interface.appearance">Appearance</label>
               <select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-              <label for="workspace-path">Projects folder</label>
+              <label for="workspace-path" data-settings-key="interface.workspace_folder">Projects folder</label>
               <div class="folder-row"><input id="workspace-path" type="text" readonly><button id="browse-workspace" type="button" class="secondary">Browse</button><button id="default-workspace" type="button" class="secondary">Use default</button></div>
               <p id="workspace-note" class="hint hidden"></p>
               <div id="legacy-workspace-choice" class="hidden">
@@ -209,40 +209,42 @@
           <div class="settings-tabs" role="tablist" aria-label="Settings categories">
             <button class="settings-tab" type="button" role="tab" data-tab="general">General</button>
             <button class="settings-tab" type="button" role="tab" data-tab="indexing">Indexing</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="memory">Memory</button>
             <button class="settings-tab" type="button" role="tab" data-tab="models">Models</button>
             <button class="settings-tab" type="button" role="tab" data-tab="answers">Answers</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="intents">Intents</button>
             <button class="settings-tab" type="button" role="tab" data-tab="tools">Tools</button>
           </div>
           <section class="settings-section models-section" data-settings-tab="models">
               <!-- Kept hidden: the rows below edit these values. -->
               <div class="hidden" aria-hidden="true">
-                <label for="chat-model">Default language model</label>
+                <label for="chat-model" data-settings-key="project.profile.chat_mlx">Default language model</label>
                 <div class="model-picker"><input id="chat-model" type="text" autocomplete="off"><button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button><div id="chat-model-menu" class="model-menu hidden" role="listbox"></div></div>
-                <label for="embedding-model">Embedding model</label>
+                <label for="embedding-model" data-settings-key="model_settings.embedding_models">Embedding model</label>
                 <div class="model-picker"><input id="embedding-model" type="text" autocomplete="off"><button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button><div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div></div>
-                <label for="query-format">Embedding query format</label>
+                <label for="query-format" data-settings-key="model_settings.query_format">Embedding query format</label>
                 <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
               </div>
 
           <section class="source-card-settings" aria-labelledby="card-model-title">
             <h4 id="card-model-title">Source-card generation</h4>
             <p class="hint">Independent Qwen3-8B models create scientific-paper cards during indexing. Models are loaded only when cards need generation.</p>
-            <label for="source-card-mlx">MLX generation model</label>
+            <label for="source-card-mlx" data-settings-key="model_settings.source_card_models.mlx">MLX generation model</label>
             <input id="source-card-mlx" type="text" autocomplete="off">
-            <label for="source-card-torch">PyTorch generation model</label>
+            <label for="source-card-torch" data-settings-key="model_settings.source_card_models.torch">PyTorch generation model</label>
             <input id="source-card-torch" type="text" autocomplete="off">
             <div class="settings-grid">
-              <label for="source-card-temperature">Temperature
+              <label for="source-card-temperature" data-settings-key="source_cards.generation.temperature">Temperature
                 <input id="source-card-temperature" type="number" min="0" step="0.1">
               </label>
-              <label for="source-card-input">Maximum input tokens
+              <label for="source-card-input" data-settings-key="source_cards.generation.max_input_tokens">Maximum input tokens
                 <input id="source-card-input" type="number" min="1" max="200000">
               </label>
-              <label for="source-card-output">Maximum output tokens
+              <label for="source-card-output" data-settings-key="source_cards.generation.max_new_tokens">Maximum output tokens
                 <input id="source-card-output" type="number" min="1" max="200000">
               </label>
             </div>
-            <label class="check-row" for="source-card-thinking"><input id="source-card-thinking" type="checkbox"> Request thinking during card generation</label>
+            <label class="check-row" for="source-card-thinking" data-settings-key="source_cards.generation.thinking"><input id="source-card-thinking" type="checkbox"> Request thinking during card generation</label>
             <button id="save-source-card-models" class="secondary" type="button">Save source-card settings</button>
           </section>
           <p id="models-backend" class="hint hidden"></p>
@@ -250,33 +252,50 @@
           </section>
           <section id="settings-answers" class="settings-section" data-settings-tab="answers">
             <div class="conversation-fields">
-              <label class="chat-setting" for="temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
-              <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="Automatic (remaining context)"></label>
+              <label class="chat-setting" for="temperature" data-settings-key="project.profile.temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
+              <label class="chat-setting" for="max-new-tokens" data-settings-key="project.profile.max_new_tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="Automatic (remaining context)"></label>
             </div>
             <!-- Filled with the Models tab's drafts, so it applies with them. -->
             <div id="search-depth"></div>
-            <label class="check-row thinking-row" for="thinking"><input id="thinking" type="checkbox"> Request thinking via chat template</label>
+            <label class="check-row thinking-row" for="thinking" data-settings-key="project.profile.thinking"><input id="thinking" type="checkbox"> Request thinking via chat template</label>
+          </section>
+          <section id="settings-intents" class="settings-section" data-settings-tab="intents">
+            <p class="hint">Customize instructions, routing, and retrieval for this project. Packaged project types remain unchanged. Save each section explicitly.</p>
+            <button id="reload-project-behavior" type="button" class="secondary">Reload settings</button>
+            <div id="intent-settings" aria-live="polite"></div>
           </section>
           <section id="settings-tools" class="settings-section" data-settings-tab="tools">
             <div id="tool-settings"></div>
           </section>
           <section id="settings-general" class="settings-section project-identity" data-settings-tab="general">
-            <label for="project-title">Project name</label>
+            <label for="project-title" data-settings-key="interface.project_name">Project name</label>
             <!-- On the start screen the name is used for the next new project. -->
             <div class="folder-row"><input id="project-title" type="text" autocomplete="off"><button id="delete-project" type="button" class="secondary danger hidden">Delete project</button></div>
           </section>
           <section id="settings-indexing" class="settings-section" data-settings-tab="indexing">
             <div class="advanced-fields">
-              <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">
-              <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
-              <div class="settings-grid"><label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
+              <label for="extensions" data-settings-key="project.profile.extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">
+              <label for="max-file-bytes" data-settings-key="project.profile.max_file_bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
+              <div class="settings-grid"><label data-settings-key="project.profile.target_tokens">Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label data-settings-key="project.profile.max_tokens">Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label data-settings-key="project.profile.overlap_tokens">Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
+              <section class="source-card-settings" aria-labelledby="index-capabilities-title">
+                <h4 id="index-capabilities-title">Advanced indexing</h4>
+                <p class="hint">These project-specific capabilities affect indexed data. Saving changes rebuilds affected indexes.</p>
+                <label for="code-graph" data-settings-key="project_behavior.capabilities.code_graph">Code graph</label>
+                <select id="code-graph" disabled><option value="auto">Automatic</option><option value="on">Enabled</option><option value="off">Disabled</option></select>
+                <label class="check-row" for="document-headers" data-settings-key="project_behavior.capabilities.document_headers"><input id="document-headers" type="checkbox" disabled> Extract scientific-paper document headers</label>
+                <p id="index-capabilities-status" class="hint" role="status">Open a project to edit indexing capabilities.</p>
+                <div class="source-card-actions">
+                  <button id="save-index-capabilities" class="secondary" type="button" disabled>Save indexing capabilities</button>
+                  <button id="reset-index-capabilities" class="secondary" type="button" disabled>Restore defaults</button>
+                </div>
+              </section>
               <section class="source-card-settings" aria-labelledby="card-index-title">
                 <h4 id="card-index-title">Source cards</h4>
                 <p class="hint">Scientific-paper cards are optional derived indexes. Original passages remain the evidence for answers. Other document kinds may be added later.</p>
-                <label class="check-row" for="source-card-enabled"><input id="source-card-enabled" type="checkbox"> Enable source cards</label>
-                <label for="source-card-kind">Preferred card kind</label>
+                <label class="check-row" for="source-card-enabled" data-settings-key="source_cards.policy.enabled"><input id="source-card-enabled" type="checkbox"> Enable source cards</label>
+                <label for="source-card-kind" data-settings-key="source_cards.policy.kind">Preferred card kind</label>
                 <select id="source-card-kind"><option value="">None</option><option value="scientific_paper">Scientific paper</option></select>
-                <label class="check-row" for="source-card-automatic"><input id="source-card-automatic" type="checkbox"> Generate missing cards during indexing</label>
+                <label class="check-row" for="source-card-automatic" data-settings-key="source_cards.policy.automatic"><input id="source-card-automatic" type="checkbox"> Generate missing cards during indexing</label>
                 <p id="source-card-summary" class="hint" role="status">No card status available.</p>
                 <p id="source-card-progress" class="hint" role="status"></p>
                 <div class="source-card-actions">
@@ -285,6 +304,46 @@
                 </div>
               </section>
             </div>
+          </section>
+          <section id="settings-memory" class="settings-section" data-settings-tab="memory">
+            <section class="source-card-settings conversation-memory-settings" aria-labelledby="conversation-memory-title">
+              <h4 id="conversation-memory-title">Conversation memory</h4>
+              <p class="hint">Use previous project discussions for continuity. Conversation memory is separate from source evidence and cannot supply scientific citations.</p>
+              <label class="check-row" for="memory-enabled" data-settings-key="project_behavior.memory.enabled"><input id="memory-enabled" type="checkbox"> Enable conversation memory</label>
+              <div class="settings-grid">
+                <label for="memory-questions" data-settings-key="project_behavior.memory.questions">Index questions
+                  <select id="memory-questions"><option value="all">All eligible questions</option><option value="none">None</option></select>
+                </label>
+                <label for="memory-answers" data-settings-key="project_behavior.memory.answers">Index answers
+                  <select id="memory-answers"><option value="none">None</option><option value="selected">Saved or liked only</option><option value="all">All eligible answers</option></select>
+                </label>
+                <label for="memory-max-hits" data-settings-key="project_behavior.memory.max_hits">Maximum memory hits
+                  <input id="memory-max-hits" type="number" min="1" step="1">
+                </label>
+                <label for="memory-max-tokens" data-settings-key="project_behavior.memory.max_tokens">Memory token budget
+                  <input id="memory-max-tokens" type="number" min="1" step="1">
+                </label>
+              </div>
+              <label class="check-row" for="memory-exclude-disliked" data-settings-key="project_behavior.memory.exclude_disliked_answers"><input id="memory-exclude-disliked" type="checkbox"> Exclude disliked answers and their questions from chat context</label>
+              <p class="hint">The history setting applies even when long-term memory is disabled. Intent-specific exclusions are configured under Intents.</p>
+              <p id="memory-policy-status" class="hint" role="status">Open a project to configure memory.</p>
+              <div class="source-card-actions">
+                <button id="save-memory-policy" class="secondary" type="button" disabled>Save memory settings</button>
+                <button id="reset-memory-policy" class="secondary" type="button" disabled>Restore defaults</button>
+              </div>
+              <p id="memory-index-status" class="hint" role="status">No memory index status available.</p>
+              <button id="sync-memory-index" class="secondary" type="button" disabled>Update conversation memory</button>
+              <div class="memory-management" aria-labelledby="memory-management-title">
+                <h4 id="memory-management-title">Manage remembered messages</h4>
+                <p class="hint">Inspect saved project discussions. Exclude removes a message from future memory retrieval without deleting the conversation or changing Save, Like, or Dislike. Restoring still follows project and intent policies.</p>
+                <p id="memory-messages-status" class="hint" role="status">Open a project to inspect messages.</p>
+                <div id="memory-messages-list" class="memory-messages-list" aria-label="Saved conversation messages"></div>
+                <div class="source-card-actions memory-messages-pages">
+                  <button id="memory-previous" class="secondary" type="button" disabled>Previous</button>
+                  <button id="memory-next" class="secondary" type="button" disabled>Next</button>
+                </div>
+              </div>
+            </section>
           </section>
         </div>
         <!-- Below the tabs, so messages from Close show on every tab. -->

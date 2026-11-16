@@ -25,8 +25,9 @@ snapshot.
 Packaged JSON files serve as examples. A new type is a
 `<type_id>.json` resource with validated `display_name`, `description`,
 `extensions`, `max_file_bytes`, `retrieval_instruction`, `system_prompt`,
-optional `answer_guidance`, `capabilities`, history settings, a valid
-`default_intent`, an `intents` object and optional empty-chat prompts. The
+optional `answer_guidance`, `capabilities`, history settings, optional
+`generation` defaults, a valid `default_intent`, an `intents` object and
+optional empty-chat prompts. The
 loader derives the type ID from the filename, rejects duplicate JSON keys,
 and validates **all** type files on load.
 
@@ -71,6 +72,14 @@ packaged literature answering intents already use `source_first`. A missing tool
 name or an unregistered name fails validation rather than importing a
 module by string.
 
+For new projects, the top-level `generation` object may specify
+`temperature` (finite and nonnegative) or `thinking` (a boolean), or
+both. Missing fields inherit the packaged `PROJECT_PROFILE` defaults.
+Explicit creation settings override these values, and opening a saved
+project never reapplies them. The active project's `profile.ini` owns
+subsequent user edits; see
+[initialization and precedence](configuration.md#new-project-generation-defaults).
+
 Ordinary intents can also declare `thinking: true`, `false`, or `null`.
 An omitted or null field inherits the configured chat setting; a boolean
 overrides only the direct answer request. Tool-backed intents must leave
@@ -78,10 +87,29 @@ this field omitted or null, because their model calls are tool-owned.
 The parser rejects explicit overrides on tools. See the complete
 [thinking policy and precedence](configuration.md#per-intent-thinking-policy).
 
+The packaged project type is an inheritance baseline. Each project's
+optional `project_behavior.json` can override shared prompts, router
+settings, history, retrieval and existing intent behavior without changing
+intent IDs or tool bindings. It also stores the optional `code_graph` and
+`document_headers` index capabilities; source cards retain their profile
+ownership. The core validates each resolved type. See
+[project behavior overrides](configuration.md#project-behavior-overrides).
+
 Adding a new project type requires checking its source-selection defaults,
 router prompts, installed tool requirements, selected template resources,
 and how the GUI lists it. Merely adding a type ID is not proof that the
 entire pipeline supports its source formats or domain reasoning.
+
+## Metadata contract for configurable settings
+
+Shared setting explanations belong to `kilin/settings_info.json`. Each
+registered tool must provide `settings_info.json` with one record per
+normalized `SETTINGS` key from its `defaults.json`. Records have only
+`title`, `summary` and `description` and are served through KíLín's
+core `get_settings_info()` interface without importing the GUI. Values,
+validity and precedence remain owned by the existing settings parsers.
+The new metadata resource must be included in the tool package-data table
+and verified in wheel tests. See [configuration metadata](configuration.md#settings-information-explanations-not-configuration).
 
 ## Source access by built-in tools
 

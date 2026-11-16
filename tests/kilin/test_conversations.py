@@ -24,6 +24,7 @@ import unittest
 from unittest.mock import patch
 
 from kilin import conversations as module
+from kilin.conversation_memory.models import new_turn_uuid
 from kilin.conversation_ownership import (
     ConversationFileLock,
     ConversationLockedError,
@@ -33,6 +34,15 @@ from kilin.conversation_format import (
     conversation_state,
     new_conversation_session,
 )
+
+
+def _identified(turns: list[dict]) -> list[dict]:
+    """Give branching fixtures distinct current-format completed-turn IDs."""
+
+    return [
+        {"conversation_turn_uuid": new_turn_uuid(), **item}
+        for item in turns
+    ]
 
 
 class ConversationStoreFixture(unittest.TestCase):
@@ -641,8 +651,9 @@ class TestStoreBranching(ConversationStoreFixture):
 
     def test_branch_copies_resume_state_but_not_trace_operations(self):
         parent = self.store.create()
+        turns = _identified([{"question": "Original", "answer": "Yes"}])
         self._persist(parent, {
-            "turns": [{"question": "Original", "answer": "Yes"}],
+            "turns": turns,
             "checkpoint_id": "checkpoint-123",
             "checkpoint": {"parent_checkpoint_id": "before"},
             "system_prompt": "Do science",
@@ -662,8 +673,7 @@ class TestStoreBranching(ConversationStoreFixture):
         self.assertEqual(branch.name, f"Branch: {parent.name}")
         self.assertEqual(self.store.active(), branch)
         saved = self._state(branch)
-        self.assertEqual(saved["turns"],
-                         [{"question": "Original", "answer": "Yes"}])
+        self.assertEqual(saved["turns"], turns)
         self.assertEqual(saved["system_prompt"], "Do science")
         self.assertEqual(saved["checkpoint_id"], "checkpoint-123")
         self.assertEqual(saved["profile"], {"kind": "literature"})
@@ -686,10 +696,10 @@ class TestStoreBranching(ConversationStoreFixture):
                 "phase": "generating", "label": "Generating answer", "ms": 50,
             }],
         }
-        turns = [
+        turns = _identified([
             {"question": "Q1", "answer": "A1", "timeline": activity},
             {"question": "Q2", "answer": "A2", "timeline": activity},
-        ]
+        ])
         self._persist(parent, {"turns": turns})
         branch = self.store.create(
             branch_from=parent.conversation_id, turn_count=1
@@ -714,10 +724,11 @@ class TestStoreBranching(ConversationStoreFixture):
                          parent.conversation_id)
 
     def test_branch_from_imported_conversation_uses_canonical_state(self):
+        turns = _identified([{"question": "Imported"}])
         source = self._candidate(
             "conversation_external.json",
             checkpoint_id="source-checkpoint",
-            turns=[{"question": "Old"}],
+            turns=turns,
         )
         self.store.ensure()
         branch = self.store.create(branch_from="conversation_external")
@@ -725,8 +736,7 @@ class TestStoreBranching(ConversationStoreFixture):
         self.assertNotIn("conversation", payload)
         self.assertIn(CONVERSATION_SESSION_KEY, payload["sessions"])
         self.assertEqual(branch.origin_checkpoint_id, "source-checkpoint")
-        self.assertEqual(self._state(branch)["turns"],
-                         [{"question": "Old"}])
+        self.assertEqual(self._state(branch)["turns"], turns)
         self.assertTrue(source.is_file())
 
     def test_multiple_branches_increment_names(self):
@@ -786,16 +796,31 @@ class TestStoreBranching(ConversationStoreFixture):
         self.assertEqual(set(self.store.root.iterdir()), before)
         self.assertEqual(self.store.active(), parent)
 
+    def test_branch_refuses_saved_turn_without_uuid(self):
+        """Unsupported previous turn formats are never silently upgraded."""
+
+        parent = self.store.create()
+        self._persist(parent, {"turns": [{"question": "no identity"}]})
+        before = self.store.state_path(parent).read_bytes()
+        paths = set(self.store.root.iterdir())
+        with self.assertRaisesRegex(ValueError, "UUID4"):
+            self.store.create(branch_from=parent.conversation_id)
+        self.assertEqual(self.store.state_path(parent).read_bytes(), before)
+        self.assertEqual(set(self.store.root.iterdir()), paths)
+
     def test_branch_parent_with_missing_checkpoint_is_valid(self):
         parent = self.store.create()
-        self._persist(parent, {"turns": [1]})
+        turns = _identified([{"question": "Q"}])
+        self._persist(parent, {"turns": turns})
         branch = self.store.create(branch_from=parent.conversation_id)
         self.assertIsNone(branch.origin_checkpoint_id)
-        self.assertEqual(self._state(branch)["turns"], [1])
+        self.assertEqual(self._state(branch)["turns"], turns)
 
     def test_branch_keeps_only_the_first_turns(self):
         parent = self.store.create()
-        turns = [{"question": f"Q{index}"} for index in range(1, 4)]
+        turns = _identified([
+            {"question": f"Q{index}"} for index in range(1, 4)
+        ])
         self._persist(parent, {
             "turns": turns,
             "checkpoint_id": "checkpoint-3",
@@ -823,7 +848,7 @@ class TestStoreBranching(ConversationStoreFixture):
 
     def test_branch_turn_count_from_none_to_all_turns(self):
         parent = self.store.create()
-        turns = [{"question": "Q1"}, {"question": "Q2"}]
+        turns = _identified([{"question": "Q1"}, {"question": "Q2"}])
         self._persist(parent, {"turns": turns, "checkpoint_id": "two"})
         for turn_count, kept in ((0, []), (2, turns), (None, turns)):
             with self.subTest(turn_count=turn_count):
@@ -838,7 +863,9 @@ class TestStoreBranching(ConversationStoreFixture):
 
     def test_branch_turn_count_outside_saved_turns_creates_nothing(self):
         parent = self.store.create()
-        self._persist(parent, {"turns": [1, 2]})
+        self._persist(parent, {
+            "turns": _identified([{"question": "Q1"}, {"question": "Q2"}])
+        })
         before = set(self.store.root.iterdir())
         for value in (-1, 3, True, 1.5, "1"):
             with self.subTest(value=value):

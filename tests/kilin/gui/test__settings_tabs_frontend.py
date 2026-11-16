@@ -7,8 +7,9 @@ tab, is still drawn with the effort levels. Run the production
 covered only by the Qt/WebEngine smoke test and manual checks. KíLín
 setup holds the computation backend, Appearance and the projects folder
 above the tabs, since they cover the whole app; folded, it is one row.
-Below it, the Project region holds five tabs: General (the name),
-Indexing, Models, Answers and Tools. On/off settings are switches.
+Below it, the Project region holds seven tabs: General (the name),
+Indexing, Memory, Models, Answers, Intents and Tools. On/off settings
+are switches.
 
 """
 
@@ -27,14 +28,17 @@ from tests.kilin.gui._frontend_support import (
 )
 
 _WEB = Path(__file__).resolve().parents[3] / "kilin/gui/web"
-_TABS = ["general", "indexing", "models", "answers", "tools"]
+_TABS = [
+    "general", "indexing", "memory", "models", "answers",
+    "intents", "tools",
+]
 
 
 class TestSettingsTabsFrontend(unittest.TestCase):
     """Show Settings one category at a time."""
 
     def test_every_section_belongs_to_one_tab(self):
-        """App-wide parts above four tabs; each other section has a tab."""
+        """App-wide parts above seven tabs; each section has one tab."""
 
         page = (_WEB / "index.html").read_text(encoding="utf-8")
         start = page.index('id="models-panel"')
@@ -46,7 +50,7 @@ class TestSettingsTabsFrontend(unittest.TestCase):
             panel,
         )
         # The app-wide settings, then one section per tab.
-        self.assertEqual(len(sections), 6)
+        self.assertEqual(len(sections), 8)
         self.assertNotIn("data-settings-tab", sections[0])
         self.assertIn('id="settings-app"', sections[0])
         # These cover the whole app, so they sit above the tabs, inside
@@ -56,12 +60,16 @@ class TestSettingsTabsFrontend(unittest.TestCase):
         start = app.index('id="first-run-setup"')
         setup = app[start : app.index("</details>")]
         for part in (
-            '<label for="backend">Computation backend</label>',
-            '<label for="appearance">Appearance</label>',
-            '<label for="workspace-path">Projects folder</label>',
+            '<label for="backend" data-settings-key="interface.backend">'
+            'Computation backend</label>',
+            '<label for="appearance" data-settings-key="interface.appearance">'
+            'Appearance</label>',
+            '<label for="workspace-path" '
+            'data-settings-key="interface.workspace_folder">'
+            'Projects folder</label>',
         ):
             self.assertIn(part, setup)
-        # The four tabs share the full width.
+        # The seven tabs share the full width.
         styles = (_WEB / "styles.css").read_text(encoding="utf-8")
         self.assertIn(".settings-tab { position: relative; flex: 1 1 0;",
                       styles)
@@ -76,6 +84,24 @@ class TestSettingsTabsFrontend(unittest.TestCase):
         region = panel.index('id="settings-project-region"')
         self.assertLess(panel.index("</details>"), region)
         self.assertLess(region, tabs_at)
+
+    def test_memory_settings_have_their_own_tab(self):
+        """Memory policy is separate from source indexing controls."""
+
+        page = (_WEB / "index.html").read_text(encoding="utf-8")
+        indexing_start = page.index('id="settings-indexing"')
+        memory_start = page.index('id="settings-memory"')
+        after_memory = page.index('<!-- Below the tabs', memory_start)
+        indexing = page[indexing_start:memory_start]
+        memory = page[memory_start:after_memory]
+        self.assertIn('data-settings-tab="memory"', memory)
+        self.assertIn('id="memory-enabled"', memory)
+        self.assertIn('id="memory-index-status"', memory)
+        self.assertIn('id="sync-memory-index"', memory)
+        self.assertNotIn('id="memory-enabled"', indexing)
+        self.assertNotIn('id="sync-memory-index"', indexing)
+        self.assertIn('id="index-capabilities-title"', indexing)
+        self.assertEqual(page.count('id="memory-enabled"'), 1)
 
     def test_search_depth_sits_in_answers(self):
         """Search depth shows in Answers but applies with the models."""
@@ -102,7 +128,10 @@ class TestSettingsTabsFrontend(unittest.TestCase):
         """Labels above full-width boxes of one size, on every tab."""
 
         page = (_WEB / "index.html").read_text(encoding="utf-8")
-        self.assertIn('<label for="appearance">Appearance</label>', page)
+        self.assertIn(
+            '<label for="appearance" data-settings-key="interface.appearance">'
+            'Appearance</label>', page,
+        )
         self.assertNotIn("<h3>Appearance</h3>", page)
         styles = (_WEB / "styles.css").read_text(encoding="utf-8")
         self.assertIn(
@@ -134,25 +163,36 @@ function element(data) {
     setAttribute(name, value) { this.attributes[name] = value; },
   };
 }
-const names = ["project", "models", "answers"];
+const names = ["project", "models", "answers", "memory"];
 const tabs = names.map((tab) => element({ tab }));
 const sections = names.map((settingsTab) => element({ settingsTab }));
 const document = { querySelectorAll: (selector) =>
   selector === ".settings-tab" ? tabs : sections };
 let settingsTab = "project";
+let ready = true, openProjectPath = "/workspace";
+const statusCalls = [];
+const requestProjectBehavior = () => statusCalls.push("policy");
+const requestMemoryMessages = () => statusCalls.push("messages");
+const bridge = {requestMemoryStatus: (path) =>
+  statusCalls.push(`status:${path}`)};
 """
         script += _function(source, "showSettingsTab")
         script += r"""
 showSettingsTab("answers");
 assert.equal(settingsTab, "answers");
 assert.deepEqual(tabs.map((tab) => tab.attributes["aria-selected"]),
-  ["false", "false", "true"]);
-assert.deepEqual(tabs.map((tab) => tab.tabIndex), [-1, -1, 0]);
+  ["false", "false", "true", "false"]);
+assert.deepEqual(tabs.map((tab) => tab.tabIndex), [-1, -1, 0, -1]);
 assert.deepEqual(sections.map((item) => item.classList.set.has("tab-hidden")),
-  [true, true, false]);
+  [true, true, false, true]);
 showSettingsTab("project");
 assert.deepEqual(sections.map((item) => item.classList.set.has("tab-hidden")),
-  [false, true, true]);
+  [false, true, true, true]);
+showSettingsTab("memory");
+assert.equal(settingsTab, "memory");
+assert.deepEqual(statusCalls, ["policy", "status:/workspace", "messages"]);
+assert.deepEqual(sections.map((item) =>
+  item.classList.set.has("tab-hidden")), [true, true, true, false]);
 console.log("settings tabs passed");
 """
         result = run_node(script)

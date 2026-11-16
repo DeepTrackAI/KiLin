@@ -1,0 +1,465 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "project.profile.type_id": {
+      "title": "Project type",
+      "summary": "Selects the registered project configuration.",
+      "description": "Determines the inherited intents, routing, retrieval, and source defaults. Changing the project type is not an ordinary project setting edit."
+    },
+    "project.profile.source": {
+      "title": "Source directory",
+      "summary": "Identifies the directory containing the project source snapshots.",
+      "description": "The project reads its source material from this directory. It is part of the workspace layout, not an instruction to a model."
+    },
+    "project.profile.extensions": {
+      "title": "Additional UTF-8 file types",
+      "summary": "Controls which source-file extensions are eligible for indexing.",
+      "description": "Lists extensions that the repository scanner will consider for this project. Changing the selection can affect which files are indexed."
+    },
+    "project.profile.max_file_bytes": {
+      "title": "Maximum file size",
+      "summary": "Sets the maximum source-file size accepted for indexing, in bytes.",
+      "description": "Files larger than this limit are excluded from ordinary ingestion. Increasing the limit may increase indexing time and memory use."
+    },
+    "project.profile.backend": {
+      "title": "Computation backend",
+      "summary": "Selects automatic, MLX, or PyTorch execution for models.",
+      "description": "The backend determines which compatible local models can run. Automatic selection follows the platform-specific backend policy."
+    },
+    "project.profile.allow_download": {
+      "title": "Allow model downloads",
+      "summary": "Controls whether missing model files may be downloaded.",
+      "description": "When disabled, model loading must use files available locally. This setting does not control reference-tool online lookup."
+    },
+    "project.profile.chat_mlx": {
+      "title": "MLX language model",
+      "summary": "Selects the MLX model used for answer generation.",
+      "description": "Identifies the local or downloadable MLX model for answer generation. The model must be compatible with the selected backend."
+    },
+    "project.profile.chat_torch": {
+      "title": "PyTorch language model",
+      "summary": "Selects the PyTorch model used for answer generation.",
+      "description": "Identifies the local or downloadable PyTorch model for answer generation. The model must be compatible with the selected backend."
+    },
+    "project.profile.embedding_mlx": {
+      "title": "MLX embedding model",
+      "summary": "Selects the MLX model used for semantic retrieval.",
+      "description": "Identifies the local or downloadable MLX model for semantic retrieval. The model must be compatible with the selected backend."
+    },
+    "project.profile.embedding_torch": {
+      "title": "PyTorch embedding model",
+      "summary": "Selects the PyTorch model used for semantic retrieval.",
+      "description": "Identifies the local or downloadable PyTorch model for semantic retrieval. The model must be compatible with the selected backend."
+    },
+    "project.profile.query_format": {
+      "title": "Embedding query format",
+      "summary": "Selects how a question is formatted before embedding.",
+      "description": "Use a query format compatible with the embedding model. The format can change semantic retrieval even when the question is unchanged."
+    },
+    "project.profile.target_tokens": {
+      "title": "Target chunk tokens",
+      "summary": "Sets the preferred size of indexed text chunks.",
+      "description": "The chunker aims for this size while respecting source structure and maximum chunk limits. Changing it requires rebuilding affected indexes."
+    },
+    "project.profile.max_tokens": {
+      "title": "Maximum chunk tokens",
+      "summary": "Limits the size of a single indexed text chunk.",
+      "description": "The chunker avoids chunks longer than this token budget. This changes index construction and may affect which passages are retrieved."
+    },
+    "project.profile.overlap_tokens": {
+      "title": "Overlap tokens",
+      "summary": "Controls the text overlap between neighboring indexed chunks.",
+      "description": "Overlap carries context across chunk boundaries at the cost of additional indexed text. Changing it requires index reconciliation."
+    },
+    "project.profile.retrieval_count": {
+      "title": "Retrieved passage count",
+      "summary": "Controls the default number of results requested during retrieval.",
+      "description": "Larger values can provide more evidence at greater search and context-processing cost. Per-intent retrieval limits may also apply."
+    },
+    "project.profile.thinking": {
+      "title": "Request thinking",
+      "summary": "Requests thinking when supported by the selected chat template.",
+      "description": "Controls the default thinking request for generated answers. An individual intent may explicitly inherit, enable, or disable it."
+    },
+    "project.profile.temperature": {
+      "title": "Temperature",
+      "summary": "Controls randomness in generated answers.",
+      "description": "Lower values favor more deterministic text; higher values allow more variation. The effect depends on the selected model and backend."
+    },
+    "project.profile.max_new_tokens": {
+      "title": "Maximum answer tokens",
+      "summary": "Caps the number of tokens generated for an answer.",
+      "description": "A smaller cap can truncate otherwise valid answers. When unset, generation may use the remaining context budget subject to backend limits."
+    },
+    "project.profile.block_unrequested_cjk": {
+      "title": "Unrequested CJK blocking",
+      "summary": "Controls filtering of unsolicited Chinese, Japanese, or Korean text.",
+      "description": "Affects post-generation language filtering rather than retrieval or model selection."
+    },
+    "project_behavior.global.description": {
+      "title": "Project description (for routing)",
+      "summary": "Helps the router interpret questions in the context of this project.",
+      "description": "Describes the project purpose and material for intent classification. It is not added directly to the final answer-generation system prompt."
+    },
+    "project_behavior.global.system_prompt": {
+      "title": "Project system instructions",
+      "summary": "Provides shared instructions for ordinary generated answers.",
+      "description": "Combined with the applicable ordinary intent instructions when constructing the answer prompt; tool-written answers have separate paths."
+    },
+    "project_behavior.global.answer_guidance": {
+      "title": "Default answer guidance",
+      "summary": "Provides project-wide guidance for generated answers.",
+      "description": "Affects the style or content requested from the answer model. Individual intents may supply their own guidance."
+    },
+    "project_behavior.global.retrieval_instruction": {
+      "title": "Embedding query instruction",
+      "summary": "Precedes or guides semantic retrieval queries.",
+      "description": "Changes how queries are prepared for embedding. It does not change the retrieved source content or the model itself."
+    },
+    "project_behavior.global.history.recent_turns": {
+      "title": "Recent conversation turns",
+      "summary": "Sets the maximum number of recent conversation turns considered.",
+      "description": "Controls how much prior conversation is available to eligible intents. History policies can exclude or further select those turns."
+    },
+    "project_behavior.memory.enabled": {
+      "title": "Conversation memory",
+      "summary": "Enables project-local indexing and retrieval of prior conversations.",
+      "description": "Conversation memory is distinct from primary sources and immediate conversation history. This setting controls future memory ingestion and retrieval, not source indexing."
+    },
+    "project_behavior.memory.questions": {
+      "title": "Questions in memory",
+      "summary": "Choose whether eligible questions are indexed automatically.",
+      "description": "All automatically includes questions from eligible intents. None disables automatic question entries; intent policies can further restrict indexing."
+    },
+    "project_behavior.memory.answers": {
+      "title": "Answers in memory",
+      "summary": "Choose whether assistant answers are indexed automatically, by selection, or never.",
+      "description": "Selected requires an explicit Save or Like; all permits eligible non-disliked answers automatically; none forbids answer indexing even when liked. Intent never and Dislike remain hard exclusions."
+    },
+    "project_behavior.memory.max_hits": {
+      "title": "Maximum memory results",
+      "summary": "Limits retrieved conversation-memory entries to 1–20 per answer.",
+      "description": "This is an independent retrieval limit, not a limit on retrieved source evidence or recent conversation turns."
+    },
+    "project_behavior.memory.max_tokens": {
+      "title": "Memory context budget",
+      "summary": "Limits memory-only context to 128–20,000 estimated tokens.",
+      "description": "The memory budget is separate from the primary-source evidence budget. Conversation memory cannot be represented as numbered scientific evidence."
+    },
+    "project_behavior.memory.exclude_disliked_answers": {
+      "title": "Exclude disliked answers from chat context",
+      "summary": "Controls whether previously rejected answers are supplied as conversation history.",
+      "description": "Enabled by default. A Dislike will exclude the rejected answer from automatic conversation context and its question from automatic context; the saved original turn remains untouched. This policy is independent of long-term memory indexing."
+    },
+    "project_behavior.global.default_intent": {
+      "title": "Default intent",
+      "summary": "Selects the fallback intent when classification is inconclusive.",
+      "description": "Names an existing intent in this project type. Router shortcuts and explicit decisions can select other intents."
+    },
+    "project_behavior.global.welcome_prompts": {
+      "title": "Welcome prompts",
+      "summary": "Controls the introductory prompts shown for this project.",
+      "description": "These prompts are presentation suggestions for starting a conversation, not instructions sent automatically to the answering model."
+    },
+    "project_behavior.global.suggestions": {
+      "title": "Suggested questions",
+      "summary": "Sets example questions offered to users of this project.",
+      "description": "These examples appear in the empty conversation interface and do not affect routing until a user selects or submits one."
+    },
+    "project_behavior.intents.description": {
+      "title": "Intent description (for routing)",
+      "summary": "Helps the router decide when this intent handles a question.",
+      "description": "Explains the types of questions handled by this intent. It affects model-based routing, but is not itself an answer-generation instruction."
+    },
+    "project_behavior.intents.system_prompt": {
+      "title": "Intent system instructions",
+      "summary": "Adds instructions for answers generated under this intent.",
+      "description": "Applies to ordinary answer-generating intents, alongside the shared project instructions. Tool-backed intents follow their tool contract."
+    },
+    "project_behavior.intents.answer_guidance": {
+      "title": "Intent answer guidance",
+      "summary": "Overrides or inherits project-wide answer guidance.",
+      "description": "When inherited, the project guidance applies. An explicit intent override changes the instructions sent for answers of this intent."
+    },
+    "project_behavior.intents.history.policy": {
+      "title": "Conversation history policy",
+      "summary": "Controls whether and how prior turns are used.",
+      "description": "Choose no history, recent turns, or relevant turns as supported by the intent. This changes the context supplied for new questions."
+    },
+    "project_behavior.intents.memory.indexing": {
+      "title": "Intent memory indexing",
+      "summary": "Choose automatic indexing, explicit selection, or never for this intent.",
+      "description": "Automatic follows project question and answer policies, explicit requires user Save or Like, and never prevents memory indexing even when explicitly selected. The rule applies to turns produced by this intent."
+    },
+    "project_behavior.intents.memory.read": {
+      "title": "Intent memory retrieval",
+      "summary": "Controls whether the intent can search prior conversation memory.",
+      "description": "Independent from whether the intent creates new memory entries or retrieves primary sources. Disabling this option does not remove recent chat history."
+    },
+    "project_behavior.intents.retrieval.mode": {
+      "title": "Retrieval mode",
+      "summary": "Selects how this intent obtains supporting context.",
+      "description": "Controls whether the intent searches, works from a document, reuses evidence, or answers without retrieval, subject to intent validation."
+    },
+    "project_behavior.intents.retrieval.strategy": {
+      "title": "Search strategy",
+      "summary": "Chooses the strategy used to organize retrieved sources.",
+      "description": "Hybrid ranking and source-first selection differ in how results are organized and limited. Source-first limits only apply when relevant."
+    },
+    "project_behavior.intents.retrieval.include_related_evidence": {
+      "title": "Include related evidence",
+      "summary": "Allows evidence from related earlier turns to support this intent.",
+      "description": "Adds eligible previously retrieved context where supported by the conversation and intent policies."
+    },
+    "project_behavior.intents.retrieval.prefer_source_code": {
+      "title": "Prefer source code",
+      "summary": "Favors source-code passages where the intent supports this choice.",
+      "description": "Influences retrieval preference without altering the indexed files."
+    },
+    "project_behavior.intents.retrieval.max_tokens": {
+      "title": "Document token budget",
+      "summary": "Limits the amount of document text sent to the answer model.",
+      "description": "Caps context gathered by document-oriented retrieval. Too small a budget can omit relevant material."
+    },
+    "project_behavior.intents.retrieval.max_sources": {
+      "title": "Maximum sources",
+      "summary": "Caps distinct source documents selected by source-first search.",
+      "description": "Applies when the intent uses a source-first strategy. More sources increase potential coverage and context cost."
+    },
+    "project_behavior.intents.retrieval.passages_per_source": {
+      "title": "Passages per source",
+      "summary": "Caps passages selected from any one source.",
+      "description": "Used by source-first retrieval to balance coverage across documents."
+    },
+    "project_behavior.intents.retrieval.max_passages": {
+      "title": "Maximum passages",
+      "summary": "Limits the total evidence passages included by source-first retrieval.",
+      "description": "A smaller value reduces context but may exclude relevant evidence."
+    },
+    "project_behavior.intents.retrieval.evidence_tokens": {
+      "title": "Evidence token budget",
+      "summary": "Caps tokens used for source-first retrieved evidence.",
+      "description": "Constrains the total retrieved passage text sent onward to the model."
+    },
+    "project_behavior.intents.retrieval.coverage": {
+      "title": "Coverage policy",
+      "summary": "Controls bounded versus exhaustive source-first coverage.",
+      "description": "Exhaustive selection may inspect more candidates and cost more than bounded selection. It does not guarantee all relevant evidence exists."
+    },
+    "project_behavior.intents.shortcuts": {
+      "title": "Routing shortcuts",
+      "summary": "Regular-expression patterns for direct intent selection.",
+      "description": "Matching shortcuts can bypass model-based intent classification. Patterns must follow the project-type validation rules."
+    },
+    "project_behavior.intents.cues": {
+      "title": "Routing cues",
+      "summary": "Regular-expression patterns that signal this intent.",
+      "description": "Cues provide routing evidence when the question matches their patterns."
+    },
+    "project_behavior.intents.requires": {
+      "title": "Routing requirements",
+      "summary": "Regular-expression patterns constraining intent applicability.",
+      "description": "Requirements help reject unsuitable intent selections when essential question features are absent."
+    },
+    "project_behavior.intents.thinking": {
+      "title": "Thinking policy",
+      "summary": "Inherits or overrides the chat-model thinking request for this intent.",
+      "description": "An inherited setting follows the main answer configuration. Explicit on or off settings apply to this intent when supported."
+    },
+    "project_behavior.capabilities.code_graph": {
+      "title": "Code graph",
+      "summary": "Controls indexing of relationships between code elements.",
+      "description": "Automatic selection follows the project-type policy. Changing this capability requires checking or rebuilding affected indexes."
+    },
+    "project_behavior.capabilities.document_headers": {
+      "title": "Document header extraction",
+      "summary": "Controls extraction of scientific-paper headers during indexing.",
+      "description": "Affects derived document metadata in the index. Changing it requires reconciling affected indexed data."
+    },
+    "source_cards.policy.enabled": {
+      "title": "Enable source cards",
+      "summary": "Enables indexing and retrieval of derived source cards.",
+      "description": "The original source passages remain authoritative. Disabling cards prevents their use even when individual sources have card overrides."
+    },
+    "source_cards.policy.kind": {
+      "title": "Preferred card kind",
+      "summary": "Selects the default registered source-card format.",
+      "description": "The selected kind determines which card format is used for eligible sources; per-source exceptions may override it."
+    },
+    "source_cards.policy.automatic": {
+      "title": "Automatic card generation",
+      "summary": "Generates missing or stale source cards during indexing.",
+      "description": "When enabled, indexing may load the card-generation model if cards need creation or refreshing."
+    },
+    "source_cards.source.enabled": {
+      "title": "Source-card override enabled",
+      "summary": "Selects whether a particular source participates in card indexing.",
+      "description": "A per-source selection is subordinate to the project-wide source-card enabled switch."
+    },
+    "source_cards.source.kind": {
+      "title": "Source-card override kind",
+      "summary": "Selects a registered card kind for one source.",
+      "description": "When unset, the source inherits the project-wide preferred kind."
+    },
+    "source_cards.generation.model_id": {
+      "title": "Source-card generation model",
+      "summary": "Selects the model used to generate derived source cards.",
+      "description": "The model runs only when a card needs generation and must be compatible with the selected computation backend."
+    },
+    "source_cards.generation.thinking": {
+      "title": "Card-generation thinking",
+      "summary": "Requests thinking in compatible card-generation chat templates.",
+      "description": "This is independent of the thinking preference used for ordinary answer generation."
+    },
+    "source_cards.generation.temperature": {
+      "title": "Card-generation temperature",
+      "summary": "Controls sampling variability in generated source cards.",
+      "description": "Lower values favor repeatable extraction when supported by the selected card-generation model."
+    },
+    "source_cards.generation.max_input_tokens": {
+      "title": "Card-generation input tokens",
+      "summary": "Limits how much source text card generation may process.",
+      "description": "A smaller limit can truncate context supplied to card generation."
+    },
+    "source_cards.generation.max_new_tokens": {
+      "title": "Card-generation output tokens",
+      "summary": "Limits the number of tokens generated for a source card.",
+      "description": "Too small a limit may truncate structured card output."
+    },
+    "model_settings.effort_levels": {
+      "title": "Effort levels",
+      "summary": "Names the local models used at each configured effort level.",
+      "description": "Changes the model presets available during question answering. Backend capabilities determine whether levels switch models."
+    },
+    "model_settings.effort_levels.name": {
+      "title": "Effort-level name",
+      "summary": "Names an effort preset shown to the user.",
+      "description": "Changes only the preset label; it does not alter model parameters."
+    },
+    "model_settings.effort_levels.model": {
+      "title": "Effort-level model",
+      "summary": "Selects the chat model associated with an effort preset.",
+      "description": "Different presets can choose different models where the backend supports model switching."
+    },
+    "model_settings.search_depth": {
+      "title": "Search depth",
+      "summary": "Sets retrieved passage counts for the search-depth choices.",
+      "description": "Higher levels can retrieve more evidence at additional context cost."
+    },
+    "model_settings.router_models": {
+      "title": "Intent model",
+      "summary": "Chooses the model used for intent classification.",
+      "description": "This model identifies the intent before answering and can differ from the model that produces the final response."
+    },
+    "model_settings.embedding_models": {
+      "title": "Embedding model",
+      "summary": "Chooses the model used to compute semantic text embeddings.",
+      "description": "Embedding model changes can require rebuilding semantic indexes so query and source representations remain compatible."
+    },
+    "model_settings.query_format": {
+      "title": "Embedding query format",
+      "summary": "Controls query formatting for semantic embedding.",
+      "description": "The format must be compatible with the configured embedding model."
+    },
+    "interface.appearance": {
+      "title": "Appearance",
+      "summary": "Selects the desktop interface appearance.",
+      "description": "Choose system, light, or dark mode. This does not affect projects or model output."
+    },
+    "interface.backend": {
+      "title": "Preferred backend",
+      "summary": "Selects the default computation backend for desktop model setup.",
+      "description": "Determines the installed runtime and suggested models used when preparing a new project."
+    },
+    "interface.workspace_folder": {
+      "title": "Projects folder",
+      "summary": "Selects the parent directory where local project workspaces live.",
+      "description": "Changing this location does not automatically move previously created projects."
+    },
+    "interface.project_name": {
+      "title": "Project name",
+      "summary": "Names the project workspace in the interface.",
+      "description": "Changes the display name of an open project or the name chosen for a newly created project. It does not change the project type or the indexed source material."
+    },
+    "model_settings.source_card_models.mlx": {
+      "title": "MLX card-generation model",
+      "summary": "Selects the MLX model used for derived source-card generation.",
+      "description": "Selects the MLX model used for derived source-card generation. This backend-specific selection does not alter the ordinary answering model."
+    },
+    "model_settings.source_card_models.torch": {
+      "title": "PyTorch card-generation model",
+      "summary": "Selects the PyTorch model used for derived source-card generation.",
+      "description": "Selects the PyTorch model used for derived source-card generation. This backend-specific selection does not alter the ordinary answering model."
+    },
+    "trace.enabled": {
+      "title": "Trace event recording",
+      "summary": "Controls whether diagnostic trace events are written.",
+      "description": "Disabling diagnostic events does not disable the mandatory conversation checkpoint or other saved project state."
+    },
+    "trace.output_path": {
+      "title": "Trace output path",
+      "summary": "Selects where a trace is written.",
+      "description": "For an active project the path must follow the conversation ownership rules. Traces can contain sensitive prompts and evidence."
+    },
+    "trace.include_embedding_vectors": {
+      "title": "Include embedding vectors",
+      "summary": "Allows diagnostic traces to contain full embedding vectors.",
+      "description": "Complete vectors can increase trace size and retain information derived from source content. The option defaults to disabled."
+    },
+    "trace.failure_policy": {
+      "title": "Trace write-failure policy",
+      "summary": "Controls whether diagnostic trace write failures warn or raise.",
+      "description": "The strict raise policy propagates diagnostic write errors; the warning policy disables later event writes. Conversation checkpoints are handled separately."
+    },
+    "session.conversation_path": {
+      "title": "Conversation path",
+      "summary": "Selects the project-owned conversation to open or create.",
+      "description": "If unset, the session creates a new conversation under the project logs. Paths must respect conversation ownership and locking."
+    },
+    "session.router_model": {
+      "title": "Router model override",
+      "summary": "Selects an intent-classification model for the session.",
+      "description": "When omitted, the project uses its saved router model or the packaged default. This is separate from answer generation."
+    },
+    "answer.retrieval_count": {
+      "title": "Answer retrieval count",
+      "summary": "Controls the initial retrieval count for one question.",
+      "description": "This per-turn value overrides the project retrieval-count default. Explicitly focused retrieval may expand evidence selection."
+    },
+    "answer.generation_settings.temperature": {
+      "title": "Answer temperature override",
+      "summary": "Changes answer-generation randomness on the loaded session.",
+      "description": "When supplied for a question, the validated generation setting persists on the loaded chat session until changed."
+    },
+    "answer.generation_settings.thinking": {
+      "title": "Answer thinking override",
+      "summary": "Requests or disables thinking on the loaded chat session.",
+      "description": "An explicit intent-level thinking policy still takes precedence for that direct answer. This generation setting persists for subsequent questions."
+    },
+    "answer.generation_settings.max_new_tokens": {
+      "title": "Answer token-limit override",
+      "summary": "Changes the generation token cap on the loaded session.",
+      "description": "The validated answer-length setting is retained for subsequent questions until replaced."
+    },
+    "answer.answer_guidance": {
+      "title": "Per-answer guidance",
+      "summary": "Supplies instructions for one answer.",
+      "description": "Intent guidance takes precedence; otherwise caller guidance overrides the project default. An empty string can explicitly disable inherited project guidance."
+    },
+    "answer.retrieval_query": {
+      "title": "Retrieval query override",
+      "summary": "Selects text to retrieve with instead of the user question.",
+      "description": "The original user question remains the question to answer. This can support standalone rewriting of follow-up questions."
+    },
+    "answer.reuse_evidence": {
+      "title": "Reuse previous evidence",
+      "summary": "Reuses eligible evidence from the previous turn without a new search.",
+      "description": "Appropriate for follow-ups about the same sources. Evidence reuse is distinct from verifying new claims."
+    },
+    "answer.use_router": {
+      "title": "Run intent router",
+      "summary": "Controls whether intent classification uses the routing model.",
+      "description": "When disabled, the project-type default intent is selected rather than running the router."
+    }
+  }
+}

@@ -14,7 +14,7 @@ integration with project profile defaults.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 import json
 from pathlib import Path
 import re
@@ -22,15 +22,20 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+import kilin
 from kilin import project
 from kilin.defaults import load_defaults_section
 from kilin.project_type import (
+    MEMORY_ANSWER_CHOICES,
+    MEMORY_INDEXING_CHOICES,
+    MEMORY_QUESTION_CHOICES,
     DOCUMENT_MAX_TOKENS,
     HISTORY_POLICY_CHOICES,
     RETRIEVAL_MODE_CHOICES,
     RETRIEVAL_STRATEGY_CHOICES,
     PROJECT_TYPES_DIR,
     Intent,
+    ConversationMemorySettings,
     ProjectType,
     load_project_types,
     project_type,
@@ -107,6 +112,100 @@ class ProjectTypeFixture(unittest.TestCase):
         ]
 
 
+class TestProjectGenerationDefaults(ProjectTypeFixture):
+    """Check type-provided creation defaults and saved-profile precedence."""
+
+    def test_generation_defaults_are_optional_and_independent(self) -> None:
+        """Omitted keys inherit packaged settings independently."""
+
+        base = self._load("no-generation", _type_data())
+        self.assertIsNone(base.generation_thinking)
+        self.assertIsNone(base.generation_temperature)
+
+        raw = _type_data()
+        raw["generation"] = {"thinking": False}
+        thinking = self._load("thinking-only", raw)
+        self.assertIs(thinking.generation_thinking, False)
+        self.assertIsNone(thinking.generation_temperature)
+
+        raw = _type_data()
+        raw["generation"] = {"temperature": 0.9}
+        temperature = self._load("temperature-only", raw)
+        self.assertIsNone(temperature.generation_thinking)
+        self.assertEqual(temperature.generation_temperature, 0.9)
+
+        raw = _type_data()
+        raw["generation"] = {"thinking": True, "temperature": 0}
+        both = self._load("both", raw)
+        self.assertIs(both.generation_thinking, True)
+        self.assertEqual(both.generation_temperature, 0.0)
+
+    def test_generation_rejects_invalid_settings(self) -> None:
+        """Reject invalid, misspelled, and nonfinite defaults on load."""
+
+        cases = (
+            (None, "object"),
+            ([], "object"),
+            ({"unexpected": True}, "unknown settings"),
+            ({"thinking": None}, "generation.thinking"),
+            ({"thinking": 1}, "generation.thinking"),
+            ({"thinking": "false"}, "generation.thinking"),
+            ({"temperature": None}, "generation.temperature"),
+            ({"temperature": True}, "generation.temperature"),
+            ({"temperature": "0.9"}, "generation.temperature"),
+            ({"temperature": -0.1}, "generation.temperature"),
+            ({"temperature": float("nan")}, "generation.temperature"),
+            ({"temperature": float("inf")}, "generation.temperature"),
+        )
+        for index, (generation, error) in enumerate(cases):
+            with self.subTest(generation=generation):
+                raw = _type_data()
+                raw["generation"] = generation
+                with self.assertRaisesRegex(ValueError, error):
+                    self._load(f"bad-generation-{index}", raw)
+
+    def test_creation_writes_defaults_but_explicit_settings_win(self) -> None:
+        """Saved settings remain authoritative after type defaults change."""
+
+        from kilin.workspace import prepare_sources_workspace
+
+        raw = _type_data()
+        raw["generation"] = {"thinking": False, "temperature": 0.9}
+        definition = replace(self._load("creative", raw), id="code")
+        with patch(
+            "kilin.project.load_project_types",
+            return_value={"code": definition},
+        ):
+            default = project.default_project_profile("code")
+            self.assertIs(default.thinking, False)
+            self.assertEqual(default.temperature, 0.9)
+
+            created = project.initialize_project(
+                self.root / "default-project", "code"
+            )
+            self.assertIs(created.profile.thinking, False)
+            self.assertEqual(created.profile.temperature, 0.9)
+
+            explicit = prepare_sources_workspace(
+                [], "code", self.root / "explicit-project",
+                settings={"thinking": True, "temperature": 0.4},
+            )
+            self.assertIs(explicit.profile.thinking, True)
+            self.assertEqual(explicit.profile.temperature, 0.4)
+
+        reopened = project.open_project(created.root)
+        self.assertIs(reopened.profile.thinking, False)
+        self.assertEqual(reopened.profile.temperature, 0.9)
+        updated = project.configure_project(
+            created.root, {"thinking": True, "temperature": 0.3}
+        )
+        self.assertIs(updated.profile.thinking, True)
+        self.assertEqual(updated.profile.temperature, 0.3)
+        self.assertEqual(
+            project.open_project(created.root).profile.temperature, 0.3
+        )
+
+
 class TestPackagedProjectTypes(unittest.TestCase):
     """Check real JSON files without asserting their mutable prose."""
 
@@ -146,6 +245,37 @@ class TestPackagedProjectTypes(unittest.TestCase):
                 self.assertTrue(definition.description)
                 self.assertTrue(definition.display_name)
 
+    def test_brainstorming_ids_and_labels_are_explicit(self) -> None:
+        """Creative and grounded brainstorming keep distinct type contracts.
+
+        """
+
+        types = load_project_types()
+        self.assertNotIn("brainstorming", types)
+        self.assertEqual(next(iter(types)), "code")
+        self.assertEqual(
+            types["creative_brainstorming"].display_name,
+            "Brainstorming (Creative)",
+        )
+        self.assertEqual(
+            types["grounded_brainstorming"].display_name,
+            "Brainstorming (Grounded)",
+        )
+        self.assertIn(
+            "open_ideation", types["creative_brainstorming"].intents
+        )
+        self.assertNotIn(
+            "open_ideation", types["grounded_brainstorming"].intents
+        )
+        for type_id in (
+            "creative_brainstorming", "grounded_brainstorming"
+        ):
+            with self.subTest(type_id=type_id):
+                self.assertEqual(
+                    project.default_project_profile(type_id).type_id,
+                    type_id,
+                )
+
     def test_packaged_intents_are_valid_and_usable(self) -> None:
         """Exercise parsed options for every current and future intent."""
 
@@ -179,6 +309,48 @@ class TestPackagedProjectTypes(unittest.TestCase):
                         for shortcut in intent.shortcuts:
                             self.assertIsInstance(shortcut, re.Pattern)
                             self.assertTrue(shortcut.flags & re.IGNORECASE)
+
+    def test_packaged_conversation_memory_defaults(self) -> None:
+        """Type defaults are explicit, including reviewing and writing."""
+
+        expected_enabled = {
+            "writing", "creative_brainstorming", "grounded_brainstorming",
+            "reviewing",
+        }
+        for name, definition in load_project_types().items():
+            with self.subTest(type_id=name):
+                self.assertIsInstance(
+                    definition.conversation_memory,
+                    ConversationMemorySettings,
+                )
+                memory = definition.conversation_memory
+                self.assertEqual(memory.enabled, name in expected_enabled)
+                self.assertEqual(memory.questions, "all")
+                self.assertEqual(memory.answers, "selected")
+                self.assertEqual(memory.max_hits, 4)
+                self.assertEqual(memory.max_tokens, 2000)
+                self.assertTrue(definition.exclude_disliked_answers)
+                self.assertTrue(
+                    all(intent.memory_indexing in MEMORY_INDEXING_CHOICES
+                        for intent in definition.intents.values())
+                )
+        for name in (
+            "code", "literature", "creative_brainstorming",
+            "grounded_brainstorming",
+        ):
+            intent = project_type(name).intents["small_talk"]
+            self.assertEqual(intent.memory_indexing, "never")
+            self.assertFalse(intent.memory_read)
+        for name in ("code", "literature"):
+            intent = project_type(name).intents["project_inventory"]
+            self.assertEqual(intent.memory_indexing, "explicit")
+            self.assertFalse(intent.memory_read)
+        self.assertNotIn("small_talk", project_type("reviewing").intents)
+        self.assertEqual(
+            project_type("reviewing").intents["review_writing"]
+            .memory_indexing, "never",
+        )
+
 
     def test_only_packaged_small_talk_disables_thinking(self) -> None:
         """Other packaged intents inherit the configured session setting."""
@@ -318,6 +490,113 @@ class TestPackagedProjectTypes(unittest.TestCase):
                 self.assertEqual(definition.default_intent, "new_intent")
                 self.assertEqual(list(definition.intents), ["new_intent"])
                 self.assertEqual(definition.display_name, "A revised name")
+
+
+class TestConversationMemoryPolicy(ProjectTypeFixture):
+    """Validate the new schema without legacy fallback processing."""
+
+    def test_minimal_new_schema_and_intent_defaults(self) -> None:
+        """Memory and disliked history are distinct validated policies."""
+
+        item = self._load("defaultmemory", _type_data())
+        self.assertEqual(item.conversation_memory.questions, "all")
+        self.assertEqual(item.conversation_memory.answers, "selected")
+        self.assertTrue(item.exclude_disliked_answers)
+        self.assertEqual(item.intents["explain"].memory_indexing,
+                         "automatic")
+        self.assertTrue(item.intents["explain"].memory_read)
+        self.assertEqual(MEMORY_QUESTION_CHOICES, ("all", "none"))
+        self.assertEqual(MEMORY_ANSWER_CHOICES,
+                         ("none", "selected", "all"))
+        self.assertIs(kilin.ConversationMemorySettings,
+                      ConversationMemorySettings)
+
+    def test_required_settings_have_no_legacy_fallback(self) -> None:
+        """Old type documents cannot be loaded as the new format."""
+
+        for index, removed in enumerate((
+            "conversation_memory", "exclude_disliked_answers",
+        )):
+            data = _type_data()
+            if removed == "conversation_memory":
+                del data["conversation_memory"]
+            else:
+                del data["history"][removed]
+            with self.subTest(removed=removed):
+                with self.assertRaisesRegex(ValueError, removed):
+                    self._load(f"memorymissing{index}", data)
+
+    def test_global_memory_values_are_strictly_validated(self) -> None:
+        """Reject invalid values, missing fields, and unknown settings."""
+
+        invalid = (
+            ("enabled", 1),
+            ("enabled", "true"),
+            ("questions", "selected"),
+            ("answers", "liked"),
+            ("max_hits", 0),
+            ("max_hits", 21),
+            ("max_hits", True),
+            ("max_tokens", 127),
+            ("max_tokens", 20_001),
+            ("max_tokens", 2000.0),
+        )
+        for index, (key, value) in enumerate(invalid):
+            with self.subTest(key=key, value=value):
+                data = _type_data()
+                data["conversation_memory"][key] = value
+                with self.assertRaisesRegex(ValueError, key):
+                    self._load(f"memoryinvalid{index}", data)
+        for index, key in enumerate((
+            "enabled", "questions", "answers", "max_hits", "max_tokens",
+        )):
+            data = _type_data()
+            del data["conversation_memory"][key]
+            with self.subTest(missing=key):
+                with self.assertRaisesRegex(ValueError, "requires"):
+                    self._load(f"memoryfield{index}", data)
+        data = _type_data()
+        data["conversation_memory"]["unknown"] = True
+        with self.assertRaisesRegex(ValueError, "unknown settings"):
+            self._load("memoryunknown", data)
+
+    def test_disliked_history_requires_a_boolean(self) -> None:
+        """A disliked answer exclusion cannot accept a truthy integer."""
+
+        for index, value in enumerate((None, 0, 1, "false", [])):
+            data = _type_data()
+            data["history"]["exclude_disliked_answers"] = value
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    ValueError, "exclude_disliked_answers"
+                ):
+                    self._load(f"dislikedinvalid{index}", data)
+        data = _type_data()
+        data["history"]["exclude_disliked_answers"] = False
+        self.assertFalse(
+            self._load("dislikeddisabled", data).exclude_disliked_answers
+        )
+
+    def test_intent_memory_policy_validation(self) -> None:
+        """Indexing and read permissions are independent intent options."""
+
+        for index, mode in enumerate(MEMORY_INDEXING_CHOICES):
+            data = _type_data()
+            data["intents"]["explain"]["memory"] = {
+                "indexing": mode, "read": False,
+            }
+            result = self._load(f"intentmemory{index}", data)
+            self.assertEqual(result.intents["explain"].memory_indexing, mode)
+            self.assertFalse(result.intents["explain"].memory_read)
+        for index, (field, value) in enumerate((
+            ("indexing", "sometimes"), ("indexing", True),
+            ("read", 1), ("read", "no"), ("unrecognized", False),
+        )):
+            data = _type_data()
+            data["intents"]["explain"]["memory"] = {field: value}
+            with self.subTest(field=field, value=value):
+                with self.assertRaisesRegex(ValueError, field):
+                    self._load(f"intentbadmemory{index}", data)
 
 
 class TestProjectTypeLoading(ProjectTypeFixture):
@@ -770,7 +1049,7 @@ class TestProjectTypeFields(ProjectTypeFixture):
         self.assertEqual(
             (limits.max_sources, limits.passages_per_source,
              limits.max_passages, limits.max_tokens),
-            (8, 2, 16, 9000),
+            (12, 3, 32, 16000),
         )
 
     def test_source_first_limits_are_per_intent_and_validated(self):
@@ -828,7 +1107,7 @@ class TestProjectTypeFields(ProjectTypeFixture):
 
         for index, value in enumerate((0, 1, 20, 21, 99, 100)):
             data = _type_data()
-            data["history"] = {"recent_turns": value}
+            data["history"]["recent_turns"] = value
             self.assertEqual(
                 self._load(f"recentok{index}", data).recent_turns,
                 value,
@@ -836,7 +1115,7 @@ class TestProjectTypeFields(ProjectTypeFixture):
         for index, value in enumerate((-1, 101, "2", None, False, 2.5)):
             with self.subTest(value=value):
                 data = _type_data()
-                data["history"] = {"recent_turns": value}
+                data["history"]["recent_turns"] = value
                 with self.assertRaisesRegex(ValueError, "recent_turns"):
                     self._load(f"recentbad{index}", data)
 

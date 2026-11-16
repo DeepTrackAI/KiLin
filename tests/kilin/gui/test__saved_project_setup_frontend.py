@@ -298,6 +298,19 @@ const bridge = {
 let ready = true;
 let busy = false;
 let openProjectPath = "/projects/old";
+let projectPresentation = null;
+let projectBehaviorData = null;
+let behaviorSave = { nextId: 0, pending: null };
+let feedbackData = {project: "", revision: "", entries: {}};
+let feedbackSave = {nextId: 0, pending: null};
+let memoryIndexState = null;
+let memorySyncPending = false;
+let memoryMessagePage = {project: "/projects/old"};
+let memoryMessagesRequestedOffset = 100;
+let memoryExcludeSave = {nextId: 0, pending: {requestId: 1}};
+let memoryNavigation = null;
+let displayedMemoryProject = "/projects/old";
+let displayedMemoryRevision = "revision";
 const answerSettingsSave = {
   pending: null, queued: null, uncertain: false,
 };
@@ -332,6 +345,11 @@ onEvent(JSON.stringify({event: "error", resume_released: true,
   message: "Saved model not installed"}));
 assert.equal(ready, false);
 assert.equal(openProjectPath, "");
+assert.equal(displayedMemoryProject, "");
+assert.equal(displayedMemoryRevision, "");
+assert.equal(memoryMessagePage, null);
+assert.equal(memoryMessagesRequestedOffset, 0);
+assert.equal(memoryExcludeSave.pending, null);
 assert.equal(chat.classList.hidden.has("hidden"), true);
 assert.equal(setup.classList.hidden.has("hidden"), false);
 assert.deepEqual(calls, ["close", "settings", "refresh"]);

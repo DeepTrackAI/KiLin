@@ -25,7 +25,15 @@
     }
   },
   "history": {
-    "recent_turns": 2
+    "recent_turns": 2,
+    "exclude_disliked_answers": true
+  },
+  "conversation_memory": {
+    "enabled": false,
+    "questions": "all",
+    "answers": "selected",
+    "max_hits": 4,
+    "max_tokens": 2000
   },
   "default_intent": "question_answering",
   "intents": {
@@ -38,10 +46,10 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 3,
-        "passages_per_source": 1,
-        "max_passages": 8,
-        "evidence_tokens": 5000,
+        "max_sources": 8,
+        "passages_per_source": 2,
+        "max_passages": 20,
+        "evidence_tokens": 11000,
         "coverage": "bounded",
         "include_related_evidence": true
       }
@@ -79,10 +87,10 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 8,
-        "passages_per_source": 2,
-        "max_passages": 16,
-        "evidence_tokens": 9000,
+        "max_sources": 12,
+        "passages_per_source": 3,
+        "max_passages": 32,
+        "evidence_tokens": 16000,
         "coverage": "bounded",
         "include_related_evidence": true
       }
@@ -101,6 +109,10 @@
         "max_model_calls": 20,
         "confirmation": "when_large",
         "large_batches": 3
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": true
       }
     },
     "paper_overview": {
@@ -119,6 +131,10 @@
       "tool": {
         "name": "paper_overview",
         "max_tokens": 6000
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "reference_check": {
@@ -233,6 +249,10 @@
         "name": "project_inventory",
         "max_listed": 200,
         "max_folders": 20
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "mention_listing": {
@@ -249,6 +269,10 @@
         "whole_words": true,
         "context_lines": 1,
         "max_listed": 100
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "topic_listing": {
@@ -270,6 +294,10 @@
         "max_listed": 100,
         "confirmation": "when_large",
         "large_batches": 3
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "mention_classification": {
@@ -291,6 +319,10 @@
         "max_model_calls": 30,
         "confirmation": "when_large",
         "large_batches": 2
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "report_generation": {
@@ -303,10 +335,10 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 8,
-        "passages_per_source": 1,
-        "max_passages": 12,
-        "evidence_tokens": 8000,
+        "max_sources": 12,
+        "passages_per_source": 2,
+        "max_passages": 28,
+        "evidence_tokens": 14000,
         "coverage": "bounded",
         "include_related_evidence": true
       }
@@ -380,7 +412,11 @@
         "how (are|r) (you|u)( doing)?( today)?",
         "how('s| is) it going( today)?|how('s| is) your day( going)?|what'?s up|sup",
         "(bye|goodbye|see you|see you later|good night|have a (nice|good) day)"
-      ]
+      ],
+      "memory": {
+        "indexing": "never",
+        "read": false
+      }
     }
   },
   "welcome_prompts": [

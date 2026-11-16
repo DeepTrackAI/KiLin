@@ -273,6 +273,30 @@ class ChatBridge(QObject):
     stopOperation()
         Terminate the active backend process immediately.
 
+    **Setting descriptions.**
+
+    requestSettingsInfo()
+        Request shared metadata independently of projects and models.
+
+    **Project behavior.**
+
+    requestProjectBehavior()
+        Request editable project-wide and intent configuration.
+    requestConversationFeedback(project)
+        Request revisioned feedback for the active project.
+    saveMessageFeedback(request_json)
+        Forward a validated feedback write to the backend engine.
+    requestMemoryMessages(project, offset)
+        Inspect saved messages and their current memory status.
+    setMemoryExclusion(request_json)
+        Exclude or restore one message without changing its rating.
+    requestMemoryStatus(project)
+        Query stored memory-index counts for the active project.
+    syncConversationMemory(project)
+        Request manual synchronization of the derived memory index.
+    saveProjectBehavior(project, scope, intent_id, ...)
+        Submit one revision-checked project behavior editor.
+
     **Tool settings.**
 
     requestToolSettings()
@@ -1055,6 +1079,145 @@ class ChatBridge(QObject):
                 "project": payload.get("project"),
             }
         self.commandRequested.emit(command)
+
+    @Slot()
+    def requestSettingsInfo(self) -> None:
+        """Request core- and tool-owned setting descriptions."""
+
+        self.commandRequested.emit({"action": "settings_info"})
+
+    @Slot()
+    def requestProjectBehavior(self) -> None:
+        """Request project-wide and individual intent settings."""
+
+        self.commandRequested.emit({"action": "project_behavior"})
+
+    @Slot(str)
+    def requestConversationFeedback(self, project: str) -> None:
+        """Request feedback for one explicitly named open project.
+
+        Parameters
+        ----------
+        project: str
+            Frontend's currently displayed workspace identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "conversation_feedback", "project": project,
+        })
+
+    @Slot(str)
+    def saveMessageFeedback(self, request_json: str) -> None:
+        """Forward a message rating to the validated core store.
+
+        Parameters
+        ----------
+        request_json: str
+            Serialized feedback request with revision and target identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "save_message_feedback",
+            "request": json.loads(request_json),
+        })
+
+    @Slot(str, int)
+    def requestMemoryMessages(self, project: str, offset: int) -> None:
+        """Inspect project memory without loading embeddings.
+
+        Parameters
+        ----------
+        project: str
+            Currently displayed project identity.
+        offset: int
+            Zero-based page offset.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "memory_messages", "project": project,
+            "offset": offset,
+        })
+
+    @Slot(str)
+    def setMemoryExclusion(self, request_json: str) -> None:
+        """Forward a revision-checked exclusion update to the core.
+
+        Parameters
+        ----------
+        request_json: str
+            Serialized exclusion envelope.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "set_memory_exclusion",
+            "request": json.loads(request_json),
+        })
+
+    @Slot(str)
+    def requestMemoryStatus(self, project: str) -> None:
+        """Read stored memory-index counts without running embeddings.
+
+        Parameters
+        ----------
+        project: str
+            Frontend's currently displayed workspace identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "memory_status", "project": project,
+        })
+
+    @Slot(str)
+    def syncConversationMemory(self, project: str) -> None:
+        """Request explicit project-local memory synchronization.
+
+        Parameters
+        ----------
+        project: str
+            Frontend's currently displayed workspace identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "sync_memory_index", "project": project,
+        })
+
+    @Slot(str, str, str, str, str, int)
+    def saveProjectBehavior(
+        self, project: str, scope: str, intent_id: str,
+        values_json: str, revision: str, request_id: int,
+    ) -> None:
+        """Submit a revision-checked project behavior editor.
+
+        Parameters
+        ----------
+        project: str
+            Open project path captured by the page.
+        scope: str
+            ``global``, ``intent``, ``capabilities``, ``memory``, or
+            ``intent_memory`` editor.
+        intent_id: str
+            Intent ID, empty for global or indexing settings.
+        values_json: str
+            JSON object with the editor's complete settings.
+        revision: str
+            Last acknowledged project behavior revision.
+        request_id: int
+            Frontend sequence number for matching the acknowledgement.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "save_project_behavior", "project": project,
+            "scope": scope, "intent_id": intent_id or None,
+            "values": json.loads(values_json), "revision": revision,
+            "request_id": request_id,
+        })
 
     @Slot()
     def requestToolSettings(self) -> None:

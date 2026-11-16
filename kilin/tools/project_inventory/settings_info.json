@@ -1,0 +1,15 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "max_listed": {
+      "title": "Maximum listed results",
+      "summary": "Caps the number of matches or items returned in a list.",
+      "description": "A lower cap produces shorter reports even when additional candidates exist in the source."
+    },
+    "max_folders": {
+      "title": "Maximum folders",
+      "summary": "Caps how many source folders the inventory lists.",
+      "description": "Shortens inventory output when a project contains many folders."
+    }
+  }
+}

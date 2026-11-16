@@ -567,6 +567,49 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertEqual(len(turns), 1)
         self.assertEqual(checkpoint, "checkpoint_previous")
 
+    def test_turn_uuid_survives_serialization_and_reload(self) -> None:
+        """Persist a stable UUID independent of duplicate answer content."""
+
+        first = _turn("Same question", "Same answer")
+        second = _turn("Same question", "Same answer")
+        self.assertNotEqual(first.conversation_turn_uuid,
+                            second.conversation_turn_uuid)
+        serialized = rag._turn_to_data(first)
+        self.assertEqual(serialized["conversation_turn_uuid"],
+                         first.conversation_turn_uuid)
+        self.assertEqual(rag._turn_from_data(serialized), first)
+        self.session._save_conversation(pending_turn=first)
+        messages, turns, _ = self.session._load_conversation()
+        self.assertEqual(len(messages), 3)
+        self.assertEqual(turns[0].conversation_turn_uuid,
+                         first.conversation_turn_uuid)
+
+    def test_missing_or_duplicate_uuids_rejected_without_modifying_file(
+        self,
+    ) -> None:
+        """Unsupported prerelease records are never assigned hidden IDs."""
+
+        current = rag._turn_to_data(_turn())
+        invalid = [
+            [{key: value for key, value in current.items()
+              if key != "conversation_turn_uuid"}],
+            [current, current],
+            [{**current, "conversation_turn_uuid": "bad"}],
+        ]
+        for items in invalid:
+            with self.subTest(items=items):
+                payload = {"sessions": {CONVERSATION_SESSION_KEY:
+                           new_conversation_session({"turns": items})}}
+                self.session.conversation_path.write_text(
+                    json.dumps(payload), encoding="utf-8"
+                )
+                before = self.session.conversation_path.read_bytes()
+                with self.assertRaises(ValueError):
+                    self.session._load_conversation()
+                self.assertEqual(
+                    self.session.conversation_path.read_bytes(), before
+                )
+
     def test_load_conversation_rejects_corrupt_records(self) -> None:
         """Reject corrupt and obsolete conversation representations."""
         session = self.session

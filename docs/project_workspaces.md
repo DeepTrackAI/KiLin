@@ -19,11 +19,16 @@ project/
     sources/
     indexes/
     logs/
+    memory/
     outputs/
     templates/
 ```
 
-The `templates/` directory **always exists**, including in projects that do
+The `templates/` and `memory/` directories **always exist**. The latter
+owns user feedback about completed questions and answers; its files are not
+ordinary project sources. Feedback JSON is created only on a user update.
+See [Conversation memory](conversation_memory.md) for the ownership contract.
+The templates folder also exists in projects that do
 not currently use a templated tool. Users can add Markdown templates or
 other resources manually. The `outputs/` directory is a general area for
 project-owned results. Neither `outputs/` nor `templates/` is indexed as a
@@ -175,6 +180,12 @@ plan, creates required directories, installs **only the resources in the
 plan**, and prepares the selected source snapshots and provenance. The
 `profile.ini` file is then published atomically, without replacement, as the
 final initialization step. No tool-specific resource selection occurs in the GUI.
+
+The bundled types are Code Repository, Literature Collection, Writing,
+Brainstorming (Creative) (`creative_brainstorming`), Brainstorming
+(Grounded) (`grounded_brainstorming`), and Reviewing Assistant. The two
+brainstorming types share the same source layout but differ in
+whether ordinary ideation retrieves project evidence by default.
 
 With the current bundled project types:
 

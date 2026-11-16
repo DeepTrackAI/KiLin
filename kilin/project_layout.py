@@ -82,20 +82,21 @@ from kilin.workspace_resources import (
 
 __all__ = [
     "ProjectLayout",
+    "CORE_PROJECT_FOLDERS",
     "ensure_project_folders",
     "install_project_resources",
     "plan_project_layout",
     "source_scan_exclusions",
 ]
 
-_CORE_FOLDERS: Final[tuple[str, ...]] = (
-    "indexes", "logs", OUTPUTS_FOLDER, TEMPLATES_FOLDER
+CORE_PROJECT_FOLDERS: Final[tuple[str, ...]] = (
+    "indexes", "logs", "memory", OUTPUTS_FOLDER, TEMPLATES_FOLDER
 )
 _RESERVED_RESOURCE_ROOTS: Final[frozenset[str]] = frozenset(
-    (PROJECT_SOURCES_DIRECTORY, "indexes", "logs", "outputs")
+    (PROJECT_SOURCES_DIRECTORY, "indexes", "logs", "memory", "outputs")
 )
 _PROJECT_SOURCE_EXCLUDES: Final[tuple[str, ...]] = (
-    *_CORE_FOLDERS,
+    *CORE_PROJECT_FOLDERS,
     "profile.ini",
     "sources.json",
     "source_snapshot.json",
@@ -298,7 +299,7 @@ def ensure_project_folders(root: Path) -> None:
     """
 
     root = Path(root)
-    for name in _CORE_FOLDERS:
+    for name in CORE_PROJECT_FOLDERS:
         _safe_directory(root / name)
 
 

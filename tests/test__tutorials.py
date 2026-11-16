@@ -46,7 +46,7 @@ class TestTutorials(unittest.TestCase):
         items = notebooks()
         self.assertEqual(
             [int(item.name.split("_", 1)[0]) for item in items],
-            list(range(10, 181, 10)),
+            list(range(10, 200, 10)),
         )
         self.assertTrue((TUTORIALS / "README.md").is_file())
         for file in items:
@@ -151,7 +151,7 @@ class TestTutorials(unittest.TestCase):
     def test_capstone_bundled_corpus_and_model_gate(self) -> None:
         """Keep the final tutorial offline-first and its data complete."""
 
-        path = TUTORIALS / "180_end_to_end_research_assistant.ipynb"
+        path = TUTORIALS / "190_end_to_end_research_assistant.ipynb"
         notebook = json.loads(path.read_text(encoding="utf-8"))
         code = "\n".join(
             "".join(cell["source"])
@@ -169,7 +169,7 @@ class TestTutorials(unittest.TestCase):
         self.assertIn("allow_download", code)
         self.assertNotIn("download_model(", code)
 
-        source_dir = TUTORIALS / "data" / "180_research_pilot"
+        source_dir = TUTORIALS / "data" / "190_research_pilot"
         expected = {
             "study_plan.md", "automated_tracking.md",
             "manual_tracking.md", "interpretation.md",
@@ -185,7 +185,7 @@ class TestTutorials(unittest.TestCase):
                 )
 
     def test_optional_article_corpus_paths(self) -> None:
-        for number in (150, 170):
+        for number in (150, 180):
             file = next(TUTORIALS.glob(f"{number}_*.ipynb"))
             document = json.loads(file.read_text(encoding="utf-8"))
             code = "\n".join(
@@ -197,6 +197,38 @@ class TestTutorials(unittest.TestCase):
                 self.assertIn('root / "_si_article_"', code)
                 self.assertIn('root / "tests" / "fixtures"', code)
                 self.assertNotIn('root / "example_repos"', code)
+
+    def test_conversation_memory_tutorial_uses_real_local_contracts(
+        self,
+    ) -> None:
+        """Keep the memory tutorial complete without model downloads."""
+
+        notebook = json.loads((
+            TUTORIALS / "170_conversation_memory.ipynb"
+        ).read_text(encoding="utf-8"))
+        code = "\n".join(
+            "".join(cell["source"])
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        )
+        for api in (
+            "ConversationStore", "ConversationTurn", "TraceLogger",
+            "FeedbackStore", "synchronize_memory", "search_memory",
+            "render_memory_hits", "recall_topic", "model_identity",
+            'reaction="disliked"', "excluded=True", "excluded=False",
+        ):
+            with self.subTest(api=api):
+                self.assertIn(api, code)
+        self.assertNotIn("download_model(", code)
+        self.assertNotIn("ChatSession(", code)
+        self.assertNotIn("RAGSession(", code)
+        self.assertTrue((TUTORIALS / "180_tool_execution_flow.svg").is_file())
+        self.assertFalse(
+            (TUTORIALS / "170_tool_execution_flow.svg").exists()
+        )
+        self.assertFalse(
+            (TUTORIALS / "data" / "180_research_pilot").exists()
+        )
 
 
 if __name__ == "__main__":

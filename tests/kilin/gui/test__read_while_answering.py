@@ -184,6 +184,7 @@ const conversation = {
 const conversationScroll = { scrollTop: 40 };
 const addTurn = (turn) => shown.push(turn.question);
 const clearReferences = () => {};
+const highlightMemoryOrigin = () => {};
 const renderConversations = () => {};
 const updateChatSummary = (count) => { currentTurnCount = count; };
 const updateSendButton = () => {};

@@ -189,6 +189,8 @@ const bridge = {
 };
 let busy = false;
 let applyingIndexing = false;
+const showIndexingCapabilities = () => {};
+const showMemoryPolicy = () => {};
 const setBusy = (value) => { busy = value; };
 let answer = true;
 const asked = [];

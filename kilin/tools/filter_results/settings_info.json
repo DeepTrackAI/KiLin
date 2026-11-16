@@ -1,0 +1,15 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "batch_tokens": {
+      "title": "Batch token budget",
+      "summary": "Sets the approximate token budget for processing one batch.",
+      "description": "Controls how much candidate material is grouped for a model-based processing step."
+    },
+    "item_characters": {
+      "title": "Item character budget",
+      "summary": "Limits the text retained for each candidate item.",
+      "description": "Truncates candidate descriptions supplied to the filtering step when they exceed the configured character budget."
+    }
+  }
+}

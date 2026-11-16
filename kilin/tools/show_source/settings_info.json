@@ -1,0 +1,15 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "context_sentences": {
+      "title": "Context sentences",
+      "summary": "Sets surrounding sentences shown with each passage.",
+      "description": "Adds textual context when displaying retrieved source material."
+    },
+    "max_passages": {
+      "title": "Maximum passages",
+      "summary": "Caps the number of passages displayed.",
+      "description": "Limits how many selected pieces of source material appear in one result."
+    }
+  }
+}

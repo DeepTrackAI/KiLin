@@ -43,10 +43,14 @@ class TestMessageActionsFrontend(unittest.TestCase):
         actions = _function(source, "addMessageActions")
         self.assertIn("question.after(row);", actions)
         self.assertIn(
-            "answer.after(messageActions(answerCopyText(turn), "
-            'turn.timestamp, "answer", ',
+            'messageActions(answerCopyText(turn), turn.timestamp, "answer",',
             actions,
         )
+        self.assertIn('appendFeedbackActions(row, turn, "assistant");',
+                      actions)
+        self.assertIn('appendFeedbackActions(row, turn, "user");',
+                      actions)
+        self.assertIn('answer.after(row);', actions)
 
     def test_every_message_can_be_branched_from(self):
         """Branch from here sits in each row; the composer has none."""

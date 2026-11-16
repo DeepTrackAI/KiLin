@@ -116,7 +116,8 @@ class TestProjectLayout(unittest.TestCase):
         """All core directories exist even without configured templates."""
 
         root = self._project("code")
-        for name in ("indexes", "logs", "outputs", "templates"):
+        for name in ("indexes", "logs", "memory", "outputs",
+                     "templates"):
             with self.subTest(directory=name):
                 self.assertTrue((root / name).is_dir())
         self.assertEqual(list((root / "templates").iterdir()), [])
@@ -237,7 +238,8 @@ class TestProjectLayout(unittest.TestCase):
 
         root = self._project("code")
         listed = list_project_files(open_project(root))
-        for name in ("indexes", "logs", "outputs", "templates"):
+        for name in ("indexes", "logs", "memory", "outputs",
+                     "templates"):
             self.assertIn(f"{name}/", listed)
             self.assertNotIn(name, listed)
 
@@ -324,6 +326,9 @@ class TestProjectLayout(unittest.TestCase):
         opened = open_project(root)
         self.assertEqual(opened.source.resolve(), root.resolve())
         (root / "study.md").write_text("# Source", encoding="utf-8")
+        (root / "memory/feedback.json").write_text(
+            '{"records": "not a source"}', encoding="utf-8"
+        )
         excluded = source_scan_exclusions(opened.root, opened.source)
         report = scan_repository(
             opened.source,
@@ -331,6 +336,7 @@ class TestProjectLayout(unittest.TestCase):
             exclude_paths=excluded,
         )
         self.assertEqual(report["selected_files"], ["study.md"])
+        self.assertIn("memory", excluded)
         # An unrelated source directory named target is not managed.
         target = root / "target"
         target.mkdir()

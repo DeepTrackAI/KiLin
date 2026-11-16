@@ -114,7 +114,8 @@ def _session(root: Path, trace) -> RAGSession:
         source=root / "sources",
         logs=root / "logs",
         profile=SimpleNamespace(
-            temperature=0.0, thinking=False, max_new_tokens=256
+            type_id="code", temperature=0.0, thinking=False,
+            max_new_tokens=256,
         ),
     )
     session.conversation_path = root / "logs" / "conversation_active.json"

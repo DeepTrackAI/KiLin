@@ -23,6 +23,8 @@ const ANSWER_PHASE_ROUTING = "routing";
 const ANSWER_PHASE_ROUTED = "routed";
 const ANSWER_PHASE_RETRIEVING = "retrieving";
 const ANSWER_PHASE_EVIDENCE_READY = "evidence_ready";
+const ANSWER_PHASE_MEMORY_RETRIEVING = "memory_retrieving";
+const ANSWER_PHASE_MEMORY_READY = "memory_ready";
 const ANSWER_PHASE_GENERATING = "generating";
 const ANSWER_PHASE_SAVING = "saving";
 const ANSWER_PHASE_COMPLETED = "completed";
@@ -62,6 +64,13 @@ let workspacePaths = new Set();
 let sidePanelChoice = null;
 // The Settings tab shown when Settings open; kept while KíLín runs.
 let settingsTab = "general";
+// Explanatory metadata belongs to KíLín core and registered tool packages.
+// Its absence must not change how settings work or how answers are made.
+let settingsCatalog = null;
+let settingsHelpSequence = 0;
+// Displayed tooltip lives in the document's top-level layer, outside the
+// scroll-clipped Settings dialog. Never retain more than one open tooltip.
+let activeSettingsHelp = null;
 // The last projects_folder event, to redraw the folder's note.
 let projectsFolderInfo = null;
 // Workspace folders the user edits directly; neither is indexed.
@@ -1075,6 +1084,9 @@ function modelGroupHeader(role, title) {
   header.className = "model-group-header";
   const heading = document.createElement("h3");
   heading.textContent = title;
+  const groupKeys = { chat: "effort_levels", depth: "search_depth",
+    router: "router_models", embedding: "embedding_models" };
+  heading.dataset.settingsKey = `model_settings.${groupKeys[role]}`;
   const restore = document.createElement("button");
   restore.type = "button";
   restore.className = "secondary restore-defaults";
@@ -1162,6 +1174,9 @@ function renderModelsPanel() {
   for (const label of ["Level", "Language model"]) {
     const cell = document.createElement("span");
     cell.textContent = label;
+    cell.dataset.settingsKey = label === "Level"
+      ? "model_settings.effort_levels.name"
+      : "model_settings.effort_levels.model";
     columns.append(cell);
   }
   chat.append(columns);
@@ -1268,6 +1283,8 @@ function renderModelsPanel() {
   const notice = downloadNotice(current, installed);
   if (notice) embedding.append(notice);
   host.append(embedding);
+  applySettingsHelp(host);
+  applySettingsHelp(depthHost);
   if (focused) {
     (host.querySelector(`[data-focus-key="${focused}"]`)
       || depthHost.querySelector(`[data-focus-key="${focused}"]`))?.focus();
@@ -1347,12 +1364,19 @@ function restoreDefaultModels(role) {
 /**
  * Show one Settings tab and hide the sections of the others.
  *
- * @param name Tab name: project, models, answers, or tools.
+ * @param name Project settings tab name.
  */
 function showSettingsTab(name) {
   settingsTab = name;
   // The open project's tools, read fresh each time the tab is shown.
   if (name === "tools") requestToolSettings();
+  if (["intents", "indexing", "memory"].includes(name)) {
+    requestProjectBehavior();
+  }
+  if (name === "memory" && bridge && ready && openProjectPath) {
+    bridge.requestMemoryStatus(openProjectPath);
+    requestMemoryMessages();
+  }
   for (const tab of document.querySelectorAll(".settings-tab")) {
     const selected = tab.dataset.tab === name;
     tab.classList.toggle("active", selected);
@@ -1380,6 +1404,161 @@ function requestToolSettings() {
 }
 
 /**
+ * Close the active tooltip and return it to its setting's label.
+ *
+ * The tooltip is portaled to the document while visible so the scrollable
+ * Settings dialog cannot clip it. Returning it preserves label ownership
+ * and avoids orphaned nodes when the Settings panel is reconstructed.
+ */
+function dismissSettingsHelp() {
+  if (!activeSettingsHelp) return;
+  const { wrapper, trigger, tooltip } = activeSettingsHelp;
+  tooltip.classList.remove("is-visible");
+  wrapper.append(tooltip);
+  wrapper.classList.remove("is-open");
+  trigger.setAttribute("aria-expanded", "false");
+  activeSettingsHelp = null;
+}
+
+/**
+ * Keep the tooltip inside the viewport and aligned with its help icon.
+ *
+ * The small panel can scroll independently of the page, so screen-relative
+ * coordinates must be recalculated when the page or Settings panel scrolls.
+ */
+function positionSettingsHelp() {
+  if (!activeSettingsHelp) return;
+  const { trigger, tooltip } = activeSettingsHelp;
+  if (trigger.isConnected === false) {
+    dismissSettingsHelp();
+    return;
+  }
+  const icon = trigger.getBoundingClientRect();
+  const card = trigger.closest?.(".models-card")?.getBoundingClientRect();
+  if (card && (icon.bottom < card.top || icon.top > card.bottom)) {
+    dismissSettingsHelp();
+    return;
+  }
+  const margin = 12;
+  const gap = 6;
+  const width = tooltip.getBoundingClientRect().width;
+  const height = tooltip.getBoundingClientRect().height;
+  const rightLimit = Math.max(margin, window.innerWidth - width - margin);
+  const left = Math.max(margin, Math.min(icon.left, rightLimit));
+  const below = icon.bottom + gap;
+  const above = icon.top - height - gap;
+  const top = below + height <= window.innerHeight - margin
+    ? below : above >= margin ? above
+      : Math.max(margin, Math.min(below,
+        window.innerHeight - height - margin));
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(top)}px`;
+}
+
+/**
+ * Show one core-owned setting summary outside any clipping ancestor.
+ *
+ * @param wrapper Help control belonging to the setting label.
+ * @param trigger Small focusable information button.
+ * @param tooltip Summary node to show in the top-level document.
+ * @param pinned Whether a click should keep it visible after hover ends.
+ */
+function showSettingsHelp(wrapper, trigger, tooltip, pinned = false) {
+  if (activeSettingsHelp?.trigger !== trigger) dismissSettingsHelp();
+  if (!activeSettingsHelp) {
+    document.body.append(tooltip);
+    tooltip.classList.add("is-visible");
+    wrapper.classList.add("is-open");
+    activeSettingsHelp = { wrapper, trigger, tooltip, pinned };
+  } else if (pinned) {
+    activeSettingsHelp.pinned = true;
+  }
+  trigger.setAttribute("aria-expanded", "true");
+  positionSettingsHelp();
+}
+
+/**
+ * Add reusable explanatory popovers to controls with canonical setting IDs.
+ * Labels and summaries are provided by the core, never authored in the UI.
+ *
+ * @param root DOM subtree to decorate, or the document on first load.
+ */
+function applySettingsHelp(root = document) {
+  if (!settingsCatalog?.settings) return;
+  for (const label of root.querySelectorAll("[data-settings-key]")) {
+    if (label.querySelector(".setting-help")) continue;
+    const info = settingsCatalog.settings[label.dataset.settingsKey];
+    if (!info) continue;
+    // Keep the title and help icon together above a nested input.
+    const caption = [...label.childNodes].find((node) =>
+      node.nodeType === 3 && node.textContent.trim());
+    const wrapper = document.createElement("span");
+    wrapper.className = "setting-help";
+    const trigger = document.createElement("button");
+    trigger.className = "setting-help-trigger";
+    trigger.type = "button";
+    trigger.textContent = "i";
+    trigger.setAttribute("aria-label", `Help: ${info.title}`);
+    const tooltip = document.createElement("span");
+    tooltip.className = "setting-help-popup";
+    tooltip.setAttribute("role", "tooltip");
+    const id = `setting-help-${++settingsHelpSequence}`;
+    tooltip.id = id;
+    tooltip.textContent = info.summary;
+    trigger.setAttribute("aria-describedby", id);
+    // A button nested in a label must not edit or submit that field.
+    trigger.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (activeSettingsHelp?.trigger === trigger
+          && activeSettingsHelp.pinned) {
+        dismissSettingsHelp();
+        trigger.blur();
+      } else {
+        showSettingsHelp(wrapper, trigger, tooltip, true);
+      }
+    });
+    trigger.addEventListener("pointerenter", () => {
+      showSettingsHelp(wrapper, trigger, tooltip);
+    });
+    trigger.addEventListener("pointerleave", () => {
+      if (activeSettingsHelp?.trigger === trigger
+          && !activeSettingsHelp.pinned
+          && document.activeElement !== trigger) dismissSettingsHelp();
+    });
+    trigger.addEventListener("focus", () => {
+      showSettingsHelp(wrapper, trigger, tooltip);
+    });
+    trigger.addEventListener("blur", () => {
+      if (activeSettingsHelp?.trigger === trigger
+          && !trigger.matches(":hover")) dismissSettingsHelp();
+    });
+    trigger.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      dismissSettingsHelp();
+      trigger.blur();
+      event.stopPropagation();
+    });
+    trigger.setAttribute("aria-expanded", "false");
+    wrapper.append(trigger, tooltip);
+    const captionGroup = document.createElement("span");
+    captionGroup.className = "setting-help-caption";
+    captionGroup.append(document.createTextNode(info.title), wrapper);
+    if (caption) label.replaceChild(captionGroup, caption);
+    else label.append(captionGroup);
+  }
+}
+
+// Reposition the portaled popup as its anchor moves inside Settings.
+window.addEventListener("resize", positionSettingsHelp);
+document.addEventListener("scroll", positionSettingsHelp, true);
+// Clicking elsewhere dismisses a tooltip opened explicitly by clicking.
+document.addEventListener("click", (event) => {
+  if (event.target.closest?.(".setting-help")) return;
+  dismissSettingsHelp();
+});
+
+/**
  * Turn a setting name such as "max_model_calls" into "Max model calls".
  *
  * @param key Setting name from a tool's defaults.json.
@@ -1395,10 +1574,12 @@ function settingLabel(key) {
  *
  * @param key Setting name.
  * @param value Current value: a Boolean, number, string, or list.
+ * @param toolName Registered owner of the setting.
  * @returns Label element holding the field.
  */
-function toolSettingField(key, value) {
+function toolSettingField(key, value, toolName) {
   const label = document.createElement("label");
+  label.dataset.settingsKey = `tools.${toolName}.${key}`;
   const input = document.createElement("input");
   input.dataset.key = key;
   if (typeof value === "boolean") {
@@ -1482,8 +1663,8 @@ function renderToolSettings(data) {
     fields.className = "tool-fields";
     // Values first, then the on/off switches together, one per row.
     const entries = Object.entries(tool.settings);
-    for (const [key, value] of entries) if (typeof value !== "boolean") fields.append(toolSettingField(key, value));
-    for (const [key, value] of entries) if (typeof value === "boolean") fields.append(toolSettingField(key, value));
+    for (const [key, value] of entries) if (typeof value !== "boolean") fields.append(toolSettingField(key, value, tool.name));
+    for (const [key, value] of entries) if (typeof value === "boolean") fields.append(toolSettingField(key, value, tool.name));
     item.append(summary, fields);
     // Settings each use sets differently, such as a template, stay as set.
     const perIntent = Object.entries(tool.per_intent);
@@ -1521,7 +1702,800 @@ function renderToolSettings(data) {
     item.append(actions, status);
     holder.append(item);
   }
+  applySettingsHelp(holder);
   if (focused) holder.querySelector(`details[data-tool="${focused[0]}"] input[data-key="${focused[1]}"]`)?.focus();
+}
+
+// The core owns validation, persistence and revision. Only these editable
+// DOM controls are local to the GUI.
+let projectBehaviorData = null;
+let behaviorSave = { nextId: 0, pending: null };
+let projectPresentation = null;
+let feedbackData = { project: "", revision: "", entries: {} };
+let feedbackSave = { nextId: 0, pending: null };
+let memoryIndexState = null;
+let memorySyncPending = false;
+let memoryMessagePage = null;
+let memoryMessagesRequestedOffset = 0;
+let memoryExcludeSave = {nextId: 0, pending: null};
+let memoryNavigation = null;
+let displayedMemoryProject = "";
+let displayedMemoryRevision = "";
+
+/**
+ * Request the currently opened project's saved behavior configuration.
+ * @param force Reload even when an editor already exists.
+ */
+function requestProjectBehavior(force = false) {
+  const holder = byId("intent-settings");
+  if (!bridge || !ready || !openProjectPath) {
+    holder.textContent = "Open a project to customize its intents.";
+    projectBehaviorData = null;
+    showIndexingCapabilities();
+    showMemoryPolicy();
+    return;
+  }
+  if (!force && projectBehaviorData?.project === openProjectPath) return;
+  if (behaviorSave.pending) return;
+  if (force) {
+    projectBehaviorData = null;
+    displayedMemoryRevision = "";
+  }
+  holder.textContent = "Loading project behavior…";
+  bridge.requestProjectBehavior();
+}
+
+/**
+ * Construct a labeled form input from an effective JSON setting.
+ * @param path Dotted JSON key identifying the setting.
+ * @param title Human-readable field name.
+ * @param value Effective setting value.
+ * @param kind Field type: text, multiline, lines, number, select or checkbox.
+ * @param options Optional select choices, range, and disabled flag.
+ * @returns The labeled control container.
+ */
+function behaviorField(path, title, value, kind = "text", options = {}) {
+  const label = document.createElement("label");
+  label.className = kind === "checkbox" ? "check-row" : "behavior-field";
+  const control = kind === "lines" || kind === "multiline"
+    ? document.createElement("textarea")
+    : kind === "select" ? document.createElement("select")
+      : document.createElement("input");
+  control.dataset.behaviorPath = path;
+  control.dataset.behaviorKind = kind;
+  if (kind === "select") {
+    for (const [key, name] of options.choices || []) {
+      const choice = document.createElement("option");
+      choice.value = key;
+      choice.textContent = name;
+      control.append(choice);
+    }
+    control.value = value === null ? "inherit" : String(value);
+  } else if (kind === "checkbox") {
+    control.type = "checkbox";
+    control.checked = Boolean(value);
+  } else if (kind === "number") {
+    control.type = "number";
+    control.step = "1";
+    if (options.min !== undefined) control.min = String(options.min);
+    if (options.max !== undefined) control.max = String(options.max);
+    control.value = String(value);
+  } else if (kind === "lines") {
+    control.value = (value || []).join("\n");
+    control.rows = options.rows || 3;
+  } else {
+    control.value = value ?? "";
+    if (kind === "multiline") control.rows = options.rows || 4;
+  }
+  control.disabled = Boolean(options.disabled);
+  if (options.disabled) control.title = options.disabledMessage || "Not editable";
+  if (kind === "checkbox") label.append(control, ` ${title}`);
+  else label.append(title, control);
+  return label;
+}
+
+/**
+ * Display explicit inheritance or an override of answer guidance.
+ * @param value Effective optional intent guidance.
+ * @returns The two associated editing controls.
+ */
+function behaviorGuidance(value) {
+  const group = document.createElement("div");
+  group.className = "behavior-guidance";
+  const mode = behaviorField("_guidance_mode", "Answer guidance",
+    value === null ? "inherit" : "override", "select", {
+      choices: [["inherit", "Inherit project guidance"],
+        ["override", "Override for this intent"]],
+    });
+  const field = behaviorField("answer_guidance", "Override text", value ?? "",
+    "multiline", { rows: 4 });
+  field.querySelector("textarea").disabled = value === null;
+  mode.querySelector("select").addEventListener("change", (event) => {
+    field.querySelector("textarea").disabled = event.target.value === "inherit";
+  });
+  group.append(mode, field);
+  return group;
+}
+
+/**
+ * Turn an editor's controls into a complete JSON-compatible settings object.
+ * @param editor The editor containing dotted-path controls.
+ * @returns Current full values, excluding inactive source-first limits.
+ */
+function behaviorValues(editor) {
+  const values = JSON.parse(editor.dataset.initial);
+  for (const field of editor.querySelectorAll("[data-behavior-path]")) {
+    const path = field.dataset.behaviorPath;
+    if (path.startsWith("_")) continue;
+    const kind = field.dataset.behaviorKind;
+    if (kind === "number" && (!field.value.trim()
+        || !field.checkValidity() || !Number.isSafeInteger(Number(field.value)))) {
+      throw new Error(`${settingLabel(path.split(".").at(-1))} must be a valid whole number.`);
+    }
+    const value = kind === "checkbox" ? field.checked
+      : kind === "number" ? Number(field.value)
+        : kind === "lines" ? field.value.split("\n").map((x) => x.trim()).filter(Boolean)
+          : path === "thinking" ? field.value === "inherit" ? null : field.value === "on"
+            : field.value;
+    const segments = path.split(".");
+    const leaf = segments.pop();
+    let parent = values;
+    for (const segment of segments) parent = parent[segment] ??= {};
+    parent[leaf] = value;
+  }
+  if (editor.dataset.behaviorScope === "intent") {
+    const mode = editor.querySelector('[data-behavior-path="_guidance_mode"]');
+    if (mode?.value === "inherit") values.answer_guidance = null;
+    if (values.retrieval.mode !== "search"
+        || values.retrieval.strategy !== "source_first") {
+      for (const name of ["max_sources", "passages_per_source",
+        "max_passages", "evidence_tokens", "coverage"]) {
+        delete values.retrieval[name];
+      }
+    }
+  }
+  return values;
+}
+
+/**
+ * Show fields whose meaning depends on the selected retrieval strategy.
+ * @param editor An individual intent editor.
+ */
+function refreshBehaviorEditor(editor) {
+  if (editor.dataset.behaviorScope !== "intent") return;
+  const mode = editor.querySelector('[data-behavior-path="retrieval.mode"]');
+  const strategy = editor.querySelector('[data-behavior-path="retrieval.strategy"]');
+  const limits = editor.querySelector(".behavior-source-limits");
+  limits?.classList.toggle("hidden", mode?.value !== "search"
+    || strategy?.value !== "source_first");
+  const preview = editor.querySelector(".behavior-prompt-preview");
+  if (preview) {
+    const global = byId("intent-settings").querySelector(
+      '[data-behavior-scope="global"] [data-behavior-path="system_prompt"]');
+    const local = editor.querySelector('[data-behavior-path="system_prompt"]');
+    preview.textContent = `${global?.value || ""}\n\n${local?.value || ""}`;
+  }
+}
+
+/**
+ * Collect all field values, including incomplete drafts.
+ * @param editor The editor whose controls are captured.
+ * @returns A list of path, value snapshots.
+ */
+function behaviorFieldDraft(editor) {
+  return [...editor.querySelectorAll("[data-behavior-path]")].map((field) => ({
+    path: field.dataset.behaviorPath,
+    value: field.type === "checkbox" ? field.checked : field.value,
+  }));
+}
+
+/**
+ * Capture only dirty editors before refreshing after a different save.
+ * @returns A map from editor identity to unsaved field snapshots.
+ */
+function behaviorDrafts() {
+  const drafts = new Map();
+  for (const editor of byId("intent-settings").querySelectorAll(
+    ".behavior-editor")) {
+    const values = behaviorFieldDraft(editor);
+    if (JSON.stringify(values) !== editor.dataset.initialFields) {
+      drafts.set(`${editor.dataset.behaviorScope}:${editor.dataset.intentId}`,
+        values);
+    }
+  }
+  return drafts;
+}
+
+/**
+ * Save an independent behavior scope using the core's revision contract.
+ * @param scope Memory or intent_memory.
+ * @param intentId The owning intent ID, empty for project memory.
+ * @param values Complete scope values.
+ * @param status Result element for validation and confirmation.
+ */
+function saveMemoryBehavior(scope, intentId, values, status) {
+  if (!bridge || !ready || !projectBehaviorData
+      || projectBehaviorData.project !== openProjectPath) return;
+  if (busy || behaviorSave.pending) {
+    status.textContent = "Complete the current operation before saving.";
+    return;
+  }
+  const requestId = ++behaviorSave.nextId;
+  behaviorSave.pending = {
+    requestId, project: openProjectPath, scope, intentId,
+  };
+  status.textContent = "Saving…";
+  status.classList.remove("tool-error");
+  bridge.saveProjectBehavior(openProjectPath, scope, intentId,
+    JSON.stringify(values), projectBehaviorData.revision, requestId);
+}
+
+/**
+ * Return the memory policy currently shown in Settings.
+ * @returns Full project-level policy object.
+ */
+function memoryPolicyValues() {
+  const limits = ["max-hits", "max-tokens"].map((name) => {
+    const field = byId(`memory-${name}`);
+    if (!field.value.trim() || !field.checkValidity()
+        || !Number.isSafeInteger(Number(field.value))) {
+      throw new Error("Memory limits must be positive whole numbers.");
+    }
+    return Number(field.value);
+  });
+  return {
+    enabled: byId("memory-enabled").checked,
+    questions: byId("memory-questions").value,
+    answers: byId("memory-answers").value,
+    max_hits: limits[0], max_tokens: limits[1],
+    exclude_disliked_answers: byId("memory-exclude-disliked").checked,
+  };
+}
+
+/**
+ * Present the saved memory policy without discarding unrelated draft edits.
+ * @param draft Current unsaved settings, or null to render saved settings.
+ */
+function showMemoryPolicy(draft = null) {
+  const data = projectBehaviorData?.project === openProjectPath
+    ? projectBehaviorData.memory : null;
+  const enabled = Boolean(ready && data);
+  const ids = ["enabled", "questions", "answers", "max-hits", "max-tokens",
+    "exclude-disliked"];
+  const values = draft || data?.values;
+  const changed = displayedMemoryProject !== openProjectPath
+    || displayedMemoryRevision !== projectBehaviorData?.revision;
+  if (values && (draft || changed)) {
+    byId("memory-enabled").checked = values.enabled;
+    byId("memory-questions").value = values.questions;
+    byId("memory-answers").value = values.answers;
+    byId("memory-max-hits").value = values.max_hits;
+    byId("memory-max-tokens").value = values.max_tokens;
+    byId("memory-exclude-disliked").checked = values.exclude_disliked_answers;
+  }
+  if (data) {
+    displayedMemoryProject = openProjectPath;
+    displayedMemoryRevision = projectBehaviorData.revision;
+  }
+  for (const name of ids) byId(`memory-${name}`).disabled = !enabled || busy;
+  byId("save-memory-policy").disabled = !enabled || busy;
+  byId("reset-memory-policy").disabled = !enabled || busy
+    || JSON.stringify(data.values) === JSON.stringify(data.defaults);
+  byId("sync-memory-index").disabled = !enabled || busy
+    || !data.values.enabled || memorySyncPending;
+  if (!enabled) byId("memory-policy-status").textContent =
+    "Open a project to configure conversation memory.";
+}
+
+/**
+ * Submit project memory settings, or restore the type's packaged defaults.
+ * @param restore Whether the user selected Restore defaults.
+ */
+function saveMemoryPolicy(restore = false) {
+  const data = projectBehaviorData?.memory;
+  const status = byId("memory-policy-status");
+  if (!data) return;
+  try {
+    const values = restore ? data.defaults : memoryPolicyValues();
+    if (JSON.stringify(values) === JSON.stringify(data.values)) {
+      status.textContent = "These memory settings are already saved.";
+      return;
+    }
+    saveMemoryBehavior("memory", "", values, status);
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add("tool-error");
+  }
+}
+
+/**
+ * Construct per-intent memory controls with independent Save and Restore.
+ * @param item Validated intent editor payload.
+ * @returns Editable policy panel.
+ */
+function createIntentMemoryEditor(item) {
+  const panel = document.createElement("section");
+  panel.className = "intent-memory-editor";
+  panel.dataset.intentId = item.id;
+  panel.dataset.initial = JSON.stringify(item.memory.values);
+  const heading = document.createElement("h5");
+  heading.textContent = "Conversation memory";
+  const mode = behaviorField("indexing", "Index this intent", item.memory.values.indexing,
+    "select", { choices: [["automatic", "Use project policy"],
+      ["explicit", "Only when saved or liked"], ["never", "Never"]] });
+  const read = behaviorField("read", "Retrieve earlier memory for this intent",
+    item.memory.values.read, "checkbox");
+  const actions = document.createElement("div");
+  actions.className = "behavior-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "secondary";
+  save.textContent = "Save memory policy";
+  const restore = document.createElement("button");
+  restore.type = "button";
+  restore.className = "secondary";
+  restore.textContent = "Restore defaults";
+  restore.disabled = JSON.stringify(item.memory.values)
+    === JSON.stringify(item.memory.defaults);
+  const status = document.createElement("p");
+  status.className = "hint behavior-status";
+  status.setAttribute("role", "status");
+  const current = () => ({
+    indexing: mode.querySelector("select").value,
+    read: read.querySelector("input").checked,
+  });
+  save.addEventListener("click", () => saveMemoryBehavior(
+    "intent_memory", item.id, current(), status));
+  restore.addEventListener("click", () => saveMemoryBehavior(
+    "intent_memory", item.id, item.memory.defaults, status));
+  actions.append(save, restore);
+  panel.append(heading, mode, read, actions, status);
+  for (const field of panel.querySelectorAll("[data-behavior-path]")) {
+    field.closest("label").dataset.settingsKey =
+      `project_behavior.intents.memory.${field.dataset.behaviorPath}`;
+  }
+  applySettingsHelp(panel);
+  return panel;
+}
+
+/**
+ * Save an editor with the current project identity and optimistic revision.
+ * @param editor Editor whose values are being persisted.
+ * @param values Complete JSON settings object.
+ */
+function saveBehaviorEditor(editor, values) {
+  const status = editor.querySelector(".behavior-status");
+  if (!bridge || !ready || !projectBehaviorData
+      || projectBehaviorData.project !== openProjectPath) return;
+  if (behaviorSave.pending) {
+    status.textContent = "Complete the previous save first.";
+    return;
+  }
+  const requestId = ++behaviorSave.nextId;
+  const scope = editor.dataset.behaviorScope;
+  const intentId = editor.dataset.intentId;
+  behaviorSave.pending = { requestId, project: openProjectPath,
+    scope, intentId };
+  status.textContent = "Saving…";
+  status.classList.remove("tool-error");
+  bridge.saveProjectBehavior(openProjectPath, scope, intentId,
+    JSON.stringify(values), projectBehaviorData.revision, requestId);
+}
+
+/**
+ * Build one editable project-wide or individual-intent panel.
+ * @param scope Either global or intent.
+ * @param record Effective values, defaults, and fixed intent tool.
+ * @param id Fixed intent ID, empty for global settings.
+ * @returns The editor DOM subtree.
+ */
+function createBehaviorEditor(scope, record, id = "") {
+  const editor = document.createElement("div");
+  editor.className = "behavior-editor";
+  editor.dataset.behaviorScope = scope;
+  editor.dataset.intentId = id;
+  editor.dataset.initial = JSON.stringify(record.values);
+  const values = record.values;
+  const descriptionLabel = scope === "global"
+    ? "Project description (for routing)"
+    : "Intent description (for routing)";
+  editor.append(behaviorField("description", descriptionLabel,
+    values.description, "multiline", { rows: 3 }));
+  editor.append(behaviorField("system_prompt", "System instructions",
+    values.system_prompt, "multiline", { rows: 6,
+      disabled: Boolean(record.tool),
+      disabledMessage: "A tool produces the answer for this intent." }));
+  if (scope === "global") {
+    editor.append(
+      behaviorField("answer_guidance", "Default answer guidance",
+        values.answer_guidance, "multiline"),
+      behaviorField("retrieval_instruction", "Embedding query instruction",
+        values.retrieval_instruction, "multiline", { rows: 3 }),
+      behaviorField("history.recent_turns", "Recent conversation turns",
+        values.history.recent_turns, "number", { min: 0, max: 100 }),
+      behaviorField("default_intent", "Default intent", values.default_intent,
+        "select", { choices: projectBehaviorData.intents.map((item) =>
+          [item.id, settingLabel(item.id)]) }),
+      behaviorField("welcome_prompts", "Welcome prompts (one per line)",
+        values.welcome_prompts, "lines"),
+      behaviorField("suggestions", "Suggested questions (one per line)",
+        values.suggestions, "lines"),
+    );
+  } else {
+    editor.append(behaviorGuidance(values.answer_guidance));
+    editor.append(behaviorField("history.policy", "Conversation history",
+      values.history.policy, "select", {
+        choices: [["none", "None"], ["recent", "Recent"],
+          ["relevant", "Relevant"]],
+      }));
+    if (record.tool) {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = `Tool: ${record.tool}. Retrieval and thinking are managed by the tool.`;
+      editor.append(hint);
+    }
+    const restricted = { disabled: Boolean(record.tool) };
+    editor.append(
+      behaviorField("retrieval.mode", "Retrieval mode",
+        values.retrieval.mode, "select", { choices: [
+          ["search", "Search"], ["document", "Document"],
+          ["reuse", "Reuse evidence"], ["none", "None"]], ...restricted }),
+      behaviorField("retrieval.strategy", "Search strategy",
+        values.retrieval.strategy, "select", { choices: [
+          ["hybrid", "Hybrid"], ["source_first", "Source first"]],
+          ...restricted }),
+      behaviorField("retrieval.max_tokens", "Document token budget",
+        values.retrieval.max_tokens, "number", {
+          min: 1000, max: 200000, ...restricted }),
+      behaviorField("retrieval.include_related_evidence",
+        "Include related evidence", values.retrieval.include_related_evidence,
+        "checkbox", restricted),
+      behaviorField("retrieval.prefer_source_code", "Prefer source code",
+        values.retrieval.prefer_source_code, "checkbox", restricted),
+    );
+    const limits = document.createElement("div");
+    limits.className = "behavior-source-limits";
+    const valuesLimits = values.retrieval;
+    const defaults = record.source_first_defaults;
+    for (const [key, min, max, title] of [
+      ["max_sources", 1, 50, "Maximum sources"],
+      ["passages_per_source", 1, 10, "Passages per source"],
+      ["max_passages", 1, 200, "Maximum passages"],
+      ["evidence_tokens", 1000, 200000, "Evidence token budget"],
+    ]) {
+      limits.append(behaviorField(`retrieval.${key}`, title,
+        valuesLimits[key] ?? defaults[key], "number",
+        { min, max, ...restricted }));
+    }
+    limits.append(behaviorField("retrieval.coverage", "Coverage",
+      valuesLimits.coverage ?? defaults.coverage, "select", { choices: [
+        ["bounded", "Bounded"], ["exhaustive", "Exhaustive"]], ...restricted }));
+    editor.append(limits);
+    editor.append(behaviorField("thinking", "Thinking policy",
+      values.thinking === null ? "inherit" : values.thinking ? "on" : "off",
+      "select", { choices: [["inherit", "Inherit session setting"],
+        ["on", "On"], ["off", "Off"]], ...restricted }));
+    const advanced = document.createElement("details");
+    advanced.className = "behavior-advanced";
+    const advancedHeading = document.createElement("summary");
+    advancedHeading.textContent = "Advanced routing patterns";
+    advanced.append(advancedHeading);
+    for (const [field, title] of [["shortcuts", "Shortcuts"],
+      ["cues", "Cues"], ["requires", "Requirements"]]) {
+      advanced.append(behaviorField(field, `${title} (one regex per line)`,
+        values[field], "lines"));
+    }
+    editor.append(advanced);
+    if (!record.tool) {
+      const preview = document.createElement("details");
+      preview.className = "behavior-preview";
+      const heading = document.createElement("summary");
+      heading.textContent = "Effective system prompt preview";
+      const contents = document.createElement("pre");
+      contents.className = "behavior-prompt-preview";
+      preview.append(heading, contents);
+      editor.append(preview);
+    }
+  }
+  const actions = document.createElement("div");
+  actions.className = "behavior-actions";
+  const save = document.createElement("button");
+  save.className = "primary";
+  save.type = "button";
+  save.textContent = "Save settings";
+  const restore = document.createElement("button");
+  restore.className = "secondary";
+  restore.type = "button";
+  restore.textContent = "Restore defaults";
+  restore.disabled = JSON.stringify(record.values)
+    === JSON.stringify(record.defaults);
+  const status = document.createElement("p");
+  status.className = "hint behavior-status";
+  status.setAttribute("role", "status");
+  save.addEventListener("click", () => {
+    try { saveBehaviorEditor(editor, behaviorValues(editor)); }
+    catch (error) {
+      status.textContent = error.message;
+      status.classList.add("tool-error");
+    }
+  });
+  restore.addEventListener("click", () =>
+    saveBehaviorEditor(editor, record.defaults));
+  actions.append(save, restore);
+  editor.append(actions, status);
+  editor.addEventListener("input", () => {
+    refreshBehaviorEditor(editor);
+    if (scope === "global") {
+      for (const other of byId("intent-settings").querySelectorAll(
+        '[data-behavior-scope="intent"]')) refreshBehaviorEditor(other);
+    }
+  });
+  editor.addEventListener("change", () => refreshBehaviorEditor(editor));
+  for (const field of editor.querySelectorAll("[data-behavior-path]")) {
+    const path = field.dataset.behaviorPath === "_guidance_mode"
+      ? "answer_guidance" : field.dataset.behaviorPath;
+    field.closest("label").dataset.settingsKey =
+      `project_behavior.${scope === "global" ? "global" : "intents"}.${path}`;
+  }
+  applySettingsHelp(editor);
+  editor.dataset.initialFields = JSON.stringify(behaviorFieldDraft(editor));
+  return editor;
+}
+
+/**
+ * Render a complete project editor and correlated save acknowledgment.
+ * @param data GUI event with effective behavior or correlated error.
+ */
+function renderProjectBehavior(data) {
+  const pending = behaviorSave.pending;
+  if (data.request_id !== undefined && (!pending
+      || pending.requestId !== data.request_id
+      || (pending.project !== data.behavior?.project
+          && pending.project !== data.project))) return;
+  if (data.behavior && data.behavior.project !== openProjectPath) return;
+  if (data.request_id !== undefined) behaviorSave.pending = null;
+  if (data.error) {
+    if (data.scope === "capabilities") {
+      applyingIndexing = false;
+      setBusy(false);
+      const status = byId("index-capabilities-status");
+      status.textContent = data.error;
+      status.classList.add("tool-error");
+      showIndexingCapabilities();
+      return;
+    }
+    if (data.scope === "memory" || data.scope === "intent_memory") {
+      const status = data.scope === "memory"
+        ? byId("memory-policy-status")
+        : [...byId("intent-settings").querySelectorAll(
+          ".intent-memory-editor")].find((item) =>
+          item.dataset.intentId === data.intent_id)?.querySelector(
+            ".behavior-status");
+      if (status) {
+        status.textContent = data.error;
+        status.classList.add("tool-error");
+      }
+      return;
+    }
+    const editor = [...byId("intent-settings").querySelectorAll(
+      ".behavior-editor")].find((item) =>
+        item.dataset.behaviorScope === data.scope
+        && item.dataset.intentId === (data.intent_id || ""));
+    const status = editor?.querySelector(".behavior-status");
+    if (status) {
+      status.textContent = data.error;
+      status.classList.add("tool-error");
+    }
+    return;
+  }
+  if (!data.behavior) return;
+  const previous = projectBehaviorData?.project === openProjectPath
+    ? behaviorDrafts() : new Map();
+  let memoryDraft = null;
+  if (projectBehaviorData?.project === openProjectPath
+      && !(data.saved && data.scope === "memory")) {
+    try {
+      const current = memoryPolicyValues();
+      if (JSON.stringify(current)
+          !== JSON.stringify(projectBehaviorData.memory.values)) {
+        memoryDraft = current;
+      }
+    } catch { /* Invalid numeric drafts remain until the next valid save. */ }
+  }
+  const previousIntentMemory = new Map();
+  for (const editor of byId("intent-settings").querySelectorAll(
+    ".intent-memory-editor")) {
+    const fields = [...editor.querySelectorAll("[data-behavior-path]")].map(
+      (field) => ({ path: field.dataset.behaviorPath,
+        value: field.type === "checkbox" ? field.checked : field.value }));
+    if (JSON.stringify(Object.fromEntries(fields.map((field) =>
+      [field.path, field.value]))) !== editor.dataset.initial) {
+      previousIntentMemory.set(editor.dataset.intentId, fields);
+    }
+  }
+  const prior = projectBehaviorData;
+  projectBehaviorData = data.behavior;
+  if (data.scope === "capabilities" && data.saved) {
+    applyingIndexing = false;
+    setBusy(false);
+    const status = byId("index-capabilities-status");
+    status.textContent = "Saved. Affected indexes have been rebuilt.";
+    status.classList.remove("tool-error");
+  }
+  showIndexingCapabilities();
+  showMemoryPolicy(memoryDraft);
+  if (data.saved && data.scope === "memory") {
+    byId("memory-policy-status").textContent =
+      "Saved. Memory updates on the next eligible answer or manual update.";
+    byId("memory-policy-status").classList.remove("tool-error");
+    bridge?.requestMemoryStatus(openProjectPath);
+  }
+  const holder = byId("intent-settings");
+  const opened = new Set([...holder.querySelectorAll(
+    "details.behavior-intent[open]")].map((item) => item.dataset.intentId));
+  holder.replaceChildren();
+  const global = document.createElement("details");
+  global.className = "behavior-intent";
+  global.open = true;
+  global.dataset.intentId = "";
+  const heading = document.createElement("summary");
+  heading.textContent = "Project-wide settings";
+  global.append(heading, createBehaviorEditor("global", data.behavior.global));
+  holder.append(global);
+  const title = document.createElement("h4");
+  title.textContent = "Individual intents";
+  holder.append(title);
+  for (const item of data.behavior.intents) {
+    const section = document.createElement("details");
+    section.className = "behavior-intent";
+    section.dataset.intentId = item.id;
+    section.open = opened.has(item.id)
+      || Boolean(data.saved && data.scope === "intent"
+        && data.intent_id === item.id)
+      || Boolean(data.saved && data.scope === "intent_memory"
+        && data.intent_id === item.id);
+    const summary = document.createElement("summary");
+    const code = document.createElement("code");
+    code.textContent = item.id;
+    summary.append(code, ` — ${item.values.description}`);
+    section.append(summary, createBehaviorEditor("intent", item, item.id));
+    section.append(createIntentMemoryEditor(item));
+    holder.append(section);
+  }
+  for (const editor of holder.querySelectorAll(".intent-memory-editor")) {
+    if (data.saved && data.scope === "intent_memory"
+        && data.intent_id === editor.dataset.intentId) continue;
+    for (const field of previousIntentMemory.get(editor.dataset.intentId) || []) {
+      const control = [...editor.querySelectorAll("[data-behavior-path]")]
+        .find((item) => item.dataset.behaviorPath === field.path);
+      if (!control) continue;
+      if (control.type === "checkbox") control.checked = field.value;
+      else control.value = field.value;
+    }
+  }
+  if (prior?.project === openProjectPath) {
+    for (const editor of holder.querySelectorAll(".behavior-editor")) {
+      const key = `${editor.dataset.behaviorScope}:${editor.dataset.intentId}`;
+      if (data.saved && data.scope === editor.dataset.behaviorScope
+          && (data.intent_id || "") === editor.dataset.intentId) continue;
+      for (const field of previous.get(key) || []) {
+        const control = [...editor.querySelectorAll("[data-behavior-path]")]
+          .find((item) => item.dataset.behaviorPath === field.path);
+        if (!control) continue;
+        if (control.type === "checkbox") control.checked = field.value;
+        else control.value = field.value;
+      }
+    }
+  }
+  for (const editor of holder.querySelectorAll(".behavior-editor")) {
+    refreshBehaviorEditor(editor);
+    const mode = editor.querySelector('[data-behavior-path="_guidance_mode"]');
+    if (mode) editor.querySelector(
+      '[data-behavior-path="answer_guidance"]').disabled
+      = mode.value === "inherit";
+  }
+  if (data.saved) {
+    const editor = [...holder.querySelectorAll(".behavior-editor")]
+      .find((item) => item.dataset.behaviorScope === data.scope
+        && item.dataset.intentId === (data.intent_id || ""));
+    if (editor) editor.querySelector(".behavior-status").textContent = "Saved.";
+    if (data.scope === "intent_memory") {
+      const memoryEditor = [...holder.querySelectorAll(
+        ".intent-memory-editor")].find((item) =>
+          item.dataset.intentId === data.intent_id);
+      if (memoryEditor) memoryEditor.querySelector(".behavior-status")
+        .textContent = "Saved. Index updates on next use.";
+      bridge?.requestMemoryStatus(openProjectPath);
+    }
+    if (data.scope === "global") {
+      projectPresentation = {
+        welcome_prompts: data.behavior.global.values.welcome_prompts,
+        suggestions: data.behavior.global.values.suggestions,
+      };
+      if (conversation.querySelector(".conversation-empty"))
+        renderConversationEmpty();
+    }
+  }
+  refreshFeedbackControls();
+}
+
+/**
+ * Populate advanced Indexing controls from the effective project behavior.
+ */
+function showIndexingCapabilities() {
+  const data = projectBehaviorData?.project === openProjectPath
+    ? projectBehaviorData.capabilities : null;
+  const available = Boolean(ready && data);
+  const graph = byId("code-graph");
+  const headers = byId("document-headers");
+  const save = byId("save-index-capabilities");
+  const restore = byId("reset-index-capabilities");
+  if (data && !applyingIndexing) {
+    graph.value = data.values.code_graph === "auto" ? "auto"
+      : data.values.code_graph ? "on" : "off";
+    headers.checked = data.values.document_headers;
+  }
+  graph.disabled = !available || busy;
+  headers.disabled = !available || busy;
+  save.disabled = !available || busy;
+  restore.disabled = !available || busy || JSON.stringify(data.values)
+    === JSON.stringify(data.defaults);
+  if (!available) byId("index-capabilities-status").textContent =
+    "Open a project to edit indexing capabilities.";
+}
+
+/**
+ * Serialize the advanced indexing fields in the core's vocabulary.
+ * @returns The two capability settings.
+ */
+function indexingCapabilityValues() {
+  return {
+    code_graph: byId("code-graph").value === "auto" ? "auto"
+      : byId("code-graph").value === "on",
+    document_headers: byId("document-headers").checked,
+  };
+}
+
+/**
+ * Confirm and save index-affecting project behavior, rebuilding as needed.
+ * @param restore Restore packaged defaults rather than edited controls.
+ */
+async function saveIndexCapabilities(restore = false) {
+  const status = byId("index-capabilities-status");
+  if (!bridge || !ready || !projectBehaviorData
+      || projectBehaviorData.project !== openProjectPath) return;
+  if (busy || behaviorSave.pending) {
+    status.textContent = "Complete the current operation before saving.";
+    return;
+  }
+  const editingProject = openProjectPath;
+  const editingRevision = projectBehaviorData.revision;
+  const values = restore ? projectBehaviorData.capabilities.defaults
+    : indexingCapabilityValues();
+  if (JSON.stringify(values)
+      === JSON.stringify(projectBehaviorData.capabilities.values)) {
+    status.textContent = "These settings are already saved.";
+    return;
+  }
+  if (!await askKilin("Rebuild affected indexes?",
+    "Changing code graph or document headers requires rebuilding affected indexes. "
+      + "Your sources and conversations are preserved.",
+    "Save and rebuild")) {
+    showIndexingCapabilities();
+    return;
+  }
+  if (!ready || busy || !projectBehaviorData
+      || openProjectPath !== editingProject
+      || projectBehaviorData.project !== editingProject
+      || projectBehaviorData.revision !== editingRevision) return;
+  const requestId = ++behaviorSave.nextId;
+  behaviorSave.pending = { requestId, project: openProjectPath,
+    scope: "capabilities", intentId: "" };
+  applyingIndexing = true;
+  setBusy(true, "Rebuilding the index…");
+  status.textContent = "Saving capabilities and rebuilding the index…";
+  bridge.saveProjectBehavior(openProjectPath, "capabilities", "",
+    JSON.stringify(values), projectBehaviorData.revision, requestId);
 }
 
 /**
@@ -1541,6 +2515,13 @@ function openModels() {
   showProjectSettings();
   // The Tools tab may still be selected from another project.
   if (settingsTab === "tools") requestToolSettings();
+  if (["intents", "indexing", "memory"].includes(settingsTab)) {
+    requestProjectBehavior();
+  }
+  if (settingsTab === "memory" && bridge && ready && openProjectPath) {
+    bridge.requestMemoryStatus(openProjectPath);
+    requestMemoryMessages();
+  }
   byId("models-panel").classList.remove("hidden");
   byId("close-models").focus();
 }
@@ -1586,6 +2567,7 @@ function modelEditsPending() {
  * Close the model settings panel and refresh source-drop bounds.
  */
 function hideModels() {
+  dismissSettingsHelp();
   setupCompletionVisible = false;
   byId("models-panel").classList.add("hidden");
   syncSourceDropTarget();
@@ -2132,6 +3114,8 @@ function showIndexingFields() {
   for (const key of ["max_file_bytes", "target_tokens", "max_tokens", "overlap_tokens"]) {
     byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
   }
+  showIndexingCapabilities();
+  showMemoryPolicy();
 }
 
 /**
@@ -3400,6 +4384,8 @@ function setBusy(value, message = "") {
   document.querySelectorAll(".conversation-item").forEach((item) => { item.disabled = (value && !answering) || !ready; });
   syncGeneratingConversations();
   document.querySelectorAll(".conversation-delete, .project-item, .project-settings, .message-branch").forEach((item) => { item.disabled = value || !ready; });
+  refreshFeedbackControls();
+  showMemoryPolicy();
   byId("home-logo").disabled = value;
   byId("new-project").disabled = value;
   byId("stop").disabled = !value;
@@ -3793,6 +4779,157 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
     notice.textContent = "This answer reached the token limit and may be incomplete. Ask for a shorter answer, or raise Maximum answer tokens in Settings and retry.";
     answer.append(notice);
   }
+}
+
+/**
+ * Highlight the destination saved turn after a referenced chat opens.
+ */
+function highlightMemoryOrigin() {
+  if (!memoryNavigation) return;
+  const shown = reading?.id || activeConversationId;
+  if (shown !== memoryNavigation.conversationId) return;
+  const target = [...conversation.querySelectorAll(".turn:not(.pending)")]
+    [memoryNavigation.turnNumber - 1];
+  if (target) {
+    conversation.querySelectorAll(".memory-origin-highlight").forEach(
+      (item) => item.classList.remove("memory-origin-highlight"));
+    target.classList.add("memory-origin-highlight");
+    target.scrollIntoView({ block: "center" });
+  }
+  memoryNavigation = null;
+}
+
+/**
+ * Navigate to one currently active origin of a retrieved memory.
+ * @param origin Saved conversation ID and one-based turn number.
+ */
+function openMemoryOrigin(origin) {
+  if (!bridge || !origin || !Number.isSafeInteger(origin.turn_number)
+      || origin.turn_number < 1) return;
+  const candidate = lastConversationData?.conversations?.find((item) =>
+    item.conversation_id === origin.conversation_id);
+  if (!candidate) return;
+  memoryNavigation = {
+    conversationId: origin.conversation_id,
+    turnNumber: origin.turn_number,
+  };
+  if (origin.conversation_id === (reading?.id || activeConversationId)) {
+    highlightMemoryOrigin();
+  } else if (busy && answeringConversationId) {
+    readConversation(candidate);
+  } else if (!busy) {
+    setBusy(true, "Opening remembered conversation…");
+    bridge.selectConversation(origin.conversation_id);
+  } else {
+    memoryNavigation = null;
+  }
+}
+
+/**
+ * Add a compact, expandable memory reference control to the answer actions.
+ * Memory origins remain separate from documentary source citations.
+ * @param row Completed answer's action row.
+ * @param turn Saved turn including optional memory references.
+ */
+function appendMemoryProvenance(row, turn) {
+  const references = turn.parameters?.memory_references;
+  if (!Array.isArray(references) || !references.length) return;
+  const wrapper = document.createElement("div");
+  wrapper.className = "memory-provenance-wrapper";
+  wrapper.hidden = true;
+  const panel = document.createElement("section");
+  panel.className = "memory-provenance";
+  panel.id = `memory-provenance-${turn.conversation_turn_uuid}`;
+  panel.setAttribute("role", "region");
+  panel.setAttribute("aria-label", "Earlier conversation memory (not source evidence)");
+  // Group by durable turn identity so both roles use an active origin.
+  const groups = new Map();
+  for (const [index, reference] of references.entries()) {
+    const origins = Array.isArray(reference.origins) ? reference.origins : [];
+    const origin = origins.find((item) => lastConversationData?.conversations
+      ?.some((entry) => entry.conversation_id === item.conversation_id));
+    const key = typeof reference.turn_uuid === "string" && reference.turn_uuid
+      ? `turn:${reference.turn_uuid}`
+      : origin ? `origin:${origin.conversation_id}:${origin.turn_number}`
+        : `unavailable:${index}`;
+    if (!groups.has(key)) groups.set(key, {origin: null, messages: []});
+    const group = groups.get(key);
+    if (!group.origin && origin) group.origin = origin;
+    const role = reference.role === "user" ? "Question"
+      : reference.role === "assistant" ? "Answer" : "Message";
+    group.messages.push({role});
+  }
+  for (const group of groups.values()) {
+    const origin = group.origin;
+    const details = lastConversationData?.conversations?.find((item) =>
+      item.conversation_id === origin?.conversation_id);
+    const item = document.createElement("section");
+    item.className = "memory-turn";
+    for (const message of group.messages) {
+      const link = document.createElement("button");
+      link.type = "button";
+      const alignment = message.role === "Question" ? "memory-question"
+        : message.role === "Answer" ? "memory-answer" : "memory-other";
+      link.className = `memory-message ${alignment}`;
+      const name = origin ? details.name : "Conversation unavailable";
+      const suffix = origin ? ` · Turn ${origin.turn_number} — ${message.role}`
+        : ` — ${message.role}`;
+      const nameLabel = document.createElement("span");
+      nameLabel.className = "memory-message-name";
+      nameLabel.textContent = name;
+      const roleLabel = document.createElement("span");
+      roleLabel.className = "memory-message-role";
+      roleLabel.textContent = suffix;
+      link.append(nameLabel, roleLabel);
+      link.title = origin
+        ? `Open ${name}${suffix}; not source evidence.`
+        : "Conversation unavailable; not source evidence.";
+      link.disabled = !origin;
+      if (origin) link.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openMemoryOrigin(origin);
+      });
+      item.append(link);
+    }
+    panel.append(item);
+  }
+  const count = references.length;
+  const description = `${count} conversation ${count === 1 ? "memory" : "memories"}`
+    + ` from ${groups.size} ${groups.size === 1 ? "turn" : "turns"}`
+    + " (not source evidence)";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "message-action memory-toggle";
+  toggle.title = description;
+  toggle.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24">'
+    + '<path d="M4 5h16v12H9l-5 4V5z"/>'
+    + '<path d="M8 9h8M8 13h5"/></svg>';
+  const badge = document.createElement("span");
+  badge.className = "memory-toggle-count";
+  badge.textContent = String(count);
+  toggle.append(badge);
+  toggle.setAttribute("aria-controls", panel.id);
+  const setExpanded = (expanded) => {
+    wrapper.hidden = !expanded;
+    row.classList.toggle("memory-expanded", expanded);
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} ${description}`);
+  };
+  setExpanded(false);
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setExpanded(wrapper.hidden);
+  });
+  row.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || wrapper.hidden) return;
+    event.stopPropagation();
+    setExpanded(false);
+    toggle.focus();
+  });
+  row.classList.add("memory-available");
+  row.prepend(toggle);
+  wrapper.append(panel);
+  row.append(wrapper);
 }
 
 // Markdown blocks the renderer recognizes at the start of a line.
@@ -4201,6 +5338,363 @@ function messageActions(text, timestamp, label, onBranch) {
 }
 
 /**
+ * Return user feedback for a saved message, or its neutral default.
+ * @param turnUuid UUID of the committed conversation turn.
+ * @param role Message role: user or assistant.
+ * @returns Save state and reaction.
+ */
+function messageFeedback(turnUuid, role) {
+  return feedbackData.entries?.[turnUuid]?.[role]
+    || { saved: false, reaction: "neutral" };
+}
+
+/**
+ * Determine whether an intent forbids indexing regardless of feedback.
+ * @param intentId Saved intent identifier.
+ * @returns True if project-owned intent policy is never.
+ */
+function memoryIntentNever(intentId) {
+  const record = projectBehaviorData?.intents?.find((item) =>
+    item.id === intentId);
+  return record?.memory?.values?.indexing === "never";
+}
+
+/**
+ * Repaint button state after feedback, policy, or busy-state changes.
+ */
+function refreshFeedbackControls() {
+  for (const button of conversation.querySelectorAll(".message-feedback")) {
+    const { turnUuid, feedbackRole: role, feedbackAction: action } = button.dataset;
+    const state = messageFeedback(turnUuid, role);
+    const active = action === "save" ? state.saved
+      : state.reaction === action;
+    const loaded = feedbackData.project === openProjectPath
+      && Boolean(feedbackData.revision);
+    button.disabled = !ready || busy || !loaded || Boolean(feedbackSave.pending)
+      || !turnUuid || !button.closest(".turn")?.dataset.conversationId;
+    button.classList.toggle("feedback-active", active);
+    button.classList.toggle("feedback-disliked", active && action === "disliked");
+    button.setAttribute("aria-pressed", String(active));
+    const forbidden = memoryIntentNever(button.closest(".turn")?.dataset.intentId);
+    button.title = forbidden && action !== "disliked"
+      ? "This intent cannot be indexed, even when saved or liked."
+      : action === "save" ? (active ? "Remove from memory" : "Save to memory")
+        : action === "liked" ? "Like this message"
+          : role === "assistant"
+            ? "Dislike this answer (exclude from memory and, when enabled, context)"
+            : "Dislike this question (exclude from memory indexing)";
+  }
+  for (const row of conversation.querySelectorAll(".message-actions")) {
+    row.classList.toggle("feedback-selected", Boolean(row.querySelector(
+      ".message-feedback.feedback-active")));
+  }
+}
+
+/**
+ * Load the active project's feedback and last memory-index status.
+ */
+function requestMemoryState() {
+  if (!bridge || !ready || !openProjectPath) return;
+  bridge.requestConversationFeedback(openProjectPath);
+  bridge.requestMemoryStatus(openProjectPath);
+}
+
+/**
+ * Accept a feedback snapshot only if it belongs to the current project.
+ * @param data Response from the core.
+ */
+function receiveFeedback(data) {
+  if (data.project !== openProjectPath) return;
+  if (data.error) {
+    feedbackData = { project: "", revision: "", entries: {} };
+    refreshFeedbackControls();
+    error.textContent = `Could not read conversation feedback: ${data.error}`;
+    error.classList.remove("hidden");
+    return;
+  }
+  if (feedbackSave.pending) return;
+  feedbackData = {
+    project: data.project, revision: data.revision, entries: data.entries,
+  };
+  refreshFeedbackControls();
+}
+
+/**
+ * Match a feedback save response and restore controls on failure.
+ * @param data Correlated save result.
+ */
+function receiveFeedbackSave(data) {
+  const pending = feedbackSave.pending;
+  if (!pending || pending.project !== data.project
+      || pending.requestId !== data.request_id
+      || pending.turnUuid !== data.turn_uuid
+      || pending.role !== data.role) return;
+  feedbackSave.pending = null;
+  const row = [...conversation.querySelectorAll(".message-actions")].find(
+    (item) => [...item.querySelectorAll(".message-feedback")].some(
+      (button) => button.dataset.turnUuid === data.turn_uuid
+        && button.dataset.feedbackRole === data.role));
+  const status = row?.querySelector(".message-feedback-status");
+  if (data.error) {
+    if (status) status.textContent = data.error;
+    bridge.requestConversationFeedback(openProjectPath);
+  } else {
+    feedbackData = {
+      project: data.project, revision: data.revision, entries: data.entries,
+    };
+    if (status) status.textContent = "Saved.";
+  }
+  refreshFeedbackControls();
+}
+
+/**
+ * Describe the last built index without treating cached counts as current.
+ * @param data Read-only index status from the core.
+ */
+function receiveMemoryStatus(data) {
+  if (data.project !== openProjectPath) return;
+  memoryIndexState = data;
+  const status = byId("memory-index-status");
+  if (data.error) {
+    status.textContent = data.error;
+    status.classList.add("tool-error");
+  } else if (!data.enabled) {
+    status.textContent = "Conversation memory is disabled. Feedback remains saved.";
+    status.classList.remove("tool-error");
+  } else if (!data.indexed) {
+    status.textContent = "No memory index yet. It updates when needed, or use Update.";
+    status.classList.remove("tool-error");
+  } else {
+    status.textContent = `Last index: ${data.records} messages `
+      + `(${data.questions} questions, ${data.answers} answers), `
+      + `${data.vectors} unique embeddings.`
+      + (data.feedback_stale ? " Feedback changed; update pending." : "");
+    status.classList.remove("tool-error");
+  }
+  showMemoryPolicy();
+}
+
+/**
+ * Request an explicit memory update without reindexing scientific sources.
+ */
+function syncMemoryIndex() {
+  if (!bridge || busy || !ready || memorySyncPending
+      || projectBehaviorData?.project !== openProjectPath
+      || !projectBehaviorData.memory.values.enabled) return;
+  memorySyncPending = true;
+  setBusy(true, "Updating conversation memory…");
+  byId("memory-index-status").textContent =
+    "Updating project memory; embedding new messages if needed…";
+  bridge.syncConversationMemory(openProjectPath);
+}
+
+/**
+ * Load an authoritative, paged list of saved messages from the core.
+ * @param offset Starting offset, default zero.
+ */
+function requestMemoryMessages(offset = 0) {
+  if (!bridge || !ready || !openProjectPath) return;
+  memoryMessagesRequestedOffset = offset;
+  if (memoryMessagePage?.project !== openProjectPath) {
+    memoryMessagePage = null;
+    renderMemoryMessages();
+  }
+  byId("memory-messages-status").textContent = "Loading saved messages…";
+  bridge.requestMemoryMessages(openProjectPath, offset);
+}
+
+/**
+ * Render text-only, project-scoped memory rows without interpreting HTML.
+ */
+function renderMemoryMessages() {
+  const list = byId("memory-messages-list");
+  list.replaceChildren();
+  const page = memoryMessagePage?.project === openProjectPath
+    ? memoryMessagePage : null;
+  const status = byId("memory-messages-status");
+  const previous = byId("memory-previous");
+  const next = byId("memory-next");
+  const items = Array.isArray(page?.messages) ? page.messages : [];
+  previous.disabled = !page || !items.length || busy
+    || memoryExcludeSave.pending || page.offset === 0;
+  next.disabled = !page || !items.length || busy
+    || memoryExcludeSave.pending
+    || page.offset + items.length >= page.total;
+  if (!page) {
+    status.textContent = "Open a project to inspect saved messages.";
+    return;
+  }
+  if (page.error) {
+    status.textContent = page.error;
+    status.classList.add("tool-error");
+    return;
+  }
+  status.classList.remove("tool-error");
+  if (!page.total) {
+    status.textContent = "No saved messages in active conversations.";
+    return;
+  }
+  const end = page.offset + items.length;
+  status.textContent = `Showing ${page.offset + 1}–${end} of ${page.total}`;
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "memory-manage-row";
+    const details = document.createElement("div");
+    details.className = "memory-manage-details";
+    const title = document.createElement("span");
+    title.className = "memory-manage-title";
+    const role = item.role === "user" ? "Question" : "Answer";
+    title.textContent = `${item.conversation_name} · Turn `
+      + `${item.turn_number} — ${role}`;
+    title.title = title.textContent;
+    const preview = document.createElement("span");
+    preview.className = "memory-manage-preview";
+    preview.textContent = item.preview;
+    const state = document.createElement("span");
+    state.className = "memory-manage-state";
+    state.textContent = {
+      eligible: "Eligible", excluded: "Excluded",
+      disliked: "Disliked", policy: "Not indexed by policy",
+    }[item.status] || "Not indexed";
+    details.append(title, preview, state);
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "secondary memory-manage-action";
+    action.textContent = item.excluded ? "Restore" : "Exclude";
+    action.title = item.excluded
+      ? "Allow this message under current project and intent policies"
+      : "Exclude this message from future memory retrieval";
+    action.disabled = busy || Boolean(memoryExcludeSave.pending);
+    action.addEventListener("click", () => setMemoryExclusion(item));
+    row.append(details, action);
+    list.append(row);
+  }
+}
+
+/**
+ * Accept only the requested project and page, discarding stale responses.
+ * @param data Core inventory response.
+ */
+function receiveMemoryMessages(data) {
+  if (data.project !== openProjectPath
+      || data.offset !== memoryMessagesRequestedOffset) return;
+  memoryMessagePage = data;
+  renderMemoryMessages();
+}
+
+/**
+ * Request a revision-checked explicit exclusion without changing ratings.
+ * @param item Saved message from the authoritative inventory.
+ */
+function setMemoryExclusion(item) {
+  const page = memoryMessagePage;
+  if (!bridge || busy || !ready || memoryExcludeSave.pending
+      || page?.project !== openProjectPath || !page.revision) return;
+  const requestId = ++memoryExcludeSave.nextId;
+  memoryExcludeSave.pending = {
+    requestId, project: openProjectPath,
+    turnUuid: item.turn_uuid, role: item.role,
+  };
+  renderMemoryMessages();
+  byId("memory-messages-status").textContent = "Saving exclusion…";
+  bridge.setMemoryExclusion(JSON.stringify({
+    project: openProjectPath, conversation_id: item.conversation_id,
+    turn_uuid: item.turn_uuid, role: item.role,
+    excluded: !item.excluded, revision: page.revision,
+    request_id: requestId,
+  }));
+}
+
+/**
+ * Match an exclusion acknowledgement before refreshing saved memory state.
+ * @param data Correlated backend result.
+ */
+function receiveMemoryExclusion(data) {
+  const pending = memoryExcludeSave.pending;
+  if (!pending || data.project !== pending.project
+      || data.request_id !== pending.requestId
+      || data.turn_uuid !== pending.turnUuid
+      || data.role !== pending.role) return;
+  memoryExcludeSave.pending = null;
+  if (data.error) {
+    error.textContent = `Could not change memory exclusion: ${data.error}`;
+    error.classList.remove("hidden");
+    memoryMessagePage = null;
+    bridge.requestConversationFeedback(openProjectPath);
+  } else {
+    feedbackData = {
+      project: data.project, revision: data.revision,
+      entries: data.entries,
+    };
+    refreshFeedbackControls();
+  }
+  requestMemoryMessages(memoryMessagesRequestedOffset);
+}
+
+/**
+ * Persist a single button action only for the matching project and turn.
+ * @param button Feedback button associated with a completed turn.
+ */
+function setMessageFeedback(button) {
+  if (!bridge || busy || feedbackSave.pending || !ready
+      || feedbackData.project !== openProjectPath) return;
+  const { turnUuid, feedbackRole: role, feedbackAction: action } = button.dataset;
+  const conversationId = button.closest(".turn")?.dataset.conversationId;
+  if (!turnUuid || !conversationId || !feedbackData.revision) return;
+  const previous = messageFeedback(turnUuid, role);
+  const next = { ...previous };
+  if (action === "save") next.saved = !next.saved;
+  else next.reaction = next.reaction === action ? "neutral" : action;
+  const requestId = ++feedbackSave.nextId;
+  feedbackSave.pending = {
+    requestId, project: openProjectPath, turnUuid, role,
+  };
+  const status = button.closest(".message-actions")?.querySelector(
+    ".message-feedback-status");
+  if (status) status.textContent = "Saving…";
+  refreshFeedbackControls();
+  bridge.saveMessageFeedback(JSON.stringify({
+    project: openProjectPath, conversation_id: conversationId,
+    turn_uuid: turnUuid, role, saved: next.saved, reaction: next.reaction,
+    revision: feedbackData.revision, request_id: requestId,
+  }));
+}
+
+/**
+ * Attach Save, Like, and Dislike to one committed message.
+ * @param row Existing Copy and Branch action row.
+ * @param turn Saved turn including a durable UUID.
+ * @param role User question or assistant answer.
+ */
+function appendFeedbackActions(row, turn, role) {
+  if (!/^[0-9a-f]{32}$/.test(turn.conversation_turn_uuid || "")) return;
+  for (const [action, label, icon] of [
+    ["save", "Save", '<path d="M5 4h14v17l-7-5-7 5z"/>'],
+    ["liked", "Like", '<path d="M7 10v11H4V10h3zm3 11h8l3-10-2-2h-5l1-6-2-1-5 9v10z"/>'],
+    ["disliked", "Dislike", '<path d="M7 14V3H4v11h3zm3-11h8l3 10-2 2h-5l1 6-2 1-5-9V3z"/>'],
+  ]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "message-action message-feedback";
+    button.dataset.turnUuid = turn.conversation_turn_uuid;
+    button.dataset.feedbackRole = role;
+    button.dataset.feedbackAction = action;
+    button.setAttribute("aria-label", `${label} ${role === "user" ? "question" : "answer"}`);
+    button.innerHTML = `<svg aria-hidden="true" viewBox="0 0 24 24">${icon}</svg>`;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setMessageFeedback(button);
+    });
+    row.append(button);
+  }
+  const status = document.createElement("span");
+  status.className = "message-feedback-status";
+  status.setAttribute("role", "status");
+  row.append(status);
+  refreshFeedbackControls();
+}
+
+/**
  * Add Copy, Branch from here, and time rows under a turn's question and
  * answer.
  *
@@ -4214,9 +5708,16 @@ function addMessageActions(item, turn) {
   if (question) {
     const row = messageActions(asked, turn.timestamp, "question", () => branchFromMessage(item, false, asked));
     row.classList.add("user-actions");
+    appendFeedbackActions(row, turn, "user");
     question.after(row);
   }
-  if (answer) answer.after(messageActions(answerCopyText(turn), turn.timestamp, "answer", () => branchFromMessage(item, true, "")));
+  if (answer) {
+    const row = messageActions(answerCopyText(turn), turn.timestamp, "answer",
+      () => branchFromMessage(item, true, ""));
+    appendFeedbackActions(row, turn, "assistant");
+    appendMemoryProvenance(row, turn);
+    answer.after(row);
+  }
 }
 
 /**
@@ -4350,6 +5851,8 @@ function addTurn(turn) {
   const item = document.createElement("article");
   item.className = "turn";
   item.dataset.turnIndex = String(conversation.children.length);
+  item.dataset.conversationId = reading?.id || activeConversationId;
+  item.dataset.intentId = turn.parameters?.intent || "";
   const question = document.createElement("div");
   question.className = "user-message";
   fillQuestion(question, turn.question);
@@ -4362,6 +5865,7 @@ function addTurn(turn) {
   item.append(...[question, timeline, answer].filter(Boolean));
   addMessageActions(item, turn);
   conversation.append(item);
+  refreshFeedbackControls();
   selectTurn(item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
@@ -4525,6 +6029,7 @@ function showReadConversation(turns) {
     conversation.append(note);
   }
   renderConversations(lastConversationData);
+  highlightMemoryOrigin();
   updateChatSummary(turns?.length || 0);
   updateSendButton();
 }
@@ -4712,7 +6217,8 @@ function clearAskingConversation() {
  */
 function renderConversationEmpty() {
   conversation.replaceChildren();
-  const type = projectTypes[activeProjectTypeId] || {};
+  const type = projectPresentation && openProjectPath
+    ? projectPresentation : projectTypes[activeProjectTypeId] || {};
   const content = {
     prompts: type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts,
     suggestions: type.suggestions?.length ? type.suggestions : genericEmptyChat.suggestions,
@@ -4981,9 +6487,18 @@ function renderTimeline(record, turn) {
     const parameters = turn.parameters || {};
     const model = typeof parameters.chat_model === "string"
       ? parameters.chat_model : "";
+    const modelSummary = typeof parameters.model_summary === "string"
+      ? parameters.model_summary : "";
     const settings = [];
-    if (typeof parameters.thinking === "boolean") {
-      settings.push(parameters.thinking ? "thinking on" : "thinking off");
+    const thinking = typeof parameters.thinking_effective === "boolean"
+      ? parameters.thinking_effective : parameters.thinking;
+    if (typeof thinking === "boolean") {
+      settings.push(thinking ? "thinking on" : "thinking off");
+    }
+    // Previous conversations have no core-formatted model summary.
+    if (!modelSummary && typeof parameters.temperature === "number"
+        && Number.isFinite(parameters.temperature)) {
+      settings.push(`T=${parameters.temperature}`);
     }
     if (Number.isInteger(parameters.max_new_tokens)
         && parameters.max_new_tokens > 0) {
@@ -4995,11 +6510,11 @@ function renderTimeline(record, turn) {
     ].join(", ");
     row.append(label);
     list.append(row);
-    if (model) {
+    if (modelSummary || model) {
       const modelRow = document.createElement("li");
       modelRow.className = "timeline-model";
       const modelLabel = document.createElement("span");
-      modelLabel.textContent = `Model: ${model}${settings.length
+      modelLabel.textContent = modelSummary || `Model: ${model}${settings.length
         ? ` (${settings.join(", ")})` : ""}`;
       modelRow.append(modelLabel);
       list.append(modelRow);
@@ -5360,6 +6875,8 @@ function completePendingTurn(turn) {
   }
   pendingTurn = null;
   current.item.classList.remove("pending");
+  current.item.dataset.conversationId = activeConversationId;
+  current.item.dataset.intentId = turn.parameters?.intent || "";
   // A completed answer uses only the timeline committed by the core.
   // Local phase timings remain a visual estimate for a running/stopped turn.
   const timeline = renderTimeline(turn.timeline || null, turn);
@@ -5376,6 +6893,7 @@ function completePendingTurn(turn) {
   bindAnswerSelection(current.answer, current.item, turn);
   renderAnswer(current.answer, turn, current.item, current.thinkingMs);
   addMessageActions(current.item, turn);
+  refreshFeedbackControls();
   if (reading?.live) {
     renderConversations(lastConversationData);
   } else {
@@ -5773,6 +7291,10 @@ function onEvent(raw) {
     } else if (data.phase === ANSWER_PHASE_RETRIEVING) {
       byId("activity-text").textContent = data.message || "Searching project evidence";
       byId("activity-detail").textContent = "";
+    } else if (data.phase === ANSWER_PHASE_MEMORY_RETRIEVING
+        || data.phase === ANSWER_PHASE_MEMORY_READY) {
+      byId("activity-text").textContent = data.message || "Retrieving conversation memories";
+      byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.choice) {
       showToolChoice(data.choice);
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.plan) {
@@ -5891,7 +7413,23 @@ function onEvent(raw) {
     const keepPendingAnswers = openProjectPath === data.project
       && Boolean(answerSettingsSave.pending);
     // Set before the lists are drawn: chats keep their order per project.
+    if (openProjectPath !== data.project) {
+      projectBehaviorData = null;
+      behaviorSave.pending = null;
+      feedbackData = { project: "", revision: "", entries: {} };
+      feedbackSave.pending = null;
+      memoryMessagePage = null;
+      memoryMessagesRequestedOffset = 0;
+      memoryExcludeSave.pending = null;
+      memoryIndexState = null;
+      memorySyncPending = false;
+      memoryNavigation = null;
+      displayedMemoryProject = "";
+      displayedMemoryRevision = "";
+    }
     openProjectPath = data.project;
+    projectPresentation = data.behavior_presentation || null;
+    requestProjectBehavior();
     messageAttachments = [];
     renderAttachments();
     selectedSources.length = 0;
@@ -5925,6 +7463,7 @@ function onEvent(raw) {
     updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
+    requestMemoryState();
     // The attached files are now in sources and indexed.
     if (attachedAsk) {
       const ask = attachedAsk;
@@ -5960,6 +7499,8 @@ function onEvent(raw) {
     updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
+    highlightMemoryOrigin();
+    requestMemoryState();
     if (branchDraft) {
       // A branch from a question: edit it and send it again.
       setQuestionDraft(branchDraft);
@@ -5970,6 +7511,7 @@ function onEvent(raw) {
     renderConversations(data);
     if (data.workspace_files) renderWorkspace(data.workspace_files);
     setBusy(false);
+    bridge?.requestMemoryStatus(openProjectPath);
   } else if (data.event === "reference_preview") {
     renderSourcePreview(data);
   } else if (data.event === "reference_error") {
@@ -5997,6 +7539,43 @@ function onEvent(raw) {
     completeAfterAnswerStages(data.turn);
     renderUsage();
     if (data.workspace_files) renderWorkspace(data.workspace_files);
+    bridge?.requestMemoryStatus(openProjectPath);
+  } else if (data.event === "project_behavior") {
+    renderProjectBehavior(data);
+  } else if (data.event === "conversation_feedback") {
+    receiveFeedback(data);
+  } else if (data.event === "message_feedback") {
+    receiveFeedbackSave(data);
+  } else if (data.event === "memory_messages") {
+    receiveMemoryMessages(data);
+  } else if (data.event === "memory_exclusion") {
+    receiveMemoryExclusion(data);
+  } else if (data.event === "memory_status") {
+    receiveMemoryStatus(data);
+  } else if (data.event === "memory_sync_started") {
+    if (data.project === openProjectPath) {
+      byId("memory-index-status").textContent = "Updating conversation memory…";
+    }
+  } else if (data.event === "memory_synced") {
+    if (data.project === openProjectPath) {
+      memorySyncPending = false;
+      setBusy(false);
+      byId("memory-index-status").textContent = data.changed
+        ? `Updated conversation memory; ${data.embedded_count} new embeddings.`
+        : "Conversation memory is already current.";
+    }
+  } else if (data.event === "memory_sync_failed") {
+    if (data.project === openProjectPath) {
+      memorySyncPending = false;
+      setBusy(false);
+      byId("memory-index-status").textContent = data.message;
+      byId("memory-index-status").classList.add("tool-error");
+    }
+  } else if (data.event === "settings_info") {
+    settingsCatalog = data.catalog;
+    applySettingsHelp(document);
+  } else if (data.event === "settings_info_failed") {
+    console.warn("Could not load settings explanations:", data.message);
   } else if (data.event === "tool_settings") {
     renderToolSettings(data);
   } else if (data.event === "conversation_viewed") {
@@ -6163,6 +7742,28 @@ function onEvent(raw) {
 }
 
 // UI handlers validate user input before issuing bridge commands.
+byId("reload-project-behavior").addEventListener(
+  "click", () => requestProjectBehavior(true),
+);
+byId("save-index-capabilities").addEventListener(
+  "click", () => saveIndexCapabilities(),
+);
+byId("reset-index-capabilities").addEventListener(
+  "click", () => saveIndexCapabilities(true),
+);
+byId("save-memory-policy").addEventListener(
+  "click", () => saveMemoryPolicy(),
+);
+byId("reset-memory-policy").addEventListener(
+  "click", () => saveMemoryPolicy(true),
+);
+byId("sync-memory-index").addEventListener("click", syncMemoryIndex);
+byId("memory-previous").addEventListener("click", () => {
+  requestMemoryMessages(Math.max(0, memoryMessagesRequestedOffset - 100));
+});
+byId("memory-next").addEventListener("click", () => {
+  requestMemoryMessages(memoryMessagesRequestedOffset + 100);
+});
 byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
 byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
 byId("use-legacy-workspace").addEventListener(
@@ -6686,6 +8287,19 @@ function returnToLaunch() {
   answerSettingsSave.uncertain = false;
   bridge.closeProject();
   openProjectPath = "";
+  projectPresentation = null;
+  projectBehaviorData = null;
+  behaviorSave.pending = null;
+  feedbackData = { project: "", revision: "", entries: {} };
+  feedbackSave.pending = null;
+  memoryIndexState = null;
+  memorySyncPending = false;
+  memoryMessagePage = null;
+  memoryMessagesRequestedOffset = 0;
+  memoryExcludeSave.pending = null;
+  memoryNavigation = null;
+  displayedMemoryProject = "";
+  displayedMemoryRevision = "";
   ready = false;
   updateFloatingHeader();
   chat.classList.add("hidden");
@@ -6887,6 +8501,7 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
     }
     renderAttachments();
   });
+  bridge.requestSettingsInfo();
   bridge.requestSettings(byId("type-id").value, "");
   bridge.requestReadiness();
   bridge.requestProjectsFolder();

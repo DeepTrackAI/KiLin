@@ -287,8 +287,8 @@ class TestProjectInitialization(ProjectFixture):
                 self.assertEqual(result.profile.source, "sources")
                 self.assertEqual(
                     sorted(path.name for path in directory.iterdir()),
-                    ["indexes", "logs", "outputs", "profile.ini",
-                     "sources", "templates"],
+                    ["indexes", "logs", "memory", "outputs",
+                     "profile.ini", "sources", "templates"],
                 )
 
     def test_every_creation_path_uses_sources(self) -> None:

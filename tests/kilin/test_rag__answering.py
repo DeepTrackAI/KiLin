@@ -90,6 +90,18 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         mocks.save.assert_called_once()
         tokens.assert_not_called()
 
+    def test_model_summary_comes_from_the_core(self) -> None:
+        """Keep the model label with the saved turn, not in the GUI."""
+        session = _session()
+        session.chat_session.temperature = 0.9
+        session.chat_session.max_new_tokens = 8192
+        with _answer_patches(session, _intent()):
+            session.ask("Question", use_router=False)
+        self.assertEqual(
+            session.turns[-1].parameters["model_summary"],
+            "Model: chat-model (thinking off, T=0.9, 8 192 max tokens)",
+        )
+
     def test_search_adds_related_evidence_and_history(self) -> None:
         """Combine related evidence with the selected conversation history."""
         session = _session()
@@ -681,6 +693,10 @@ class TestRAGIntentThinking(unittest.TestCase):
                     parameters = session.turns[-1].parameters
                     self.assertIs(parameters["thinking"], configured)
                     self.assertIs(parameters["thinking_effective"], expected)
+                    self.assertIn(
+                        "thinking on" if expected else "thinking off",
+                        parameters["model_summary"],
+                    )
                     self.assertIs(session.chat_session.thinking, configured)
                     configure = session.chat_session.configure_generation
                     configure.assert_not_called()

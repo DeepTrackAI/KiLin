@@ -19,7 +19,12 @@ import unittest
 
 from kilin._model_completion import GenerationCancelled
 from kilin.conversation_format import conversation_state
+from kilin.conversation_memory.models import new_turn_uuid
 from kilin.gui.engine import ChatEngine
+from kilin.project_behavior import (
+    effective_project_type,
+    project_behavior_settings,
+)
 from kilin.gui.model_catalog import MODEL_CHOICES
 from kilin.workspace import prepare_sources_workspace
 
@@ -245,6 +250,141 @@ class TestEngineWorkflow(unittest.TestCase):
         self.assertEqual(events[-1]["tool"], name)
         self.assertIn(key, events[-1]["error"])
         self.assertFalse(any(event["event"] == "error" for event in events))
+
+    def test_project_behavior_is_saved_only_for_active_project(self):
+        """Use core validation and reject stale or foreign GUI edits."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        root = str(session.project.root)
+        engine.behavior_settings()
+        self.assertEqual(events[-1]["event"], "project_behavior")
+        current = events[-1]["behavior"]
+        self.assertEqual(current["project"], root)
+        values = dict(current["global"]["values"])
+        values["description"] = "Personal research"
+        engine.save_behavior_settings(
+            root, "global", None, values, current["revision"], 17,
+        )
+        result = events[-1]
+        self.assertTrue(result["saved"])
+        self.assertEqual(result["request_id"], 17)
+        self.assertEqual(result["behavior"]["global"]["values"][
+            "description"], "Personal research")
+        saved_bytes = (
+            session.project.root / "project_behavior.json"
+        ).read_bytes()
+        engine.save_behavior_settings(
+            root, "global", None, values, current["revision"], 18,
+        )
+        self.assertIn("changed since", events[-1]["error"])
+        engine.save_behavior_settings(
+            "/different/project", "global", None, values,
+            result["behavior"]["revision"], 19,
+        )
+        self.assertIn("different project", events[-1]["error"])
+        self.assertEqual(
+            (session.project.root / "project_behavior.json").read_bytes(),
+            saved_bytes,
+        )
+
+    def test_indexing_capabilities_rebuild_and_rollback(self):
+        """Commit capability settings only after index preparation succeeds."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        root = str(session.project.root)
+        current = project_behavior_settings(root)
+        values = {"code_graph": False, "document_headers": False}
+        engine.save_behavior_settings(
+            root, "capabilities", None, values,
+            current["revision"], 32,
+        )
+        self.assertEqual(events[-1]["event"], "project_behavior")
+        self.assertTrue(events[-1]["saved"])
+        self.assertEqual(events[-1]["scope"], "capabilities")
+        session.refresh_sources.assert_called_once()
+        self.assertEqual(effective_project_type(root).code_graph, False)
+        before = (Path(root) / "project_behavior.json").read_bytes()
+        session.refresh_sources.reset_mock()
+        session.refresh_sources.side_effect = [
+            RuntimeError("index unavailable"), None,
+        ]
+        engine.save_behavior_settings(
+            root, "capabilities", None, current["capabilities"]["defaults"],
+            events[-1]["behavior"]["revision"], 33,
+        )
+        self.assertIn("index unavailable", events[-1]["error"])
+        self.assertEqual(events[-1]["request_id"], 33)
+        self.assertEqual(
+            (Path(root) / "project_behavior.json").read_bytes(), before
+        )
+        self.assertEqual(session.refresh_sources.call_count, 2)
+
+    def test_memory_policy_saves_do_not_refresh_source_indexes(self):
+        """Memory edits use the existing GUI bridge without reindexing."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        root = str(session.project.root)
+        settings = project_behavior_settings(root)
+        values = dict(settings["memory"]["values"])
+        values["enabled"] = True
+        engine.save_behavior_settings(
+            root, "memory", None, values, settings["revision"], 51,
+        )
+        self.assertEqual(events[-1]["event"], "project_behavior")
+        self.assertTrue(events[-1]["saved"])
+        self.assertEqual(events[-1]["scope"], "memory")
+        self.assertTrue(effective_project_type(root)
+                        .conversation_memory.enabled)
+        session.refresh_sources.assert_not_called()
+
+        current = events[-1]["behavior"]
+        item = next(x for x in current["intents"]
+                    if x["id"] == "code_explanation")
+        intent_values = dict(item["memory"]["values"])
+        intent_values["indexing"] = "explicit"
+        engine.save_behavior_settings(
+            root, "intent_memory", "code_explanation", intent_values,
+            current["revision"], 52,
+        )
+        self.assertEqual(events[-1]["scope"], "intent_memory")
+        self.assertEqual(events[-1]["request_id"], 52)
+        self.assertEqual(
+            effective_project_type(root)
+            .intents["code_explanation"].memory_indexing,
+            "explicit",
+        )
+        session.refresh_sources.assert_not_called()
+
+    def test_indexing_capability_failure_removes_new_override(self):
+        """First-time failed rebuild cannot leave a behavior override."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        root = str(session.project.root)
+        current = project_behavior_settings(root)
+        session.refresh_sources.side_effect = [
+            RuntimeError("index failed"), None,
+        ]
+        engine.save_behavior_settings(
+            root, "capabilities", None,
+            {"code_graph": False, "document_headers": False},
+            current["revision"], 34,
+        )
+        self.assertEqual(events[-1]["event"], "project_behavior")
+        self.assertIn("index failed", events[-1]["error"])
+        self.assertFalse((Path(root) / "project_behavior.json").exists())
+        self.assertEqual(session.refresh_sources.call_count, 2)
 
     def test_generation_settings_are_passed_with_the_question(self) -> None:
         """Chat controls affect answers without editing the project profile."""
@@ -485,7 +625,10 @@ class TestEngineWorkflow(unittest.TestCase):
         first = engine.active_conversation
         path = store.state_path(first)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        conversation_state(payload)["turns"] = [{"question": "Asked"}]
+        conversation_state(payload)["turns"] = [{
+            "conversation_turn_uuid": new_turn_uuid(),
+            "question": "Asked",
+        }]
         path.write_text(json.dumps(payload), encoding="utf-8")
 
         engine.create_conversation()
@@ -512,9 +655,13 @@ class TestEngineWorkflow(unittest.TestCase):
         parent = engine.active_conversation
         path = engine.conversation_store.state_path(parent)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        conversation_state(payload)["turns"] = [
-            {"question": "First"}, {"question": "Second"},
+        turns = [
+            {"conversation_turn_uuid": new_turn_uuid(),
+             "question": "First"},
+            {"conversation_turn_uuid": new_turn_uuid(),
+             "question": "Second"},
         ]
+        conversation_state(payload)["turns"] = turns
         path.write_text(json.dumps(payload), encoding="utf-8")
 
         engine.create_conversation(branch=True, turn_count=1)
@@ -529,8 +676,7 @@ class TestEngineWorkflow(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(conversation_state(saved)["turns"],
-                         [{"question": "First"}])
+        self.assertEqual(conversation_state(saved)["turns"], turns[:1])
 
     @patch("kilin.gui.engine.RAGSession")
     def test_deleting_active_chat_preserves_trace_and_switches(self, rag):

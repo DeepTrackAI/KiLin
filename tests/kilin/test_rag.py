@@ -80,13 +80,14 @@ class TestRAGRecords(unittest.TestCase):
 
     def test_answer_phases_are_unique_and_ordered(self) -> None:
         """Keep the public answer-phase identifiers unique and ordered."""
-        self.assertEqual(len(rag.ANSWER_PHASE_CHOICES), 8)
-        self.assertEqual(len(set(rag.ANSWER_PHASE_CHOICES)), 8)
+        self.assertEqual(len(rag.ANSWER_PHASE_CHOICES), 10)
+        self.assertEqual(len(set(rag.ANSWER_PHASE_CHOICES)), 10)
         self.assertEqual(
             rag.ANSWER_PHASE_CHOICES,
             (
                 "routing", "routed", "retrieving", "evidence_ready",
-                "generating", "saving", "completed", "processing",
+                "memory_retrieving", "memory_ready", "generating",
+                "saving", "completed", "processing",
             ),
         )
 

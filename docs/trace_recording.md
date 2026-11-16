@@ -88,6 +88,13 @@ answers and older turns. These values describe the requested template
 policy, not proof that a particular model complied. No extra event or
 checkpoint is introduced for an intent override.
 
+Completed-turn parameters also include a core-formatted `model_summary`
+with the active chat model ID, recorded temperature, thinking setting
+(effective per-intent value for direct answers) and maximum output tokens.
+This describes the chat session's settings; tool-owned internal model
+calls may use different generation parameters. The GUI shows the stored
+summary, with a field-based fallback for older turns.
+
 Every tool run is recorded as a `tool.run` span in the turn: its `name`, the
 `settings` it ran with (including any the project changed in Settings →
 Tools), its `internal` values (the other sections of its `defaults.json`,

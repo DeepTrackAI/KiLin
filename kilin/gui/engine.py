@@ -150,6 +150,13 @@ from kilin.workspace import (
     sync_project_sources,
 )
 from kilin.tool_settings import project_tool_settings, save_tool_settings
+from kilin.settings_info import get_settings_info
+from kilin.project_behavior import (
+    PROJECT_BEHAVIOR_FILE,
+    effective_project_type,
+    project_behavior_settings,
+    save_project_behavior,
+)
 from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 from kilin.project_files import (
     add_project_files,
@@ -158,6 +165,12 @@ from kilin.project_files import (
     replace_project_file,
 )
 from kilin.conversation_format import conversation_state
+from kilin.conversation_memory.feedback import FeedbackStore
+from kilin.conversation_memory.inspection import inspect_memory_messages
+from kilin.conversation_memory.persistence import (
+    memory_index_path,
+    read_memory_index,
+)
 from kilin.conversation_ownership import ConversationFileLock
 from kilin.conversations import ConversationInfo, ConversationStore
 from kilin.huggingface import download_model
@@ -376,6 +389,30 @@ class ChatEngine:
         Send the tools the open project can use, with their settings.
     save_tool_settings(name, settings)
         Save one tool's settings for the open project.
+
+    **Setting descriptions.**
+
+    settings_info()
+        Return core- and tool-owned setting metadata for clients.
+
+    **Project behavior.**
+
+    behavior_settings()
+        Send the project-wide and intent editors for the open project.
+    conversation_feedback(project)
+        Return a revisioned snapshot of user feedback for a project.
+    save_message_feedback(request)
+        Update one saved question or answer with revision checking.
+    memory_messages(project, offset=0)
+        Inspect saved messages and their current memory eligibility.
+    set_memory_exclusion(request)
+        Exclude or restore one memory without changing its rating.
+    memory_status(project)
+        Report persisted memory-index counts without loading models.
+    sync_memory_index(project)
+        Update the project's derived memory index without source indexing.
+    save_behavior_settings(project, scope, intent_id, ...)
+        Save validated behavior overrides with revision checking.
 
     **Conversations.**
 
@@ -2125,11 +2162,16 @@ class ChatEngine:
         """
 
         session = self.session
+        behavior = effective_project_type(project.root)
         self._send(
             "opened",
             project=str(project.root),
             source=str(project.source),
             type_id=project.profile.type_id,
+            behavior_presentation={
+                "welcome_prompts": list(behavior.welcome_prompts),
+                "suggestions": list(behavior.suggestions),
+            },
             profile=asdict(project.profile),
             effort_levels=_effort_levels_by_backend(
                 project.root, project.profile
@@ -2316,6 +2358,459 @@ class ChatEngine:
                 verified=verified,
                 message=f"Could not save the answer settings: {error}",
                 **response,
+            )
+
+    def settings_info(self) -> None:
+        """Send core- and tool-owned setting explanations to clients.
+
+        Notes
+        -----
+        Descriptions are read from packaged, validated core and tool JSON
+        resources. Failure affects only contextual help, not model or
+        configuration operations.
+
+        """
+
+        try:
+            self._send("settings_info", catalog=get_settings_info())
+        except (OSError, ValueError) as error:
+            self._send("settings_info_failed", message=str(error))
+
+    def behavior_settings(self) -> None:
+        """Send validated global and intent editors for the open project.
+
+        Notes
+        -----
+        Project identity and revision let the page reject stale responses.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            self._send(
+                "project_behavior",
+                behavior=project_behavior_settings(self.session.project.root),
+            )
+        except Exception as error:
+            self._report_error(
+                "gui.project_behavior.read.failed", error,
+                f"Could not read the project behavior: {error}",
+            )
+
+    def conversation_feedback(self, project: str) -> None:
+        """Report feedback for the requested active project.
+
+        Parameters
+        ----------
+        project: str
+            Workspace identity supplied by the frontend.
+
+        Notes
+        -----
+        The response is project-scoped. No conversation checkpoint or
+        model state is modified by reading feedback.
+
+        """
+
+        try:
+            root = self._memory_project(project)
+            snapshot = FeedbackStore(root).load()
+            self._send(
+                "conversation_feedback", project=str(root),
+                revision=snapshot.revision,
+                entries=self._feedback_entries(snapshot),
+            )
+        except Exception as error:
+            self._send(
+                "conversation_feedback", project=project,
+                error=str(error),
+            )
+
+    def _memory_project(self, project: str) -> Path:
+        """Validate the active workspace of a memory-related command.
+
+        Parameters
+        ----------
+        project: str
+            Project identity captured by the GUI.
+
+        Returns
+        -------
+        pathlib.Path
+            Resolved root of the currently active project.
+
+        Raises
+        ------
+        ValueError
+            If the project has changed or its identity is invalid.
+
+        """
+
+        if (
+            self.session is None or not isinstance(project, str)
+            or not project
+        ):
+            raise ValueError("Open the requested project first.")
+        root = self.session.project.root
+        if Path(project).expanduser().resolve() != root:
+            raise ValueError("The active project has changed.")
+        return root
+
+    @staticmethod
+    def _feedback_entries(snapshot: object) -> dict[str, dict[str, dict]]:
+        """Convert a validated feedback snapshot to a JSON object.
+
+        Parameters
+        ----------
+        snapshot: FeedbackSnapshot
+            Core-owned immutable feedback snapshot.
+
+        Returns
+        -------
+        dict[str, dict[str, dict]]
+            Feedback by UUID and message role.
+
+        """
+
+        return {
+            turn_uuid: {
+                role: {
+                    "saved": value.saved, "reaction": value.reaction,
+                    **({"excluded": True} if value.excluded else {}),
+                }
+                for role, value in ratings.items()
+            }
+            for turn_uuid, ratings in snapshot.entries.items()
+        }
+
+    def save_message_feedback(self, request: object) -> None:
+        """Save one message rating with project and revision guards.
+
+        Parameters
+        ----------
+        request: object
+            JSON-decoded project, conversation, UUID, role, rating, revision,
+            and request ID supplied by the frontend.
+
+        Notes
+        -----
+        The core FeedbackStore owns authorization, locking and persistence.
+        An invalid or stale write leaves conversation history unchanged.
+
+        """
+
+        identity = request if isinstance(request, dict) else {}
+        project = identity.get("project")
+        request_id = identity.get("request_id")
+        response = {
+            "project": project,
+            "request_id": request_id,
+            "turn_uuid": identity.get("turn_uuid"),
+            "role": identity.get("role"),
+        }
+        try:
+            if set(identity) != {
+                "project", "conversation_id", "turn_uuid", "role",
+                "saved", "reaction", "revision", "request_id",
+            }:
+                raise ValueError("Invalid message feedback request.")
+            if type(request_id) is not int or request_id < 1:
+                raise ValueError("Invalid message feedback request ID.")
+            if self._answering:
+                raise RuntimeError("Finish the current answer first.")
+            root = self._memory_project(project)
+            snapshot = FeedbackStore(root).update(
+                identity["conversation_id"], identity["turn_uuid"],
+                identity["role"], saved=identity["saved"],
+                reaction=identity["reaction"],
+                expected_revision=identity["revision"],
+            )
+            self._send(
+                "message_feedback", **response,
+                revision=snapshot.revision,
+                entries=self._feedback_entries(snapshot),
+            )
+            self.memory_status(project)
+        except Exception as error:
+            self._send("message_feedback", **response, error=str(error))
+
+    def memory_messages(
+        self, project: str, offset: int = 0
+    ) -> None:
+        """Inspect active saved messages without indexing or model calls.
+
+        Parameters
+        ----------
+        project: str
+            Active workspace identity supplied by the frontend.
+        offset: int, optional
+            Starting offset in the bounded, newest-first inventory.
+
+        """
+
+        try:
+            root = self._memory_project(project)
+            page = inspect_memory_messages(
+                root, effective_project_type(root), offset=offset
+            )
+            self._send(
+                "memory_messages", project=str(root), offset=offset,
+                total=page.total, revision=page.revision,
+                messages=page.messages,
+            )
+        except Exception as error:
+            self._send(
+                "memory_messages", project=project, offset=offset,
+                error=str(error),
+            )
+
+    def set_memory_exclusion(self, request: object) -> None:
+        """Change explicit exclusion with project and revision guards.
+
+        Parameters
+        ----------
+        request: object
+            Validated workspace, conversation, UUID, role, boolean state,
+            feedback revision and correlated request identifier.
+
+        Notes
+        -----
+        An exclusion is kept in the authoritative feedback file. Existing
+        Save/Like/Dislike selections are preserved under the same file lock.
+        The next ordinary memory sync removes excluded index records.
+
+        """
+
+        data = request if isinstance(request, dict) else {}
+        response = {
+            "project": data.get("project"),
+            "turn_uuid": data.get("turn_uuid"),
+            "role": data.get("role"),
+            "request_id": data.get("request_id"),
+        }
+        try:
+            if set(data) != {
+                "project", "conversation_id", "turn_uuid", "role",
+                "excluded", "revision", "request_id",
+            }:
+                raise ValueError("Invalid memory exclusion request.")
+            if (type(data["request_id"]) is not int
+                    or data["request_id"] < 1
+                    or type(data["excluded"]) is not bool):
+                raise ValueError("Invalid memory exclusion request.")
+            if self._answering:
+                raise RuntimeError("Finish the current answer first.")
+            root = self._memory_project(data["project"])
+            snapshot = FeedbackStore(root).update(
+                data["conversation_id"], data["turn_uuid"],
+                data["role"], saved=None, reaction=None,
+                excluded=data["excluded"],
+                expected_revision=data["revision"],
+            )
+            self._send(
+                "memory_exclusion", **response,
+                revision=snapshot.revision,
+                entries=self._feedback_entries(snapshot),
+            )
+            self.memory_status(data["project"])
+        except Exception as error:
+            self._send("memory_exclusion", **response, error=str(error))
+
+    def memory_status(self, project: str) -> None:
+        """Read lightweight derived memory-index counts without embedding.
+
+        Parameters
+        ----------
+        project: str
+            Identity of the requested active project.
+
+        Notes
+        -----
+        The index may be behind recent edits. Counts describe its last
+        successful build, not necessarily every newly completed turn.
+
+        """
+
+        try:
+            root = self._memory_project(project)
+            enabled = effective_project_type(root).conversation_memory.enabled
+            snapshot = FeedbackStore(root).load()
+            index = read_memory_index(memory_index_path(root))
+            records = index["records"] if index is not None else []
+            self._send(
+                "memory_status", project=str(root), enabled=enabled,
+                indexed=index is not None,
+                records=len(records),
+                questions=sum(
+                    item["role"] == "user" for item in records
+                ),
+                answers=sum(
+                    item["role"] == "assistant" for item in records
+                ),
+                vectors=len(index["vectors"]) if index else 0,
+                feedback_stale=bool(
+                    index and index["feedback_revision"] != snapshot.revision
+                ),
+            )
+        except Exception as error:
+            self._send("memory_status", project=project, error=str(error))
+
+    def sync_memory_index(self, project: str) -> None:
+        """Update derived conversation memory without touching source indexes.
+
+        Parameters
+        ----------
+        project: str
+            Identity of the active project selected by the frontend.
+
+        Notes
+        -----
+        This optional explicit update can embed new texts. Ordinary query
+        processing already synchronizes memory when needed.
+
+        """
+
+        try:
+            self._memory_project(project)
+            if self._answering:
+                raise RuntimeError("Finish the current answer first.")
+            self._send("memory_sync_started", project=project)
+            index = self.session.sync_conversation_memory()
+            self._send(
+                "memory_synced", project=project,
+                embedded_count=index.embedded_count,
+                changed=index.changed,
+            )
+            self.memory_status(project)
+        except Exception as error:
+            self._send(
+                "memory_sync_failed", project=project, message=str(error)
+            )
+
+    def save_behavior_settings(
+        self,
+        project: str,
+        scope: str,
+        intent_id: str | None,
+        values: object,
+        revision: str,
+        request_id: int,
+    ) -> None:
+        """Save a global, intent, or index-affecting capability editor.
+
+        Parameters
+        ----------
+        project: str
+            Project identity captured when editing began.
+        scope: str
+            ``global``, ``intent`` or ``capabilities`` editor.
+        intent_id: str | None
+            Target intent ID, if applicable.
+        values: object
+            Complete JSON editor settings, validated by the core.
+        revision: str
+            Revision originally received with the editor.
+        request_id: int
+            Frontend request ID for matching save acknowledgements.
+
+        Notes
+        -----
+        Ordinary behavior edits need no index rebuild. Capability edits
+        refresh the index and roll back saved configuration on failure.
+        The response is scoped to the requesting project.
+
+        """
+
+        recovery_root = None
+        previous_content = None
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            root = self.session.project.root
+            if not isinstance(project, str) or (
+                Path(project).expanduser().resolve() != root
+            ):
+                raise ValueError("A different project is now open.")
+            if type(request_id) is not int or request_id < 1:
+                raise ValueError("Invalid project behavior request ID.")
+            if not isinstance(revision, str):
+                raise ValueError("Invalid project behavior revision.")
+            if scope == "capabilities":
+                recovery_root = root
+                path = root / PROJECT_BEHAVIOR_FILE
+                previous_content = (
+                    path.read_bytes() if path.is_file() else None
+                )
+            updated = save_project_behavior(
+                root, scope, values, intent_id=intent_id,
+                expected_revision=revision, trace=self.active_trace,
+            )
+            if scope == "capabilities":
+                self._send("status", message="Rebuilding the index…")
+                refreshed = open_project(root)
+                self.session.refresh_sources(refreshed)
+                self.active_trace.emit(
+                    "gui.indexing.capabilities.refreshed",
+                    component="gui_engine",
+                    data={"index_status": self.session.index_status},
+                )
+                if self.active_conversation is not None:
+                    self._announce_project(
+                        refreshed, self.active_conversation
+                    )
+            self._send(
+                "project_behavior", behavior=updated, saved=True,
+                scope=scope, intent_id=intent_id, request_id=request_id,
+            )
+        except Exception as error:
+            recovery_error = None
+            if recovery_root is not None:
+                path = recovery_root / PROJECT_BEHAVIOR_FILE
+                try:
+                    current_content = (
+                        path.read_bytes() if path.is_file() else None
+                    )
+                    if current_content != previous_content:
+                        if previous_content is None:
+                            path.unlink(missing_ok=True)
+                        else:
+                            atomic_write_text(
+                                path, previous_content.decode("utf-8")
+                            )
+                        # Revalidate the old indexes after a failed build.
+                        self.session.refresh_sources(
+                            open_project(recovery_root)
+                        )
+                except Exception as failure:
+                    recovery_error = failure
+                    try:
+                        self.close()
+                    except Exception as close_error:
+                        recovery_error.add_note(
+                            f"Session cleanup failed: {close_error}"
+                        )
+                    self._send(
+                        "backend_failed",
+                        message=(
+                            "Indexing recovery failed. Reopen the project "
+                            "to revalidate its saved configuration."
+                        ),
+                    )
+            self.active_trace.exception(
+                "gui.project_behavior.save.failed", error,
+                component="gui_engine",
+            )
+            message = str(error)
+            if recovery_error is not None:
+                message += (
+                    f"; recovery failed: {recovery_error}. "
+                    "Reopen the project."
+                )
+            self._send(
+                "project_behavior", project=project,
+                error=message, scope=scope, intent_id=intent_id,
+                request_id=request_id,
             )
 
     def tool_settings(self) -> None:
@@ -4700,6 +5195,33 @@ def main() -> None:
                             command.get("request_id"),
                             command.get("project"),
                         )
+                    elif action == "settings_info":
+                        engine.settings_info()
+                    elif action == "project_behavior":
+                        engine.behavior_settings()
+                    elif action == "save_project_behavior":
+                        engine.save_behavior_settings(
+                            command.get("project"),
+                            command.get("scope"),
+                            command.get("intent_id"),
+                            command.get("values"),
+                            command.get("revision"),
+                            command.get("request_id"),
+                        )
+                    elif action == "conversation_feedback":
+                        engine.conversation_feedback(command.get("project"))
+                    elif action == "save_message_feedback":
+                        engine.save_message_feedback(command.get("request"))
+                    elif action == "memory_messages":
+                        engine.memory_messages(
+                            command.get("project"), command.get("offset", 0)
+                        )
+                    elif action == "set_memory_exclusion":
+                        engine.set_memory_exclusion(command.get("request"))
+                    elif action == "memory_status":
+                        engine.memory_status(command.get("project"))
+                    elif action == "sync_memory_index":
+                        engine.sync_memory_index(command.get("project"))
                     elif action == "tool_settings":
                         engine.tool_settings()
                     elif action == "save_tool_settings":

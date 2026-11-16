@@ -72,6 +72,20 @@ filename. A renderer can replace the temporary file's contents; only the
 tool publishes the finished report. If PDF rendering fails, the saved
 Markdown report remains available.
 
+## Tool-owned settings information
+
+Every registered tool supplies a `settings_info.json` next to its
+`defaults.json`. The metadata contains the descriptive `title`, `summary`
+and `description` of **each public key in `SETTINGS`**, with lowercase
+keys matching the normalized names returned by the tool-settings API.
+It does not contain default values, validation policy or UI-specific help
+markup. The core resolves this metadata through
+`kilin.get_tool_settings_info(tool_name)` and includes it in the complete
+`kilin.get_settings_info()` catalog. Core validation verifies the
+metadata keys against the tool's `defaults.json` without loading a model.
+Unknown or invalid descriptions are not used by tool execution and cannot
+change a tool's behavior. Future interfaces can consume the same metadata.
+
 ## Configuration precedence
 
 A tool's effective settings are resolved before `run()` through the
