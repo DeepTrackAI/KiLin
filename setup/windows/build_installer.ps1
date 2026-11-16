@@ -30,11 +30,19 @@ try {
         throw "uv $uvVersion is too old; use uv 0.8 or later."
     }
 
+    # Inno Setup installs for all users (Program Files) or, chosen in its
+    # installer, for the current user only (Local AppData\Programs).
     $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
     if (-not $iscc) {
-        $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+        $iscc = @(
+            ${env:ProgramFiles(x86)}, $env:ProgramFiles,
+            (Join-Path $env:LOCALAPPDATA "Programs")
+        ) | Where-Object { $_ } |
+            ForEach-Object { Join-Path $_ "Inno Setup 6\ISCC.exe" } |
+            Where-Object { Test-Path -LiteralPath $_ } |
+            Select-Object -First 1
     }
-    if (-not (Test-Path -LiteralPath $iscc)) {
+    if (-not $iscc) {
         throw "Inno Setup 6 is needed (https://jrsoftware.org/isinfo.php)."
     }
 
