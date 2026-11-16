@@ -1653,10 +1653,13 @@ class RAGSession:
             excluded_turn_ids = self._excluded_history_turns(
                 self.turns, config=config
             )
-            route_options = (
+            route_options: dict[str, object] = (
                 {"excluded_turn_ids": excluded_turn_ids}
                 if excluded_turn_ids else {}
             )
+            if choice_callback is not None:
+                # Only the user knows why a question was asked twice.
+                route_options["choose"] = choice_callback
             decision = self._route(
                 question, config, use_router, turn_id, report_phase,
                 **route_options,
@@ -5522,6 +5525,7 @@ class RAGSession:
         report_phase: Callable[..., None],
         *,
         excluded_turn_ids: frozenset[int] = frozenset(),
+        choose: Callable[[str, tuple[str, ...]], int | None] | None = None,
     ) -> RouteDecision:
         """Classify a question's intent and trace the resulting decision.
 
@@ -5542,6 +5546,9 @@ class RAGSession:
             Callback notifying the frontend when intent classification starts.
         excluded_turn_ids: frozenset[int], optional
             Rejected saved turns, without changing their original numbers.
+        choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
+            Asks the user to pick one option, for a question asked twice in
+            a row. Defaults to ``None``: the router decides.
 
         Returns
         -------
@@ -5587,6 +5594,7 @@ class RAGSession:
                         {"excluded_turn_ids": excluded_turn_ids}
                         if excluded_turn_ids else {}
                     ),
+                    **({"choose": choose} if choose is not None else {}),
                 )
         intent = config.intents[decision.intent]
         data: dict[str, object] = {

@@ -122,6 +122,14 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertEqual(unrouted["summary"], "model answer")
         self.assertNotIn("summary_model", unrouted)
 
+    def test_choice_dialog_reaches_routing(self) -> None:
+        """Pass the user's choice dialog to the router step."""
+        session = _session()
+        choose = Mock()
+        with _answer_patches(session, _intent()) as mocks:
+            session.ask("Question", use_router=True, choice_callback=choose)
+        self.assertIs(mocks.route.call_args.kwargs["choose"], choose)
+
     def test_small_talk_keeps_the_first_sentence(self) -> None:
         """Skip the summary for turns the router never lists."""
         session = _session()

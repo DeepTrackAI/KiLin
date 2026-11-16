@@ -18,7 +18,7 @@ from pathlib import Path
 import re
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from kilin import answering
 from kilin.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
@@ -899,28 +899,25 @@ class TestRouting(unittest.TestCase):
 
 
 class TestRepeatedQuestions(unittest.TestCase):
-    """Test that a question asked again takes the earlier turn's route."""
+    """Test that the router is told when a question repeats a turn."""
 
     def setUp(self) -> None:
-        """Create a conversation whose second turn used a tool."""
+        """Create a conversation whose second of three turns used a tool."""
 
         self.config = project_type("code")
         self.turns = [
             _turn("Explain the fit function", "Fit trains [1]. More."),
             _turn("List every MRI scanner", "Two scanners [1]. More."),
+            _turn("Explain the predict function", "It predicts [1]. More."),
         ]
-        self.turns[1].parameters = {
-            "intent": "code_generation",
-            "standalone": False,
-            "related_turn_ids": [1],
-        }
+        self.turns[1].parameters = {"intent": "code_generation"}
 
     def _route(
         self,
         question: str,
         excluded: frozenset[int] = frozenset(),
-    ) -> tuple[answering.RouteDecision, bool]:
-        """Route a question and report whether the router was asked.
+    ) -> tuple[answering.RouteDecision, str]:
+        """Route a question and return the router's user prompt.
 
         Parameters
         ----------
@@ -931,12 +928,12 @@ class TestRepeatedQuestions(unittest.TestCase):
 
         Returns
         -------
-        tuple[answering.RouteDecision, bool]
-            The decision, and True when the router model was called.
+        tuple[answering.RouteDecision, str]
+            The decision, and the prompt the router model received.
 
         """
 
-        reply = '{"intent": "question_answering", "standalone": true}'
+        reply = '{"intent": "debugging", "standalone": true}'
         with patch.object(
             answering, "side_reply", return_value=reply
         ) as side:
@@ -944,78 +941,133 @@ class TestRepeatedQuestions(unittest.TestCase):
                 object(), self.config, self.turns, question,
                 excluded_turn_ids=excluded,
             )
-        return decision, side.called
+        return decision, side.call_args.args[2]
 
-    def test_same_words_reuse_the_saved_route(self) -> None:
-        """Ignore case, order, punctuation, and common words."""
+    def test_router_is_told_about_a_repeat_and_decides(self) -> None:
+        """Name the turn and its intent; keep the router's choice."""
 
         for question in (
             "List every MRI scanner",
-            "list every MRI scanner?",
-            "MRI scanner: list every",
+            "MRI scanner: list every?",
         ):
             with self.subTest(question=question):
-                decision, asked = self._route(question)
-                self.assertFalse(asked)
+                decision, prompt = self._route(question)
+                self.assertIn(
+                    "repeats turn 2, which was answered as code_generation.",
+                    prompt,
+                )
+                self.assertNotIn("asked again right after", prompt)
                 self.assertEqual(decision.repeated_turn, 2)
-                self.assertEqual(decision.intent, "code_generation")
-                self.assertFalse(decision.standalone)
-                self.assertEqual(decision.related_turn_ids, (1,))
+                self.assertEqual(decision.intent, "debugging")
 
-    def test_different_words_ask_the_router(self) -> None:
-        """A changed name or an added word is a new question."""
+    def test_repeat_of_the_last_turn_says_the_answer_missed(self) -> None:
+        """A question asked twice in a row may need another intent."""
 
+        del self.turns[2]
+        decision, prompt = self._route("List every MRI scanner")
+        self.assertIn("asked again right after that answer", prompt)
+        self.assertEqual(decision.repeated_turn, 2)
+
+    def test_user_chooses_how_to_answer_a_back_to_back_repeat(self) -> None:
+        """Same way reuses the saved route; another way reroutes."""
+
+        del self.turns[2]
+        self.turns[1].parameters = {
+            "intent": "project_inventory",
+            "standalone": True,
+            "related_turn_ids": [],
+        }
+        reply = '{"intent": "debugging", "standalone": true}'
+        for choice, intent, asked in (
+            (0, "project_inventory", False),
+            (1, "debugging", True),
+        ):
+            with self.subTest(choice=choice):
+                choose = Mock(return_value=choice)
+                with patch.object(
+                    answering, "side_reply", return_value=reply
+                ) as side:
+                    decision = answering.route_question(
+                        object(), self.config, self.turns,
+                        "List every MRI scanner", choose=choose,
+                    )
+                question, options = choose.call_args.args
+                self.assertIn("right after the last answer", question)
+                self.assertEqual(
+                    options,
+                    ("Same way again (Project inventory)", "Try another way"),
+                )
+                self.assertEqual(decision.intent, intent)
+                self.assertEqual(decision.repeated_turn, 2)
+                self.assertEqual(side.called, asked)
+                if asked:
+                    intents = side.call_args.args[2].split("Earlier")[0]
+                    self.assertNotIn("- project_inventory:", intents)
+
+    def test_cancelled_or_unusable_choice_leaves_it_to_the_router(
+        self,
+    ) -> None:
+        """Route with the repeat note when the user cancels."""
+
+        del self.turns[2]
+        self.turns[1].parameters = {
+            "intent": "project_inventory",
+            "standalone": True,
+            "related_turn_ids": [],
+        }
+        choose = Mock(return_value=None)
+        reply = '{"intent": "debugging", "standalone": true}'
+        with patch.object(answering, "side_reply", return_value=reply):
+            decision = answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=choose,
+            )
+        self.assertEqual(decision.intent, "debugging")
+
+        # Without a saved route there is nothing to repeat, so no question.
+        self.turns[1].parameters = {}
+        choose.reset_mock()
+        with patch.object(answering, "side_reply", return_value=reply):
+            answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=choose,
+            )
+        choose.assert_not_called()
+
+    def test_earlier_repeats_are_not_asked_about(self) -> None:
+        """Only a question asked twice in a row asks the user."""
+
+        choose = Mock(return_value=0)
+        reply = '{"intent": "debugging", "standalone": true}'
+        with patch.object(answering, "side_reply", return_value=reply):
+            answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=choose,
+            )
+        choose.assert_not_called()
+
+    def test_new_questions_are_not_repeats(self) -> None:
+        """A changed name, an added word, or pointing back is new."""
+
+        self.turns[1].question = "List every MRI scanner it uses"
         for question in (
             "List every CT scanner",
             "List every MRI scanner model",
+            "List every MRI scanner it uses",
         ):
             with self.subTest(question=question):
-                decision, asked = self._route(question)
-                self.assertTrue(asked)
+                decision, prompt = self._route(question)
                 self.assertIsNone(decision.repeated_turn)
+                self.assertNotIn("repeats turn", prompt)
 
-    def test_questions_that_point_back_are_never_repeats(self) -> None:
-        """A question about "it" depends on the turn before it."""
+    def test_excluded_turns_are_not_matched(self) -> None:
+        """A disliked answer is never named as the repeated turn."""
 
-        self.turns[1].question = "List every MRI scanner it uses"
-        decision, asked = self._route("List every MRI scanner it uses")
-        self.assertTrue(asked)
-        self.assertIsNone(decision.repeated_turn)
-
-    def test_excluded_turns_are_not_matched_or_related(self) -> None:
-        """A disliked answer is not repeated, nor related through a repeat."""
-
-        decision, asked = self._route(
+        decision, prompt = self._route(
             "List every MRI scanner", frozenset({2})
         )
-        self.assertTrue(asked)
         self.assertIsNone(decision.repeated_turn)
-
-        decision, asked = self._route(
-            "List every MRI scanner", frozenset({1})
-        )
-        self.assertFalse(asked)
-        self.assertEqual(decision.related_turn_ids, ())
-        self.assertTrue(decision.standalone)
-
-    def test_unusable_saved_routes_ask_the_router(self) -> None:
-        """Route normally when the saved route cannot be trusted."""
-
-        for parameters in (
-            {},
-            {"intent": "removed", "standalone": True, "related_turn_ids": []},
-            {"intent": ["code_generation"], "standalone": True,
-             "related_turn_ids": []},
-            {"intent": "code_generation", "standalone": "yes",
-             "related_turn_ids": []},
-            {"intent": "code_generation", "standalone": False,
-             "related_turn_ids": [2]},
-        ):
-            with self.subTest(parameters=parameters):
-                self.turns[1].parameters = parameters
-                decision, asked = self._route("List every MRI scanner")
-                self.assertTrue(asked)
-                self.assertIsNone(decision.repeated_turn)
+        self.assertNotIn("repeats turn", prompt)
 
 
 class TestRouterPrompt(unittest.TestCase):

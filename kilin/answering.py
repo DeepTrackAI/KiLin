@@ -15,9 +15,10 @@ answer's first sentence is kept when the answer has only one sentence or
 the model gives no usable summary.
 
 A question asked again, with the same distinctive words as an earlier
-question, takes that turn's saved route without asking the router model,
-so the same question reaches the same intent and tool. Only the route is
-reused; the answer is written again.
+question, is still routed by the router model, which is told which turn it
+repeats and how that turn was answered. Asked right after itself, the
+router is also told the last answer likely missed, so it may choose
+another intent.
 
 The router's judgement of which turns a question relates to is checked
 before it is used: a related turn is kept only when the question points
@@ -56,8 +57,8 @@ Key Features
 
 - **Repeated questions**
 
-    ``route_question`` gives a question asked again the saved route of the
-    earlier turn, without a router call.
+    ``route_question`` tells the router when a question repeats an
+    earlier turn, and how that turn was answered, so it can judge.
 
 - **Packaged answering defaults**
 
@@ -356,8 +357,8 @@ class RouteDecision:
         Related turns the router named but the checks removed, each with
         the reason, for tracing.
     repeated_turn: int | None
-        The earlier turn whose route was reused because it asked the same
-        question; the router model was skipped.
+        The earlier turn that asked the same question, which the router
+        was told about.
 
     """
 
@@ -728,6 +729,8 @@ def _router_prompt(
     representations: list[dict[str, object]],
     question: str,
     exclude: frozenset[str] = frozenset(),
+    *,
+    note: str = "",
 ) -> tuple[str, str]:
     """Build the router's system and user prompts.
 
@@ -743,6 +746,9 @@ def _router_prompt(
         The new question.
     exclude: frozenset[str], optional
         Intent IDs left out of the list. Defaults to none.
+    note: str, optional
+        A sentence placed after the new question, such as that it repeats
+        an earlier turn. Defaults to none.
 
     Returns
     -------
@@ -770,6 +776,7 @@ def _router_prompt(
         f"{project.display_name.lower()}: {project.description} You never "
         "answer questions. You reply with one line of JSON only."
     )
+    asked = f"{question}\n{note}" if note else question
     user = f"""Machine state: {MACHINE_STATE_ANSWERING}
 
 Intents:
@@ -778,7 +785,7 @@ Intents:
 Earlier turns:
 {turns}
 
-New question: {question}
+New question: {asked}
 
 Return one line of JSON with:
 "intent": one intent ID from the list; when unsure whether a message is
@@ -919,6 +926,7 @@ def route_question(
     question: str,
     *,
     excluded_turn_ids: frozenset[int] = frozenset(),
+    choose: Callable[[str, tuple[str, ...]], int | None] | None = None,
 ) -> RouteDecision:
     """Classify a question with the router model.
 
@@ -936,6 +944,11 @@ def route_question(
         Saved one-based turn numbers excluded from routing. Their stored
         representations are not read or shown to the router; numbering
         of other turns remains unchanged. Defaults to empty.
+    choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
+        ``choose(question, options)`` asks the user to pick one option and
+        returns its index, or None when they cancel. Used only for a
+        question asked twice in a row. Defaults to ``None``: nobody can be
+        asked, and the router decides.
 
     Returns
     -------
@@ -945,9 +958,13 @@ def route_question(
 
     Notes
     -----
-    A question with the same distinctive words as an earlier question
-    takes that turn's saved route without a router call (see
-    ``_repeated_route``).
+    A question with the same distinctive words as an earlier question is
+    marked as repeating it (``_repeated_turn``); the router prompt names
+    that turn and its intent, and says so when it was the last turn. Only
+    the user knows why they asked the last question again, so with
+    ``choose`` they pick: the same way again (the last turn's saved route,
+    so a repeated inventory stays consistent) or another way (the router
+    without the last intent). Cancelling leaves the decision to the router.
 
     The router's related turns are checked: a turn is kept only when the
     question points back (``refers_back``) or shares a distinctive term
@@ -977,12 +994,6 @@ def route_question(
                     shortcut=pattern.pattern,
                 )
 
-    # A question asked again takes the earlier turn's route, so it
-    # reaches the same intent and tool.
-    repeated = _repeated_route(project, turns, question, excluded_turn_ids)
-    if repeated is not None:
-        return repeated
-
     representations = [
         (
             {"turn_id": index, "skip": True}
@@ -994,8 +1005,20 @@ def route_question(
         )
         for index, turn in enumerate(turns, 1)
     ]
+    # A question asked again is not routed by rule: the router reads that
+    # it repeats an earlier turn, with that turn's intent, and decides.
+    repeated = _repeated_turn(turns, question, excluded_turn_ids)
+    if repeated == len(turns) and choose is not None:
+        chosen = _repeat_choice(
+            chat, project, representations, question, turns, choose
+        )
+        if chosen is not None:
+            return chosen
     pointing = refers_back(question)
-    system, prompt = _router_prompt(project, representations, question)
+    system, prompt = _router_prompt(
+        project, representations, question,
+        note=_repeat_note(turns, repeated) if repeated else "",
+    )
 
     try:
         raw = side_reply(
@@ -1009,6 +1032,7 @@ def route_question(
             ),
             fallback=f"router failed: {error}",
             refers_back=pointing,
+            repeated_turn=repeated,
         )
     decision = _parse_route(raw, project, len(turns))
 
@@ -1093,43 +1117,37 @@ def route_question(
         fallback=fallback,
         refers_back=pointing,
         dropped_turns=tuple(dropped),
+        repeated_turn=repeated,
     )
 
 
-def _repeated_route(
-    project: ProjectType,
+def _repeated_turn(
     turns: list[object],
     question: str,
     excluded_turn_ids: frozenset[int],
-) -> RouteDecision | None:
-    """Return the saved route of an earlier turn that asked the same question.
+) -> int | None:
+    """Return the newest earlier turn that asked the same question.
 
     Two questions are the same when they have the same distinctive words
     (``_content_terms``), so case, word order, punctuation, and common
     words do not matter, while a different name or number does. A question
     that points back ("and its methods?") depends on the turn before it,
     so it is never treated as repeated, and neither is an earlier question
-    that pointed back. Only the newest matching turn is considered.
+    that pointed back.
 
     Parameters
     ----------
-    project: ProjectType
-        Current project type with its intents.
     turns: list
         Earlier conversation turns.
     question: str
         The new question.
     excluded_turn_ids: frozenset[int]
-        Turns that must not be matched or related, such as disliked
-        answers.
+        Turns that must not be matched, such as disliked answers.
 
     Returns
     -------
-    RouteDecision | None
-        The earlier turn's intent, standalone flag, and related turns, with
-        ``repeated_turn`` set. None when no earlier question matches, or
-        the matching turn's saved route is missing, malformed, or names an
-        intent the project type no longer has.
+    int | None
+        One-based number of the matching turn, or None.
 
     """
 
@@ -1138,40 +1156,129 @@ def _repeated_route(
         return None
 
     for number in range(len(turns), 0, -1):
-        turn = turns[number - 1]
-        earlier = str(getattr(turn, "question", ""))
+        earlier = str(getattr(turns[number - 1], "question", ""))
         if (
-            number in excluded_turn_ids
-            or _content_terms(earlier) != terms
-            or refers_back(earlier)
+            number not in excluded_turn_ids
+            and _content_terms(earlier) == terms
+            and not refers_back(earlier)
         ):
-            continue
-
-        parameters = getattr(turn, "parameters", None)
-        if not isinstance(parameters, dict):
-            return None
-        intent = parameters.get("intent")
-        standalone = parameters.get("standalone")
-        related = parameters.get("related_turn_ids")
-        if (
-            not isinstance(intent, str)
-            or intent not in project.intents
-            or type(standalone) is not bool
-            or not isinstance(related, list)
-            or not all(
-                type(item) is int and 0 < item < number for item in related
-            )
-        ):
-            return None
-
-        kept = tuple(item for item in related if item not in excluded_turn_ids)
-        return RouteDecision(
-            intent=intent,
-            standalone=standalone or not kept,
-            related_turn_ids=kept,
-            repeated_turn=number,
-        )
+            return number
     return None
+
+
+def _repeat_note(turns: list[object], number: int) -> str:
+    """Tell the router that the new question repeats an earlier one.
+
+    Parameters
+    ----------
+    turns: list
+        Earlier conversation turns.
+    number: int
+        The repeated turn, from ``_repeated_turn``.
+
+    Returns
+    -------
+    str
+        One or two sentences for the router prompt, naming the earlier
+        turn and its intent. Asked right after itself, the user likely
+        did not get what they wanted, which the note says.
+
+    """
+
+    parameters = getattr(turns[number - 1], "parameters", None)
+    intent = (
+        parameters.get("intent") if isinstance(parameters, dict) else None
+    )
+    note = f"The new question repeats turn {number}"
+    note += f", which was answered as {intent}." if isinstance(
+        intent, str
+    ) else "."
+    if number == len(turns):
+        note += (
+            " It is asked again right after that answer, so the answer "
+            "likely missed what the user wanted; choose the intent that "
+            "best serves the question, which may be a different one."
+        )
+    return note
+
+
+def _repeat_choice(
+    chat: _Chat,
+    project: ProjectType,
+    representations: list[dict[str, object]],
+    question: str,
+    turns: list[object],
+    choose: Callable[[str, tuple[str, ...]], int | None],
+) -> RouteDecision | None:
+    """Ask the user how to answer a question asked twice in a row.
+
+    The same words right after an answer can mean "do it again" (a source
+    inventory after adding files) or "that was not what I meant". Only
+    the user knows, so they choose.
+
+    Parameters
+    ----------
+    chat: ChatSession
+        Router model session, for another way.
+    project: ProjectType
+        Current project type with its intents.
+    representations: list[dict[str, object]]
+        One representation per earlier turn.
+    question: str
+        The new question.
+    turns: list
+        Earlier conversation turns; the last one asked the same question.
+    choose: Callable[[str, tuple[str, ...]], int | None]
+        Asks the user to pick one option.
+
+    Returns
+    -------
+    RouteDecision | None
+        The last turn's saved route for "Same way again", or the router's
+        choice without the last intent for "Try another way". None when
+        the user cancels or the last turn's saved route is unusable; the
+        router then decides.
+
+    """
+
+    number = len(turns)
+    parameters = getattr(turns[-1], "parameters", None)
+    if not isinstance(parameters, dict):
+        return None
+    intent = parameters.get("intent")
+    standalone = parameters.get("standalone")
+    related = parameters.get("related_turn_ids")
+    if (
+        not isinstance(intent, str)
+        or intent not in project.intents
+        or type(standalone) is not bool
+        or not isinstance(related, list)
+        or not all(type(item) is int and 0 < item < number for item in related)
+    ):
+        return None
+
+    label = intent.replace("_", " ").capitalize()
+    index = choose(
+        "You asked this right after the last answer. How should I answer?",
+        (f"Same way again ({label})", "Try another way"),
+    )
+    if index == 0:
+        reason = "the user chose the same way again"
+    elif index == 1:
+        reason = f"the user chose another way than {intent}"
+        intent = _reroute(
+            chat, project, representations, question, number,
+            {intent: "the user asked for another way"},
+        )
+    else:
+        return None
+    return RouteDecision(
+        intent=intent,
+        standalone=standalone,
+        related_turn_ids=tuple(related),
+        fallback=reason,
+        repeated_turn=number,
+    )
 
 
 def _cued_intent(project: ProjectType, question: str) -> str | None:

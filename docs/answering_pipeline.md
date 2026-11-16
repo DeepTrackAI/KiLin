@@ -130,20 +130,26 @@ to reconstruct missing activity data.
 
 `answering.route_question()` takes the question, project type and compact
 representations of prior turns. First, a configured shortcut pattern can
-match without an additional LLM call. Next, a question asked again takes
-the saved route (intent, standalone flag, related turns) of the newest
-earlier turn with the same distinctive words, also without a router call;
-`RouteDecision.repeated_turn` names that turn. Case, word order,
-punctuation and common words do not matter, but a different name or number
-does, and neither question may point back ("and its methods?"). Disliked
-turns are never matched. Only the route is reused; the answer is written
-again. Otherwise a router model produces a
+match without an additional LLM call. Otherwise a router model produces a
 structured decision (`RouteDecision`) with intent, standalone/follow-up
 judgment and related prior-turn identifiers. Parsed IDs are checked against
 available history and additional reference or distinctive-term heuristics;
 not every related ID proposed by the model is automatically accepted.
 Invalid or unusable router output falls back to the project's default
 intent rather than interpreting an arbitrary tool name.
+
+A question with the same distinctive words as an earlier question (case,
+word order, punctuation and common words aside; neither question pointing
+back) is still routed by the model. The prompt adds that it repeats that
+turn and how the turn was answered, and, when it is the turn just before,
+that the last answer likely missed, so another intent may serve better.
+`RouteDecision.repeated_turn` records the turn for tracing. Disliked turns
+are never matched. A question asked twice in a row can mean "do it again"
+or "that was not what I meant", and only the user knows which. With
+`ask(choice_callback=...)`, the user picks **Same way again** (the last
+turn's saved intent and related turns, so a repeated inventory stays
+consistent) or **Try another way** (the router without the last intent).
+Cancelling, or no callback (notebooks), leaves the decision to the router.
 
 Project types currently package several intents for `code` and `literature`:
 a mixture of normal answering, named-document reading, source inventory,
