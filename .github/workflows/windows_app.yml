@@ -1,0 +1,85 @@
+name: Windows installer smoke
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - ".github/workflows/windows_app.yml"
+      - "setup/windows/**"
+      - "tests/setup/**"
+      - "pyproject.toml"
+      - "uv.lock"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - ".github/workflows/windows_app.yml"
+      - "setup/windows/**"
+      - "tests/setup/**"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  installer:
+    name: Build, install and uninstall on Windows x64
+    runs-on: windows-latest
+    env:
+      HF_HUB_OFFLINE: "1"
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install Inno Setup when the runner lacks it
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) {
+              choco install innosetup --yes --no-progress
+          }
+      - name: Build the installer with a wheel of this checkout
+        run: >-
+          powershell -NoProfile -ExecutionPolicy Bypass
+          -File setup\windows\build_installer.ps1 -Wheel
+      - name: Install silently, as a user without administrator rights
+        run: |
+          $setup = Get-ChildItem dist -Filter "KiLin-Setup-*.exe" | Select-Object -First 1
+          $process = Start-Process -FilePath $setup.FullName -Wait -PassThru `
+              -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/LOG=setup.log"
+          Get-Content setup.log -Tail 40
+          if ($process.ExitCode -ne 0) { throw "Setup failed with $($process.ExitCode)." }
+      - name: Check the installed runtime, shortcut and repair variables
+        run: |
+          $version = (Select-String pyproject.toml -Pattern '^version = "(.*)"$').Matches[0].Groups[1].Value
+          $runtime = Join-Path $env:LOCALAPPDATA "kilin\runtime\$version"
+          if (-not (Test-Path "$runtime\Scripts\kilin-gui.exe")) { throw "kilin-gui.exe is missing." }
+          & "$runtime\Scripts\python.exe" -c "import kilin, PySide6, torch, transformers; print(torch.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw "The installed runtime cannot import KiLin." }
+          $shortcut = Join-Path ([Environment]::GetFolderPath("Programs")) "KíLín.lnk"
+          if (-not (Test-Path -LiteralPath $shortcut)) { throw "The Start-menu shortcut is missing." }
+          $uv = [Environment]::GetEnvironmentVariable("KILIN_APP_UV", "User")
+          $spec = [Environment]::GetEnvironmentVariable("KILIN_APP_SPEC", "User")
+          if (-not (Test-Path -LiteralPath $uv)) { throw "KILIN_APP_UV does not name uv.exe." }
+          if (-not $spec.EndsWith("[app]")) { throw "KILIN_APP_SPEC is $spec." }
+      - name: Uninstall silently and check what is removed
+        run: |
+          $uninstaller = Join-Path $env:LOCALAPPDATA "Programs\KiLin\unins000.exe"
+          Start-Process -FilePath $uninstaller -Wait -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES"
+          # The uninstaller hands over to a temporary copy of itself.
+          $runtime = Join-Path $env:LOCALAPPDATA "kilin\runtime"
+          for ($i = 0; $i -lt 60 -and (Test-Path $runtime); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path $runtime) { throw "The runtime was not removed." }
+          if ([Environment]::GetEnvironmentVariable("KILIN_APP_UV", "User")) { throw "KILIN_APP_UV was not removed." }
+      - name: Upload the unsigned development installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: kilin-windows-unsigned-development
+          path: dist/KiLin-Setup-*.exe
+          if-no-files-found: error

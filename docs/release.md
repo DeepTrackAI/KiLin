@@ -1,4 +1,4 @@
-# Building and validating KíLín for macOS
+# Building and validating KíLín for macOS and Windows
 
 ## Scope and limitations
 
@@ -90,6 +90,53 @@ These remain manual checks until real GUI and backend integration tests
 are available in the native environment. Passing the CI smoke check
 does not guarantee that an unnotarized app will open without a macOS
 security prompt on other machines.
+
+## Windows installer
+
+`setup/windows/kilin.iss` is an Inno Setup script for 64-bit Windows; on
+Windows, with uv 0.8 or later and Inno Setup 6, build it with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File setup\windows\build_installer.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File setup\windows\build_installer.ps1 -Wheel
+```
+
+Both write `dist\KiLin-Setup-<version>.exe`. The first installs the
+matching version from PyPI; `-Wheel` bundles a wheel of this checkout.
+The installer holds only uv, an icon and the optional wheel:
+
+- It installs for the current user, without administrator rights, into
+  `%LOCALAPPDATA%\Programs\KiLin`.
+- Before copying any file, uv downloads Python 3.12 and installs
+  `kilin[app]` into `%LOCALAPPDATA%\kilin\runtime\<version>`, with
+  `--torch-backend auto`: the CUDA build of PyTorch for an NVIDIA GPU, the
+  CPU build otherwise (PyPI alone has only the CPU build on Windows). A
+  failure stops Setup with a message and the log
+  `%LOCALAPPDATA%\kilin\runtime\install.log`; an earlier version is
+  untouched. After an update, other versions' runtimes are removed.
+- The Start-menu shortcut opens `kilin-gui.exe` without a console window.
+- `KILIN_APP_UV` and `KILIN_APP_SPEC` are set in the user environment so
+  the application's backend-repair commands use the same uv and build, as
+  the macOS launcher does.
+- Uninstalling removes the program and the runtime, and keeps projects
+  and preferences.
+
+While uv installs, the installer window does not redraw and Windows may
+call it "not responding"; the first install takes several minutes.
+
+**The installer is not code-signed.** Windows SmartScreen shows "Windows
+protected your PC" for it; testers who trust the build choose **More
+info → Run anyway**. Signing for public release needs a code-signing
+certificate (or a signing service such as Azure Trusted Signing), a
+separate decision like Apple notarization.
+
+The `.github/workflows/windows_app.yml` workflow builds the installer with
+a checkout wheel on a Windows runner, installs it silently, checks the
+runtime, the shortcut and the repair variables, and uninstalls it. Every
+run uploads the unsigned installer as a development artifact. Before
+sharing a build, also test on a real Windows PC: first install, update
+over an earlier version, an NVIDIA computer, a model download and a basic
+answer.
 
 ## Deferred public distribution
 
