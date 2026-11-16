@@ -70,7 +70,7 @@ Type: filesandordirs; Name: "{localappdata}\kilin\runtime"
 [Code]
 var
   { Shows the install step and uv's latest output line while uv runs. }
-  ProgressPage: TOutputMarqueeProgressPage;
+  ProgressPage: TOutputMarqueeProgressWizardPage;
   InstallLog, StepText: String;
 
 procedure InitializeWizard();
