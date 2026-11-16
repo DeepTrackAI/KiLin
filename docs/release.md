@@ -123,8 +123,9 @@ The installer holds only uv, an icon and the optional wheel:
 - Uninstalling removes the program and the runtime, and keeps projects
   and preferences.
 
-If KíLín is already installed, Setup first offers to reinstall it (or
-install the new version) or to remove it. While uv installs, a progress
+If KíLín is already installed, Setup first compares versions and offers
+to upgrade (a newer installer), reinstall (the same version, for example
+to repair it) or install the older version, or to remove KíLín. While uv installs, a progress
 page shows the percentage, the size downloaded and an estimate of the
 time left, above a list of the large downloads, such as PyTorch, each
 marked downloading or downloaded. The

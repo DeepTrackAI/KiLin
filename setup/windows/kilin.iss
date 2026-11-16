@@ -97,11 +97,48 @@ function SetTimer(Wnd, Id, Elapse, TimerFunc: LongWord): LongWord;
 function KillTimer(Wnd, Id: LongWord): BOOL;
   external 'KillTimer@user32.dll stdcall';
 
-{ Offer to reinstall or remove an earlier installation of KíLín. }
+{ The number at the start of a version part, such as 2 for '2rc1'. }
+function PartNumber(const Part: String): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  I := 1;
+  while (I <= Length(Part)) and (Part[I] >= '0') and (Part[I] <= '9') do
+  begin
+    Result := Result * 10 + Ord(Part[I]) - Ord('0');
+    I := I + 1;
+  end;
+end;
+
+{ Compare versions such as '0.1.0' and '0.2.0' part by part: negative when
+  A is older, zero when equal, positive when A is newer. }
+function CompareVersions(A, B: String): Integer;
+var
+  Cut: Integer;
+  PartA, PartB: String;
+begin
+  Result := 0;
+  while (Result = 0) and ((A <> '') or (B <> '')) do
+  begin
+    Cut := Pos('.', A);
+    if Cut = 0 then Cut := Length(A) + 1;
+    PartA := Copy(A, 1, Cut - 1);
+    Delete(A, 1, Cut);
+    Cut := Pos('.', B);
+    if Cut = 0 then Cut := Length(B) + 1;
+    PartB := Copy(B, 1, Cut - 1);
+    Delete(B, 1, Cut);
+    Result := PartNumber(PartA) - PartNumber(PartB);
+  end;
+end;
+
+{ Offer to upgrade, reinstall or remove an earlier installation of KíLín,
+  according to the installed version. }
 function InitializeSetup(): Boolean;
 var
   Version, Uninstaller, Install: String;
-  Code: Integer;
+  Code, Order: Integer;
 begin
   Result := True;
   if WizardSilent() or
@@ -109,12 +146,16 @@ begin
     Exit;
   if not RegQueryStringValue(HKCU, UninstallKey, 'DisplayVersion', Version) then
     Version := '';
+  Order := CompareVersions('{#AppVersion}', Version);
   if Version = '{#AppVersion}' then
     Install := 'Reinstall KíLín ' + Version + #13#10 +
-      'Install it again, for example to repair it.'
+      'Install the same version again, for example to repair it.'
+  else if Order > 0 then
+    Install := 'Upgrade to KíLín {#AppVersion}' + #13#10 +
+      'Replace version ' + Version + ' with the newer version.'
   else
-    Install := 'Install KíLín {#AppVersion}' + #13#10 +
-      'Replace the installed version.';
+    Install := 'Install the older KíLín {#AppVersion}' + #13#10 +
+      'Replace the newer version ' + Version + '.';
   case TaskDialogMsgBox('KíLín ' + Version + ' is already installed.',
       'Projects and preferences are kept either way.', mbConfirmation,
       MB_YESNOCANCEL, [Install, 'Remove KíLín' + #13#10 +

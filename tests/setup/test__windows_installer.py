@@ -83,7 +83,14 @@ class TestInstallerScript(unittest.TestCase):
         body = self.script[start:self.script.index("end;\n\n", start)]
         app_id = self.script.split("AppId={{")[1].split("}")[0]
         self.assertIn(f"Uninstall\\{{{app_id}}}_is1", self.script)
-        for text in ("WizardSilent()", "'UninstallString'", "Remove KíLín"):
+        for text in (
+            "WizardSilent()",
+            "'UninstallString'",
+            "CompareVersions('{#AppVersion}', Version)",
+            "Reinstall KíLín",
+            "Upgrade to KíLín",
+            "Remove KíLín",
+        ):
             with self.subTest(text=text):
                 self.assertIn(text, body)
 
