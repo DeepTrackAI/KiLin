@@ -126,6 +126,7 @@ It does **not execute source files or notebook cells**.
 | `sources_docx.py` | Word body text in reading order; Markdown heading sections |
 | `sources_doc.py` | Old Word 97-2003 body text in reading order; no headings |
 | `sources_html.py` | HTML page text with Markdown heading sections; as code, the file as written split at `<head>`, `<body>`, `<section>`, `<script>` and other main parts, short parts joined to the one before |
+| `sources_r.py` | R top-level functions, reference and S4 classes with their methods, S4 methods, comments kept with their declaration |
 | `sources_js.py` | JavaScript top-level functions and classes, class methods as children, comments kept with their declaration |
 | `sources_tex.py` | LaTeX front matter and sections at `\part` to `\subsubsection`; setup before `\begin{document}` left out |
 | `sources_bib.py` | BibTeX entries and macros as independently indexed units with citation keys |
