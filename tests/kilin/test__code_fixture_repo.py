@@ -3,7 +3,8 @@
 ``tests/fixtures/code_repo`` holds one small file per supported code
 language. These tests run it through the same steps a Code project uses,
 without models: scanning with the Code type's file types, reading,
-splitting into units and passages, and building the code graph. Each
+splitting into units and passages, and building the code graph. As in a
+Code project, whose ``code_graph`` is ``true``, HTML is read as code. Each
 language's own reader is tested in detail by its unit tests; this file
 checks that they work together on one repository.
 
@@ -40,12 +41,13 @@ class TestCodeFixtureRepository(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        report = scan_repository(
-            FIXTURE, extensions=project_type("code").extensions
-        )
+        code = project_type("code")
+        report = scan_repository(FIXTURE, extensions=code.extensions)
+        cls.report = report
         cls.selected = set(report["selected_files"])
-        cls.files = read_repository_files(report)
-        cls.units = extract_source_units(cls.files)
+        as_code = code.code_graph is True
+        cls.files = read_repository_files(report, as_code=as_code)
+        cls.units = extract_source_units(cls.files, as_code=as_code)
         cls.chunks = chunk_source_units(cls.units, count_tokens=_words)
         cls.graph = build_code_graph(cls.files, cls.units)
         cls.relations = set(cls.graph.relations)
@@ -143,7 +145,6 @@ class TestCodeFixtureRepository(unittest.TestCase):
                     any(target.endswith(name) for target in targets)
                 )
 
-
     def test_javascript_functions_expand_to_callers_and_callees(self) -> None:
         js = "js.calculator_js"
         plan = plan_context_expansion(
@@ -152,9 +153,7 @@ class TestCodeFixtureRepository(unittest.TestCase):
         self.assertTrue(names_code("Explain js_function_A", self.graph))
         self.assertEqual(plan.functions, (f"{js}.js_function_A",))
         self.assertTrue(plan.relationship)
-        self.assertIn(
-            f"{js}.JsChildClass.js_method_C", plan.related_functions
-        )
+        self.assertIn(f"{js}.JsChildClass.js_method_C", plan.related_functions)
         plain = plan_context_expansion("Explain js_function_A", self.graph)
         self.assertIn(f"{js}.js_function_B", plain.related_functions)
 
@@ -168,6 +167,29 @@ class TestCodeFixtureRepository(unittest.TestCase):
             "js.calculator_js.JsChildClass.js_method_C",
             plan.related_functions,
         )
+
+    def test_html_is_read_as_code(self) -> None:
+        page = next(
+            chunk for chunk in self.chunks if chunk.path.suffix == ".html"
+        )
+        self.assertIn('<button onclick="js_function_A(1, 2)">', page.text)
+
+    def test_html_is_read_as_page_text_without_the_code_graph(self) -> None:
+        files = read_repository_files(self.report)
+        text = next(f.text for f in files if f.path.suffix == ".html")
+        self.assertIn("# html_heading_A", text)
+        self.assertIn("- Press the html_button_D button.", text)
+        self.assertNotIn("<", text)
+
+    def test_html_page_links_to_its_script_and_handler(self) -> None:
+        for expected in (
+            CodeRelation("html.page_html", "imports", "js.calculator_js"),
+            CodeRelation(
+                "html.page_html", "calls", "js.calculator_js.js_function_A"
+            ),
+        ):
+            with self.subTest(relation=expected):
+                self.assertIn(expected, self.relations)
 
 
 if __name__ == "__main__":
