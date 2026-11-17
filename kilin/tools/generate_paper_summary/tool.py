@@ -781,7 +781,9 @@ def templates_answer(folder: Path) -> str:
     str
         Each valid template's title, file name and description, then the
         templates that break a rule with the problem, and where the format
-        is explained (``templates/README.md``).
+        is explained: the project's ``templates/README.md``, or for a
+        project created before it was installed, the guide shipped with
+        KíLín.
 
     """
 
@@ -801,11 +803,18 @@ def templates_answer(folder: Path) -> str:
     parts = [head, "", *lines]
     if broken:
         parts += ["", "**Templates with problems**", "", *broken]
+    guide = (
+        "`templates/README.md` explains how to write one"
+        if (folder / "README.md").is_file()
+        else "the guide shipped with KíLín "
+        "(`kilin/tools/generate_paper_summary/templates/README.md`) "
+        "explains how to write one"
+    )
     parts += [
         "",
         "Name one to use it (“write a research briefing of smith20”). "
         "Templates are Markdown files in the project's `templates/` "
-        "folder; `templates/README.md` explains how to write one.",
+        f"folder; {guide}.",
     ]
     return "\n".join(parts)
 

@@ -248,6 +248,7 @@ class TestListingAndChecking(_Project):
 
     def test_list(self) -> None:
         (self.templates / "broken.md").write_text(BROKEN)
+        (self.templates / "README.md").unlink()  # An older project.
         answer = templates_answer(self.templates)
         self.assertIn(
             "- **Journal Club Handout** (`journal_club.md`): One-page "
@@ -255,10 +256,15 @@ class TestListingAndChecking(_Project):
         )
         self.assertIn("**Templates with problems**", answer)
         self.assertIn("- `broken.md` cannot be used:", answer)
-        self.assertIn("templates/README.md", answer)
+        # An older project has no guide: the shipped one is named.
+        self.assertIn("the guide shipped with KíLín", answer)
+        shutil.copy(SHIPPED_TEMPLATES_DIR / "README.md", self.templates)
+        answer = templates_answer(self.templates)
+        self.assertIn("folder; `templates/README.md` explains", answer)
         result, choose_paper = self._run("which templates do I have?")
         choose_paper.assert_not_called()
         self.assertEqual(result.answer, answer)
+        self.assertNotIn("README", answer.split("**Templates with")[0])
         self.assertTrue(result.summary["listed_templates"])
 
     def test_check(self) -> None:
