@@ -40,6 +40,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from kilin.sources import source_kinds as kinds
 from kilin.sources.sources import (
     SourceFile,
     SourceUnit,
@@ -123,13 +124,13 @@ def _matlab_markers(
         if MATLAB_FUNCTION.match(line) is not None:
             name = _matlab_function_name(line)
             if class_name is None:
-                kind = "matlab_function"
+                kind = kinds.MATLAB_FUNCTION
                 symbol = name
             else:
                 kind = (
-                    "matlab_constructor"
+                    kinds.MATLAB_CONSTRUCTOR
                     if name == class_name
-                    else "matlab_method"
+                    else kinds.MATLAB_METHOD
                 )
                 symbol = (
                     f"{class_name}.{name}" if name is not None else class_name
@@ -271,7 +272,7 @@ def _matlab_units(path: Path, lines: list[str]) -> list[SourceUnit]:
                 start_line=1,
                 end_line=len(lines),
                 markers=markers,
-                context_kind="matlab_script",
+                context_kind=kinds.MATLAB_SCRIPT,
                 context_symbol=path.stem,
             )
         )
@@ -282,7 +283,7 @@ def _matlab_units(path: Path, lines: list[str]) -> list[SourceUnit]:
         lines,
         1,
         class_line - 1,
-        kind="matlab_file_context",
+        kind=kinds.MATLAB_FILE_CONTEXT,
         symbol=path.stem,
     )
     if preamble is not None:
@@ -299,7 +300,7 @@ def _matlab_units(path: Path, lines: list[str]) -> list[SourceUnit]:
         start_line=class_line,
         end_line=len(lines),
         markers=markers,
-        context_kind="matlab_class_context",
+        context_kind=kinds.MATLAB_CLASS_CONTEXT,
         context_symbol=class_name,
     )
     class_unit = _source_unit(
@@ -307,7 +308,7 @@ def _matlab_units(path: Path, lines: list[str]) -> list[SourceUnit]:
         lines,
         class_line,
         len(lines),
-        kind="matlab_class",
+        kind=kinds.MATLAB_CLASS,
         symbol=class_name,
         children=children,
     )

@@ -46,6 +46,7 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin.sources import source_kinds as kinds
 from kilin.sources.sources import SourceFile, SourceUnit, _source_unit
 
 __all__ = ["extract_source_units"]
@@ -72,8 +73,20 @@ _COMMENT: Final[re.Pattern[str]] = re.compile(r"^\s*(?://|/\*|\*)")
 
 _REGEX_PREFIX_WORDS: Final[frozenset[str]] = frozenset(
     {
-        "await", "case", "delete", "do", "else", "in", "instanceof",
-        "new", "of", "return", "throw", "typeof", "void", "yield",
+        "await",
+        "case",
+        "delete",
+        "do",
+        "else",
+        "in",
+        "instanceof",
+        "new",
+        "of",
+        "return",
+        "throw",
+        "typeof",
+        "void",
+        "yield",
     }
 )
 
@@ -262,9 +275,9 @@ def _declaration(line: str) -> tuple[str, str] | None:
     """
 
     for pattern, kind in (
-        (JS_FUNCTION, "js_function"),
-        (JS_ASSIGNED_FUNCTION, "js_function"),
-        (JS_CLASS, "js_class"),
+        (JS_FUNCTION, kinds.JS_FUNCTION),
+        (JS_ASSIGNED_FUNCTION, kinds.JS_FUNCTION),
+        (JS_CLASS, kinds.JS_CLASS),
     ):
         match = pattern.match(line)
         if match is not None:
@@ -394,7 +407,7 @@ def _declaration_end(
         elif char == "]":
             brackets -= 1
         elif parens == 0 and brackets == 0:
-            if char == "=" and text[position:position + 2] == "=>":
+            if char == "=" and text[position : position + 2] == "=>":
                 arrow = True
                 position += 2
                 continue
@@ -557,30 +570,39 @@ def _class_unit(
         if match is None or match.group(1) in _KEYWORDS:
             continue
         end = _declaration_end(masked, offsets, number, False)
-        methods.append((number, "js_method", match.group(1), end))
+        methods.append((number, kinds.JS_METHOD, match.group(1), end))
 
     if methods:
         number, kind, method, end = methods[-1]
         if end is not None and all(
-            line.strip() in {"", "}", "};"}
-            for line in safe_lines[end:last]
+            line.strip() in {"", "}", "};"} for line in safe_lines[end:last]
         ):
             methods[-1] = (number, kind, method, last)
 
     children = tuple(
         unit
         for start, end, kind, method in _partition(
-            lines, methods, first, last, "js_class_context"
+            lines, methods, first, last, kinds.JS_CLASS_CONTEXT
         )
         if (
             unit := _source_unit(
-                path, lines, start, end, kind=kind,
+                path,
+                lines,
+                start,
+                end,
+                kind=kind,
                 symbol=None if method is None else f"{name}.{method}",
             )
-        ) is not None
+        )
+        is not None
     )
     return _source_unit(
-        path, lines, first, last, kind="js_class", symbol=name,
+        path,
+        lines,
+        first,
+        last,
+        kind=kinds.JS_CLASS,
+        symbol=name,
         children=children if methods else (),
     )
 
@@ -621,17 +643,28 @@ def extract_source_units(source_file: SourceFile) -> list[SourceUnit]:
 
     units: list[SourceUnit] = []
     for first, last, kind, name in _partition(
-        lines, declarations, 1, len(lines), "js_module_context"
+        lines, declarations, 1, len(lines), kinds.JS_MODULE_CONTEXT
     ):
-        if kind == "js_class" and name is not None:
+        if kind == kinds.JS_CLASS and name is not None:
             unit = _class_unit(
-                source_file.path, lines, safe_lines, depths, masked,
-                offsets, first, last, name,
+                source_file.path,
+                lines,
+                safe_lines,
+                depths,
+                masked,
+                offsets,
+                first,
+                last,
+                name,
             )
         else:
             unit = _source_unit(
-                source_file.path, lines, first, last,
-                kind=kind, symbol=name,
+                source_file.path,
+                lines,
+                first,
+                last,
+                kind=kind,
+                symbol=name,
             )
         if unit is not None:
             units.append(unit)

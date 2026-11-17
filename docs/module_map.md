@@ -121,6 +121,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/sources/extensions/sources_r.py`](../kilin/sources/extensions/sources_r.py) | Partition R text at its top-level functions and classes. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_tex.py`](../kilin/sources/extensions/sources_tex.py) | Partition LaTeX document text at sectioning commands. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_txt.py`](../kilin/sources/extensions/sources_txt.py) | Split plain-text sources into nonblank paragraph units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
+| [`kilin/sources/source_kinds.py`](../kilin/sources/source_kinds.py) | Name the kinds of code passages the built-in readers produce. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/test_source_kinds.py) |
 | [`kilin/sources/sources.py`](../kilin/sources/sources.py) | Read selected repository files and extract provenance-bearing text units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/tools/__init__.py`](../kilin/tools/__init__.py) | Tools that intents in a project type can use. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_contract.py`](../kilin/tools/_contract.py) | Define what KíLín gives a tool and what the tool returns. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
@@ -217,12 +218,12 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Per-tool README | 50 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 32 |
-| Source pipeline | 22 |
+| Source pipeline | 23 |
 | Tool extension contracts | 25 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 180.**
+**Total production Python modules: 181.**
 
 ## Non-Python resources and UI assets
 
