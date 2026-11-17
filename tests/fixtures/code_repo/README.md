@@ -14,6 +14,8 @@ answer is easy to check:
 - `html/page_html.html` loads `js/calculator_js.js`, and its `html_button_D`
   button calls `js_function_A`. A Code project reads it as code; other
   project types read only its text (`html_heading_A`, `html_heading_B`).
+- `r/calculator_r.R`: `r_function_A` calls `r_function_B`; `RChildClass`
+  extends `RBaseClass`, and its `r_method_C` calls `r_function_A`.
 
 Each pull request that teaches KíLín a new file type adds one file here and
 the questions that check it in
