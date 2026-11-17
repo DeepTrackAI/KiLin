@@ -26,8 +26,10 @@ Key Features
 - **Front matter (optional)**
 
     ``key: value`` lines between two ``---`` lines at the top. Keys are
-    ``title``, ``description``, ``max_words`` (all sections together), and
-    ``reference`` (where the format comes from).
+    ``title``, ``description``, ``max_words`` (all sections together),
+    ``reference`` (where the format comes from), and ``scope``:
+    ``document`` (the default: a report on one document) or ``project`` (a
+    report on all the documents of a project).
 
 - **Headline**
 
@@ -50,10 +52,22 @@ Key Features
 
 - **Placeholders**
 
-    ``{citation}`` is the paper's citation, copied by code from its
-    metadata and never written by the model. ``{references}`` in a section's
-    text means its items are chosen from the paper's own reference list and
-    copied word for word; such a section needs an item limit.
+    In a document template, ``{citation}`` is the paper's citation, copied
+    by code from its metadata and never written by the model, and
+    ``{references}`` in a section's text means its items are chosen from
+    the paper's own reference list and copied word for word; such a
+    section needs an item limit. In a project template, ``{documents}``
+    is the list of documents the report covers, written by code, and
+    ``{key_documents}`` means a section's items are chosen from the
+    project's documents (with an item limit).
+
+- **Per-document sections (project templates)**
+
+    ``## Name (per document)`` with a ``When:`` line (a condition) and a
+    ``Do:`` line (what to write for each document that meets it, with an
+    optional ``(max 40 words)``): the report lists one entry per matching
+    document, assembled by code. ``(per document, table)`` with ``Do: |
+    Dataset | Size |`` gives one table row per document instead.
 
 - **Checks in Python**
 
@@ -150,13 +164,19 @@ from typing import Final, Literal, TypeAlias
 
 __all__ = [
     "SECTION_SOURCE_CHOICES",
+    "SCOPE_DOCUMENT",
+    "SCOPE_PROJECT",
     "SECTION_SOURCE_CITATION",
+    "SECTION_SOURCE_DOCUMENTS",
+    "SECTION_SOURCE_KEY_DOCUMENTS",
     "SECTION_SOURCE_NOTES",
+    "SECTION_SOURCE_PER_DOCUMENT",
     "SECTION_SOURCE_REFERENCES",
     "ReportCheck",
     "ReportTemplate",
     "SectionSource",
     "TemplateRules",
+    "TemplateScope",
     "TemplateSection",
     "check_report",
     "count_items",
@@ -169,27 +189,55 @@ __all__ = [
 
 
 # What a section is written from: the reading notes; the paper's citation,
-# copied by code; or the paper's reference list, copied by code.
-SectionSource: TypeAlias = Literal["notes", "citation", "references"]
+# copied by code; the paper's reference list, copied by code; or, in a
+# project report, the documents covered (code), items chosen from them, or
+# one entry per matching document (assembled by code).
+SectionSource: TypeAlias = Literal[
+    "notes", "citation", "references", "documents", "key_documents",
+    "per_document",
+]
 
 SECTION_SOURCE_NOTES: Final[SectionSource] = "notes"
 SECTION_SOURCE_CITATION: Final[SectionSource] = "citation"
 SECTION_SOURCE_REFERENCES: Final[SectionSource] = "references"
+SECTION_SOURCE_DOCUMENTS: Final[SectionSource] = "documents"
+SECTION_SOURCE_KEY_DOCUMENTS: Final[SectionSource] = "key_documents"
+SECTION_SOURCE_PER_DOCUMENT: Final[SectionSource] = "per_document"
 SECTION_SOURCE_CHOICES: Final[tuple[SectionSource, ...]] = (
     SECTION_SOURCE_NOTES,
     SECTION_SOURCE_CITATION,
     SECTION_SOURCE_REFERENCES,
+    SECTION_SOURCE_DOCUMENTS,
+    SECTION_SOURCE_KEY_DOCUMENTS,
+    SECTION_SOURCE_PER_DOCUMENT,
 )
+# What a template reports on: one document, or a whole project.
+TemplateScope: TypeAlias = Literal["document", "project"]
+SCOPE_DOCUMENT: Final[TemplateScope] = "document"
+SCOPE_PROJECT: Final[TemplateScope] = "project"
 
 _FRONT_MATTER_KEYS: Final[tuple[str, ...]] = (
     "title",
     "description",
     "max_words",
     "reference",
+    "scope",
 )
-# Placeholders a template may use in a section's text.
-_PLACEHOLDER_NAMES: Final[frozenset[str]] = frozenset(
-    ("citation", "references")
+# Placeholders a template may use in a section's text, by scope.
+_PLACEHOLDER_NAMES: Final[dict[str, frozenset[str]]] = {
+    "document": frozenset(("citation", "references")),
+    "project": frozenset(("documents", "key_documents")),
+}
+# Words in a heading's brackets marking a per-document section.
+_PER_DOCUMENT: Final[str] = "per document"
+_TABLE: Final[str] = "table"
+# "When:" and "Do:" lines of a per-document section; a "Do:" line's
+# optional word limit for each entry: "(max 40 words)", "(20-40 words)".
+_WHEN = re.compile(r"^when\s*:\s*(.*)$", re.I)
+_DO = re.compile(r"^do\s*:\s*(.*)$", re.I)
+_ENTRY_LIMIT = re.compile(
+    r"\s*\((?:max\s+(\d+)|(\d+)\s*[–-]\s*(\d+))\s+words\)\.?\s*$",
+    re.I,
 )
 
 # A heading's name and its bracketed limits: "The Bio (60–150 words)".
@@ -249,13 +297,25 @@ class TemplateSection:
         Allowed word count of the content, or None for no limit.
     items: tuple[int, int] | None
         Allowed number of list items, or None for no limit.
-    source: "notes" | "citation" | "references"
+    source: SectionSource
         ``notes`` (written by the model from its reading notes),
-        ``citation`` (the paper's citation, copied by code), or
-        ``references`` (items copied from the paper's reference list).
+        ``citation`` (the paper's citation, copied by code),
+        ``references`` (items copied from the paper's reference list),
+        ``documents`` (the documents a project report covers, by code),
+        ``key_documents`` (items chosen from the project's documents), or
+        ``per_document`` (one entry per document meeting ``when``).
     inline: bool
         Whether it is written as one labelled line (``**Name:** content``)
         instead of a ``##`` section.
+    when: str
+        A per-document section's condition (``When:``), or ``""``.
+    do: str
+        What a per-document section writes for each matching document
+        (``Do:``, without its word limit), or ``""``; for a table, the
+        header row.
+    columns: tuple[str, ...]
+        A per-document table's column names, or empty. For a
+        per-document section, ``words`` limits each entry.
 
     """
 
@@ -265,6 +325,9 @@ class TemplateSection:
     items: tuple[int, int] | None = None
     source: SectionSource = SECTION_SOURCE_NOTES
     inline: bool = False
+    when: str = ""
+    do: str = ""
+    columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +354,9 @@ class ReportTemplate:
         or None for no limit.
     reference: str
         Where the format comes from.
+    scope: TemplateScope
+        ``document`` for a report on one document, ``project`` for a
+        report on a whole project.
 
     """
 
@@ -302,6 +368,7 @@ class ReportTemplate:
     headline_guidance: str = ""
     max_total_words: int | None = None
     reference: str = ""
+    scope: TemplateScope = SCOPE_DOCUMENT
 
 
 @dataclass(frozen=True, slots=True)
@@ -495,13 +562,21 @@ def parse_template(
 
     lines = text.splitlines()
     fields, body_start = _front_matter(lines, name)
+    scope = fields.get("scope", SCOPE_DOCUMENT).casefold()
+    if scope not in _PLACEHOLDER_NAMES:
+        raise ValueError(
+            f"{name}: scope must be document (a report on one document) or "
+            "project (a report on a whole project)."
+        )
     title = fields.get("title", name.replace("_", " ").title())
     headline_characters: int | None = None
     headline_guidance = ""
     sections: list[TemplateSection] = []
-    # The heading being read, as (kind, name, limits, line number); its
-    # guidance lines are collected in ``body`` until the next heading.
-    current: tuple[str, str, dict[str, tuple[int, int]], int] | None = None
+    # The heading being read, as (kind, name, limits, line number, marks);
+    # its guidance lines are collected in ``body`` until the next heading.
+    current: tuple[
+        str, str, dict[str, tuple[int, int]], int, frozenset[str]
+    ] | None = None
     body: list[str] = []
 
     def finish() -> None:
@@ -512,12 +587,18 @@ def parse_template(
         if current is None:
             return
 
-        kind, label, limits, line = current
-        guidance = " ".join(" ".join(body).split())
+        kind, label, limits, line, marks = current
         if kind == "headline":
-            headline_guidance = guidance
+            headline_guidance = " ".join(" ".join(body).split())
+        elif _PER_DOCUMENT in marks:
+            sections.append(
+                _per_document(name, scope, line, label, limits, marks, body)
+            )
         else:
-            sections.append(_section(name, line, label, limits, guidance))
+            guidance = " ".join(" ".join(body).split())
+            sections.append(
+                _section(name, scope, line, label, limits, guidance)
+            )
 
     for number, raw in enumerate(lines[body_start:], start=body_start + 1):
         line = raw.strip()
@@ -527,17 +608,25 @@ def parse_template(
 
         if heading or labelled:
             finish()
-            label, limits = _limits(
+            label, limits, marks = _limits(
                 name, number, (heading or labelled).group(1)
             )
             if heading:
-                current, body = ("section", label, limits, number), []
+                current, body = (
+                    ("section", label, limits, number, marks), []
+                )
             else:
+                if marks:
+                    raise ValueError(
+                        f"{name}, line {number}: only ## sections can be "
+                        "per document."
+                    )
                 # A labelled line is complete on its own line.
                 content = labelled.group(2).strip()
                 sections.append(
                     _section(
-                        name, number, label, limits, content, inline=True
+                        name, scope, number, label, limits, content,
+                        inline=True,
                     )
                 )
                 current, body = None, []
@@ -549,8 +638,8 @@ def parse_template(
                     "before the sections, and only once."
                 )
 
-            label, limits = _limits(name, number, top.group(1))
-            if set(limits) - {"characters"}:
+            label, limits, marks = _limits(name, number, top.group(1))
+            if set(limits) - {"characters"} or marks:
                 raise ValueError(
                     f"{name}, line {number}: a headline limit is written "
                     "like (max 90 characters)."
@@ -558,7 +647,9 @@ def parse_template(
 
             if "characters" in limits:
                 headline_characters = limits["characters"][1]
-                current, body = ("headline", label, limits, number), []
+                current, body = (
+                    ("headline", label, limits, number, marks), []
+                )
             else:
                 title = label
 
@@ -596,6 +687,7 @@ def parse_template(
         headline_guidance=headline_guidance,
         max_total_words=int(total) if total else None,
         reference=fields.get("reference", ""),
+        scope=scope,
     )
 
 
@@ -652,7 +744,7 @@ def _front_matter(lines: list[str], name: str) -> tuple[dict[str, str], int]:
 
 def _limits(
     name: str, number: int, heading: str
-) -> tuple[str, dict[str, tuple[int, int]]]:
+) -> tuple[str, dict[str, tuple[int, int]], frozenset[str]]:
     """Split a heading such as "The Bio (60–150 words)" into name and limits.
 
     Parameters
@@ -666,11 +758,12 @@ def _limits(
 
     Returns
     -------
-    tuple[str, dict[str, tuple[int, int]]]
-        The name with single spaces, and the limits by unit (``words``,
-        ``items``, or ``characters``) as ``(low, high)``; ``max N`` gives
-        ``(0, N)`` and ``N`` gives ``(N, N)``. A heading without brackets
-        has no limits.
+    tuple[str, dict[str, tuple[int, int]], frozenset[str]]
+        The name with single spaces, the limits by unit (``words``,
+        ``items``, or ``characters``) as ``(low, high)`` (``max N`` gives
+        ``(0, N)`` and ``N`` gives ``(N, N)``), and the marks written with
+        them (``per document``, ``table``). A heading without brackets has
+        none.
 
     Raises
     ------
@@ -682,16 +775,22 @@ def _limits(
 
     match = _LIMITS.match(heading.strip())
     if not match:
-        return " ".join(heading.split()), {}
+        return " ".join(heading.split()), {}, frozenset()
 
     limits: dict[str, tuple[int, int]] = {}
+    marks: set[str] = set()
     for part in match.group(2).split(","):
+        word = " ".join(part.split()).casefold()
+        if word in (_PER_DOCUMENT, _TABLE):
+            marks.add(word)
+            continue
         found = _RANGE.match(" ".join(part.split()))
         if not found:
             raise ValueError(
                 f"{name}, line {number}: cannot read the limit "
                 f"({match.group(2)}); write for example (60–150 words), "
-                "(max 100 words), (2–3 items), or (max 90 characters)."
+                "(max 100 words), (2–3 items), (max 90 characters), or "
+                "(per document)."
             )
 
         low, high, most, exact, unit = found.groups()
@@ -707,11 +806,17 @@ def _limits(
             )
         limits[unit.lower()] = (int(low), int(high))
 
-    return " ".join(match.group(1).split()), limits
+    if _TABLE in marks and _PER_DOCUMENT not in marks:
+        raise ValueError(
+            f"{name}, line {number}: a table section is written (per "
+            "document, table)."
+        )
+    return " ".join(match.group(1).split()), limits, frozenset(marks)
 
 
 def _section(
     name: str,
+    scope: str,
     number: int,
     label: str,
     limits: dict[str, tuple[int, int]],
@@ -725,6 +830,8 @@ def _section(
     ----------
     name: str
         Template ID, for error messages.
+    scope: str
+        The template's scope, which decides the placeholders allowed.
     number: int
         Line number of the heading, for error messages.
     label: str
@@ -739,15 +846,17 @@ def _section(
     Returns
     -------
     TemplateSection
-        The section; ``{citation}`` makes its source ``citation`` and
-        otherwise ``{references}`` makes it ``references``.
+        The section; ``{citation}`` or ``{documents}`` makes its source
+        ``citation`` or ``documents``, and otherwise ``{references}`` or
+        ``{key_documents}`` makes it ``references`` or ``key_documents``.
 
     Raises
     ------
     ValueError
         If the name is empty or holds ``#``, the section has a character
-        limit, a placeholder is unknown, a ``{references}`` section has no
-        item limit, or a labelled line is empty.
+        limit, a placeholder is unknown or of the other scope, a section
+        choosing items (``{references}``, ``{key_documents}``) has no item
+        limit, or a labelled line is empty.
 
     """
 
@@ -761,28 +870,49 @@ def _section(
         )
 
     placeholders = set(_PLACEHOLDER.findall(guidance))
-    unknown = placeholders - _PLACEHOLDER_NAMES
+    allowed = _PLACEHOLDER_NAMES[scope]
+    unknown = placeholders - allowed
     if unknown:
+        other = next(
+            (other for other, names in _PLACEHOLDER_NAMES.items()
+             if sorted(unknown)[0] in names),
+            None,
+        )
+        use = " or ".join(f"{{{item}}}" for item in sorted(allowed))
         raise ValueError(
-            f"{name}, line {number}: unknown placeholder "
-            f"{{{sorted(unknown)[0]}}}; use {{citation}} or {{references}}."
+            f"{name}, line {number}: "
+            + (
+                f"{{{sorted(unknown)[0]}}} is for {other} templates"
+                if other else
+                f"unknown placeholder {{{sorted(unknown)[0]}}}"
+            )
+            + f"; use {use}."
         )
 
     source = SECTION_SOURCE_NOTES
-    if "citation" in placeholders:
-        source = SECTION_SOURCE_CITATION
-    elif "references" in placeholders:
-        source = SECTION_SOURCE_REFERENCES
+    if placeholders & {"citation", "documents"}:
+        source = (
+            SECTION_SOURCE_CITATION if "citation" in placeholders
+            else SECTION_SOURCE_DOCUMENTS
+        )
+    elif placeholders & {"references", "key_documents"}:
+        chosen = sorted(placeholders & {"references", "key_documents"})[0]
+        source = (
+            SECTION_SOURCE_REFERENCES if chosen == "references"
+            else SECTION_SOURCE_KEY_DOCUMENTS
+        )
         if "items" not in limits:
             raise ValueError(
                 f"{name}, line {number}: a section filled from "
-                "{references} needs an item limit, such as (2–3 items)."
+                f"{{{chosen}}} needs an item limit, such as (2–3 items)."
             )
 
-    if inline and source != SECTION_SOURCE_CITATION and not guidance:
+    if inline and source not in (
+        SECTION_SOURCE_CITATION, SECTION_SOURCE_DOCUMENTS
+    ) and not guidance:
         raise ValueError(
             f"{name}, line {number}: write what the labelled line holds, or "
-            "{citation}."
+            + ("{citation}." if scope == SCOPE_DOCUMENT else "{documents}.")
         )
 
     return TemplateSection(
@@ -792,6 +922,108 @@ def _section(
         items=limits.get("items"),
         source=source,
         inline=inline,
+    )
+
+
+def _per_document(
+    name: str,
+    scope: str,
+    number: int,
+    label: str,
+    limits: dict[str, tuple[int, int]],
+    marks: frozenset[str],
+    body: list[str],
+) -> TemplateSection:
+    """Build one per-document section from its ``When:`` and ``Do:`` lines.
+
+    Parameters
+    ----------
+    name: str
+        Template ID, for error messages.
+    scope: str
+        The template's scope; must be ``project``.
+    number: int
+        Line number of the heading, for error messages.
+    label: str
+        The section's name.
+    limits: dict[str, tuple[int, int]]
+        Limits from the heading; none are allowed.
+    marks: frozenset[str]
+        ``per document``, and ``table`` for a table.
+    body: list[str]
+        The lines under the heading.
+
+    Returns
+    -------
+    TemplateSection
+        Source ``per_document``, with ``when``, ``do`` (without its word
+        limit), the entry word limit as ``words``, the table's ``columns``,
+        and the other lines as ``guidance``.
+
+    Raises
+    ------
+    ValueError
+        If the template is not a project template, the heading has limits,
+        ``When:`` or ``Do:`` is missing or empty, a table's ``Do:`` is not
+        a header row with at least one column, or the section uses a
+        placeholder.
+
+    """
+
+    where = f"{name}, line {number}"
+    if scope != SCOPE_PROJECT:
+        raise ValueError(
+            f"{where}: per-document sections are for project templates "
+            "(scope: project)."
+        )
+    if limits:
+        raise ValueError(
+            f"{where}: a per-document section has no limits in its heading; "
+            "limit each entry on its Do: line, such as (max 40 words)."
+        )
+    when = do = ""
+    other: list[str] = []
+    for line in body:
+        if match := _WHEN.match(line):
+            when = " ".join(match.group(1).split())
+        elif match := _DO.match(line):
+            do = " ".join(match.group(1).split())
+        else:
+            other.append(line)
+    if not when or not do:
+        raise ValueError(
+            f"{where}: a per-document section needs a When: line (which "
+            "documents) and a Do: line (what to write for each)."
+        )
+    guidance = " ".join(" ".join(other).split())
+    if _PLACEHOLDER.search(" ".join((when, do, guidance))):
+        raise ValueError(
+            f"{where}: a per-document section has no placeholders."
+        )
+    words = None
+    if found := _ENTRY_LIMIT.search(do):
+        most, low, high = found.groups()
+        words = (0, int(most)) if most else (int(low), int(high))
+        do = do[:found.start()].strip()
+    columns: tuple[str, ...] = ()
+    if _TABLE in marks:
+        columns = tuple(
+            cell.strip() for cell in do.strip().strip("|").split("|")
+            if cell.strip()
+        )
+        if not do.startswith("|") or not columns:
+            raise ValueError(
+                f"{where}: a table's Do: line names its columns, such as "
+                "Do: | Dataset | Size | Licence |"
+            )
+    return TemplateSection(
+        name=label,
+        guidance=guidance,
+        words=words,
+        source=SECTION_SOURCE_PER_DOCUMENT,
+        when=when,
+        do=do,
+        columns=columns,
     )
 
 
@@ -852,15 +1084,20 @@ def section_problem(
         For example "The Reason has 92 words; it should have 120-150.";
         None when the content is within its limits. Word limits allow
         ``rules.limit_tolerance`` and apply to ``notes`` sections only; item
-        limits are exact and apply to ``notes`` and ``references``
-        sections. A ``citation`` section is only checked for being empty.
+        limits are exact and apply to ``notes``, ``references`` and
+        ``key_documents`` sections. ``citation``, ``documents`` and
+        ``per_document`` sections, written by code, are only checked for
+        being empty.
 
     """
 
     if not content.strip():
         return f"{section.name} is empty."
 
-    if section.source == SECTION_SOURCE_CITATION:
+    if section.source in (
+        SECTION_SOURCE_CITATION, SECTION_SOURCE_DOCUMENTS,
+        SECTION_SOURCE_PER_DOCUMENT,
+    ):
         return None
 
     if section.words and section.source == SECTION_SOURCE_NOTES:
@@ -905,7 +1142,7 @@ def check_report(
         Missing, repeated, empty, out-of-order, and unexpected sections;
         sections outside their limits (as ``section_problem`` reports
         them); a total over ``max_total_words`` (with
-        ``rules.limit_tolerance``);
+        ``rules.limit_tolerance``; per-document sections do not count);
         and headline problems. Heading text is compared ignoring case and
         surrounding spaces.
 
@@ -951,10 +1188,13 @@ def check_report(
             if problem:
                 lengths.append(problem)
 
+    # Per-document sections grow with the project; they do not count.
     total = sum(
         count_words(content)
         for heading, content in found
         if heading.casefold() in expected
+        and expected[heading.casefold()].source
+        != SECTION_SOURCE_PER_DOCUMENT
     )
     limit = template.max_total_words
     if limit and total > limit * (1 + rules.limit_tolerance):

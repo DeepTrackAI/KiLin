@@ -238,6 +238,7 @@ from kilin.tools.generate_paper_summary._configuration import (
     RUNNING_LINE_WORDS,
     SECTION_PROMPT_TOKENS,
 )
+from kilin.tools._shared.report_templates import SCOPE_DOCUMENT
 from kilin.tools.generate_paper_summary._report_template import (
     SECTION_SOURCE_CITATION,
     SECTION_SOURCE_NOTES,
@@ -713,7 +714,13 @@ def choose_template(
         return template
 
     if default != TEMPLATE_CHOOSE:
-        return load_template(default, folder)  # Raises, listing templates.
+        template = load_template(default, folder)
+        if template.scope != SCOPE_DOCUMENT:
+            raise ValueError(
+                f"Template {template.name!r} is for project reports, "
+                "not individual papers."
+            )
+        return template
     usable = [template for _, template, _ in found if template]
     if len(usable) == 1:
         return usable[0]
@@ -749,7 +756,8 @@ def _templates(
     list[tuple[str, ReportTemplate | None, str]]
         Each template's file name (without ``.md``), the template (None
         when it breaks a rule) and the error (``""`` when valid), by name;
-        empty without the folder.
+        empty without the folder. Project templates (``scope: project``),
+        for reports on a whole project, are left out.
 
     """
 
@@ -758,9 +766,12 @@ def _templates(
     found: list[tuple[str, ReportTemplate | None, str]] = []
     for name in template_names(folder):
         try:
-            found.append((name, load_template(name, folder), ""))
+            template = load_template(name, folder)
         except ValueError as error:
             found.append((name, None, str(error)))
+            continue
+        if template.scope == SCOPE_DOCUMENT:
+            found.append((name, template, ""))
     return found
 
 
