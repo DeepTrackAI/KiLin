@@ -468,6 +468,48 @@ console.log("grouped memory provenance passed");
         self.assertIn("grouped memory provenance passed", result.stdout)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
+    def test_memory_question_preview_has_160_character_limit(self) -> None:
+        """Shorten displayed questions, not trace text or answer summaries."""
+
+        script = r"""
+const assert = require("node:assert/strict");
+let openProjectPath = "/workspace";
+const memorySummaryPending = new Map();
+"""
+        script += extract_function(self.source, "receiveMemorySummaries")
+        script += r"""
+let sequence = 0;
+function show(text, role) {
+  const requestId = ++sequence;
+  const preview = {dataset: {requestId: String(requestId)},
+    hidden: true, textContent: ""};
+  memorySummaryPending.set(requestId, {project: "/workspace", entries: [
+    {turnUuid: "turn-1", role, preview},
+  ]});
+  receiveMemorySummaries({project: "/workspace", request_id: requestId,
+    summaries: [{turn_uuid: "turn-1", role, text}]});
+  return preview;
+}
+assert.equal(show("Q".repeat(159), "user").textContent, "Q".repeat(159));
+assert.equal(show("Q".repeat(160), "user").textContent, "Q".repeat(160));
+assert.equal(show("Q".repeat(161), "user").textContent,
+  "Q".repeat(159) + "…");
+const question = show("🧪".repeat(161), "user");
+assert.equal(question.textContent, "🧪".repeat(159) + "…");
+assert.equal(Array.from(question.textContent).length, 160);
+assert.equal(question.hidden, false);
+assert.equal(show("", "user").hidden, true);
+const answer = "A".repeat(900);
+assert.equal(show(answer, "assistant").textContent, answer);
+assert.equal(show(answer, "assistant").hidden, false);
+assert.equal(memorySummaryPending.size, 0);
+console.log("memory question limit passed");
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("memory question limit passed", result.stdout)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_memory_navigation_never_becomes_a_source_citation(self) -> None:
         """Use recorded origins for conversation links, not evidence IDs."""
 

@@ -4888,8 +4888,15 @@ function receiveMemorySummaries(data) {
     const found = data.summaries.find((item) =>
       item.turn_uuid === entry.turnUuid && item.role === entry.role);
     const text = typeof found?.text === "string" ? found.text : "";
-    entry.preview.textContent = text;
-    entry.preview.hidden = !text;
+    let displayed = text;
+    if (entry.role === "user") {
+      const characters = Array.from(text);
+      if (characters.length > 160) {
+        displayed = characters.slice(0, 159).join("") + "…";
+      }
+    }
+    entry.preview.textContent = displayed;
+    entry.preview.hidden = !displayed;
   }
 }
 

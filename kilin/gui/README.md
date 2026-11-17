@@ -425,8 +425,10 @@ Memory is enabled by default for new Writing, both Brainstorming types,
 and Reviewing projects, and disabled by default for Code and Literature.
 The memory icon beneath an answer opens remembered messages, with
 questions on the right and answers on the left. On expansion, the GUI reads
-question text from the saved conversation and complete available answer
-summaries from current traces; long text wraps within narrower bubbles.
+question text from the saved conversation (displaying at most 160
+characters, including an ellipsis if shortened) and complete available
+answer summaries from current traces; long text wraps within narrower
+bubbles.
 These memories do not certify source evidence.
 **Update memory index** explicitly synchronizes eligible saved discussions
 with the loaded

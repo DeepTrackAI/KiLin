@@ -321,8 +321,11 @@ every expansion, without indexing or model calls. Answer notes display the
 summary in saved parameters. For older traces and inherited branch turns
 without that operation, the existing compact saved representation is a
 fallback; text already truncated by a prior version cannot be recovered.
-Question notes display the original saved question. Both are private
-conversation content and are inserted as text, never executable markup.
+Question notes display at most 160 characters of the original saved
+question, including an ellipsis when shortened. This limit applies only
+to the displayed note, not the trace read or saved question. Both are
+private conversation content and are inserted as text, never executable
+markup.
 
 Each memory remains a clickable line with its original conversation and
 turn label. Questions align **right** and answers align **left**, just as
