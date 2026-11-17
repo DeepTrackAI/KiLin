@@ -216,6 +216,45 @@ class TestReferenceEntries(unittest.TestCase):
         self.assertTrue(entries[1].startswith("Smith, J. A., & Lee"))
         self.assertTrue(entries[2].startswith("van den Heuvel"))
 
+    def test_elife_list(self) -> None:
+        # eLife: "Surname II, ... YEAR." heads, the year ending a line of
+        # authors, numbers broken off PMIDs, DOIs and page ranges, a page
+        # footer, accents printed apart, and an organisation as author.
+        text = (
+            "References\n"
+            "Ascoli GA, Donohue DE, Halavi M. 2007. NeuroMorpho.Org: a\n"
+            "resource. J Neurosci 27:9247–9251. PMID: 1772\n"
+            "8438\n"
+            "Claudi F, Petrucco L. 2020. BrainGlobe atlas API. JOSS 5:2668.\n"
+            "DOI: https://doi.org/10.21105/joss.\n"
+            "02668\n"
+            "Fu¨ rth D, Vaissie` re T, Carle´ n M. 2018. An interactive\n"
+            "framework. Nat Neurosci 21:139–149.\n"
+            "Kluyver T, Pe´ rez F. 2016. Jupyter Notebooks. IOS. p. 87–\n"
+            "90.\n"
+            "Lein ES, Hawrylycz MJ, Ao N, Ayres M, Dee NR, et al. 2007.\n"
+            "Genome-wide atlas of gene expression. Nature 445:168–176.\n"
+            "15 of 16Tools and resources\n"
+            "The pandas development team. 2020. Pandas. Zenodo. 1.2.3.\n"
+            "Yaoyao H. 2020. BrainMesh: a Matlab GUI. Github. 3.0.\n"
+        )
+        entries = numbered_reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual(
+            [(e.number, e.printed, e.text.split(".")[0]) for e in entries],
+            [(1, False, "Ascoli GA, Donohue DE, Halavi M"),
+             (2, False, "Claudi F, Petrucco L"),
+             (3, False, "Fürth D, Vaissière T, Carlén M"),
+             (4, False, "Kluyver T, Pérez F"),
+             (5, False,
+              "Lein ES, Hawrylycz MJ, Ao N, Ayres M, Dee NR, et al"),
+             (6, False, "The pandas development team"),
+             (7, False, "Yaoyao H")],
+        )
+        self.assertIn("PMID: 17728438", entries[0].text)
+        self.assertIn("joss.02668", entries[1].text)
+        self.assertTrue(entries[3].text.endswith("p. 87–90."))
+        self.assertIn("Genome-wide atlas", entries[4].text)
+
     def test_explicit_short_references_use_opt_in_filter(self) -> None:
         text = (
             "References\n"

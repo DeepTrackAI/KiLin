@@ -67,6 +67,22 @@ class TestMarkers(unittest.TestCase):
             ("(Schrödinger 1926)", [("schrodinger", "", 1, "1926", "")]),
             ("(Smith n.d.)", [("smith", "", 1, "n.d.", "")]),
             ("(Smith, in press)", [("smith", "", 1, "in press", "")]),
+            ("(data from Wang et al., 2020)", [("wang", "", 3, "2020", "")]),
+            ("(e.g. the unified atlas, Chon et al.,\n2019)",
+             [("chon", "", 3, "2019", "")]),
+            ("(GitHub repository; Musy et al., 2019)",
+             [("musy", "", 3, "2019", "")]),
+            ("(data from Winnubst et al., 2019, downloaded from x.org, "
+             "Ascoli et al., 2007)",
+             [("winnubst", "", 3, "2019", ""), ("ascoli", "", 3, "2007", "")]),
+            ("(Oh et al., 2014; Arganda-\nCarreras et al., 2018)",
+             [("oh", "", 3, "2014", ""),
+              ("arganda-carreras", "", 3, "2018", "")]),
+            ("(Tyson et al., 2020a; Fu¨rth et al., 2018)",
+             [("tyson", "", 3, "2020", "a"), ("furth", "", 3, "2018", "")]),
+            ("(In Tyson et al., 2020a)", [("tyson", "", 3, "2020", "a")]),
+            ("(Hunter, 2007; The pandas development team, 2020)",
+             [("hunter", "", 1, "2007", ""), ("team", "", 1, "2020", "")]),
         ):
             with self.subTest(text=text):
                 self.assertEqual(_cited(text), cited)
@@ -121,6 +137,16 @@ class TestEntries(unittest.TestCase):
              ("heuvel", "sporns", 2, "2011", "")),
             ("Smith, J., et al. (2019). Title.", ("smith", "", 3, "2019", "")),
             ("Smith, J. (n.d.). Unpublished.", ("smith", "", 1, "n.d.", "")),
+            ("Hunter JD. 2007. Matplotlib. CiSE 9:90–95.",
+             ("hunter", "", 1, "2007", "")),
+            ("Ding S-L, Royall JJ. 2016. An atlas. J Comp Neurol 524:3.",
+             ("ding", "royall", 2, "2016", "")),
+            ("Fürth D, Vaissière T, Tzortzi O. 2018. A framework. N 21:1.",
+             ("furth", "", 3, "2018", "")),
+            ("Tyson AL, Rousseau CV. 2020b. brainreg. Zenodo.",
+             ("tyson", "rousseau", 2, "2020", "b")),
+            ("The pandas development team. 2020. Pandas. Zenodo. 1.2.3.",
+             ("team", "", None, "2020", "")),
         ):
             with self.subTest(entry=entry):
                 found = entry_key(7, entry)
@@ -144,6 +170,11 @@ class TestEntries(unittest.TestCase):
         self.assertEqual(normalized_name("van den Heuvel"), "heuvel")
         self.assertEqual(normalized_name("García-López"), "garcia-lopez")
         self.assertEqual(normalized_name("O’Brien"), "obrien")
+        self.assertEqual(normalized_name("Fu¨rth"), "furth")
+        self.assertEqual(normalized_name("Fu¨ rth"), "furth")
+        self.assertEqual(normalized_name("Rı´o"), "rio")
+        self.assertEqual(normalized_name("Arganda-\nCarreras"),
+                         "arganda-carreras")
         self.assertEqual(normalized_name(""), "")
 
 

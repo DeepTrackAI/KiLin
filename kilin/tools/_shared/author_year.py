@@ -89,7 +89,7 @@ __all__ = [
 # A capital letter, including accented and other Latin ones: any letter
 # that is not a lowercase ASCII or Latin-1 letter.
 _UPPER: Final[str] = r"[^\W\d_a-zß-ÿ]"
-_WORD: Final[str] = rf"{_UPPER}[\w'’\-]*"
+_WORD: Final[str] = rf"{_UPPER}(?:[\w'’]|[¨´`ˆ˜¸]\s?(?=\w)|-\s*(?=\w))*"
 _PARTICLE: Final[str] = (
     r"(?:(?i:van|von|der|den|de|del|della|des|di|da|dos|du|la|le|ten|ter|"
     r"al|el|bin|ibn|mac|st\.?)\s+)"
@@ -139,6 +139,15 @@ _WORK: Final[re.Pattern[str]] = re.compile(
     rf"(?P<authors>{_authors(_NAME_TWO)})\s*,?\s+(?P<years>{_YEARS})"
     rf"(?:{_LOCATOR})?"
 )
+_GROUP_WORK: Final[re.Pattern[str]] = re.compile(
+    rf"(?:^|(?<=[\s,]))(?:{_WORK.pattern})(?=\s*(?:,|$)|\s+[a-z])"
+)
+# A group naming an organisation as author: "The pandas development team,
+# 2020", "World Health Organization 2020".
+_ORGANIZATION: Final[re.Pattern[str]] = re.compile(
+    rf"\s*(?P<authors>(?:The\s+)?{_UPPER}[\w-]*(?:\s+[\w-]+){{1,5}}),?\s+"
+    rf"(?P<years>{_YEARS})\s*"
+)
 _PARENTHESES: Final[re.Pattern[str]] = re.compile(
     r"\((?P<inner>[^()]{4,400})\)"
 )
@@ -146,7 +155,6 @@ _NARRATIVE: Final[re.Pattern[str]] = re.compile(
     rf"(?<![\w(])(?P<authors>{_authors(_NAME_ONE)})(?:['’]s)?\s+"
     rf"\((?P<years>{_YEARS})(?:{_LOCATOR})?\)"
 )
-_COMMA: Final[re.Pattern[str]] = re.compile(r"\s*,\s*")
 _NAME_SPLIT: Final[re.Pattern[str]] = re.compile(
     r"\s*,\s*(?:(?:and|&)\s+)?|\s*,?\s+(?:and|&)\s+"
 )
@@ -187,7 +195,11 @@ _COMMA_AUTHOR: Final[re.Pattern[str]] = re.compile(
 # "Smith JA, Lee B, Wu C." (Vancouver).
 _SPACE_AUTHOR: Final[re.Pattern[str]] = re.compile(
     rf"\s*(?:,\s*)?(?:(?:and|&)\s+)?(?P<name>{_NAME_TWO})\s+"
-    r"[A-Z]{1,3}(?=[,.\s])"
+    r"[A-Z]{1,3}(?:-[A-Z]{1,2})?(?=[,.\s])"
+)
+# An organisation before the year: "The pandas development team. 2020.".
+_NAME_BEFORE_YEAR: Final[re.Pattern[str]] = re.compile(
+    r"(?P<name>[^.,()]{2,80}?)\.?\s+\(?(?:1[89]\d{2}|20\d{2})[a-z]?[).]"
 )
 _ENTRY_ET_AL: Final[re.Pattern[str]] = re.compile(r"\bet\s+al\b", re.I)
 _AUTHORS_MANY: Final[int] = 3
@@ -292,15 +304,20 @@ def normalized_name(name: str) -> str:
     Returns
     -------
     str
-        Its last word, without accents, apostrophes or case ("heuvel",
-        "garcia-lopez", "obrien"); ``""`` for an empty name.
+        Its last word, without accents (also printed apart from the
+        letter, "Fu¨ rth"), apostrophes or case ("heuvel", "garcia-lopez",
+        "obrien", "furth"); a hyphen broken over lines is joined
+        ("Arganda- Carreras"). ``""`` for an empty name.
 
     """
 
-    words = name.replace("’s", "").replace("'s", "").split()
+    name = re.sub(r"[¨´`ˆ˜¸]\s*", "", name.replace("’s", "").replace("'s", ""))
+    name = re.sub(r"-\s+", "-", name)
+    words = name.split()
     if not words:
         return ""
-    plain = unicodedata.normalize("NFKD", words[-1])
+    plain = unicodedata.normalize("NFKD", words[-1].replace("ı", "i"))
+    plain = re.sub(r"[¨´`ˆ˜¸]", "", plain)
     plain = "".join(c for c in plain if not unicodedata.combining(c))
     return re.sub(r"['’.]", "", plain).casefold()
 
@@ -366,30 +383,22 @@ def _parenthetical(inner: str) -> tuple[CitedWork, ...]:
     Returns
     -------
     tuple[CitedWork, ...]
-        The works of each ";"-separated group, read from its start (after
-        an optional prefix) while works follow, separated by commas; empty
-        when the first group does not start with a work.
+        The works of each ";"-separated group: each work that starts the
+        group or follows a space or comma ("data from Wang et al., 2020",
+        "e.g., Smith 2020, Lee 2021") and ends it, a comma, or comes before
+        lowercase words ("Smith 2020 for a review"); or, for a group that
+        is only a name and year, an organisation ("The pandas development
+        team, 2020").
 
     """
 
     works: list[CitedWork] = []
-    for index, group in enumerate(inner.split(";")):
-        position = len(group) - len(group.lstrip())
-        prefix = _PREFIX.match(group, position)
-        if prefix:
-            position = prefix.end()
-        while True:
-            match = _WORK.match(group, position)
-            if match is None:
-                break
+    for group in inner.split(";"):
+        found = list(_GROUP_WORK.finditer(group))
+        for match in found:
             works.extend(_works(match["authors"], match["years"]))
-            position = match.end()
-            separator = _COMMA.match(group, position)
-            if separator is None:
-                break
-            position = separator.end()
-        if index == 0 and not works:
-            return ()
+        if not found and (match := _ORGANIZATION.fullmatch(group)):
+            works.extend(_works(match["authors"], match["years"]))
     return tuple(works)
 
 
@@ -416,6 +425,10 @@ def _works(authors: str, years: str) -> tuple[CitedWork, ...]:
         name for name in _NAME_SPLIT.split(re.sub(_ET_AL + "$", "", authors))
         if name.strip()
     ]
+    if names and len(names[0].split()) > 1 and (
+        names[0].split()[0].casefold() in _NOT_NAMES
+    ):
+        names[0] = names[0].split(maxsplit=1)[1]  # "In Tyson et al."
     if not names or names[0].split()[0].casefold() in _NOT_NAMES or any(
         name.split()[-1].casefold() in _NOT_NAMES for name in names
     ):
@@ -455,7 +468,9 @@ def entry_key(number: int, entry: str) -> EntryKey | None:
         Its first and second surnames and number of authors (from
         "Smith, J. A., Lee, B., & Wu, C.", "Smith JA, Lee B, Wu C." or, for
         other styles, the name before the first comma), year and printed
-        suffix; None without a year or a first author.
+        suffix; for an organisation, its name's last word ("The pandas
+        development team. 2020." is cited as "team"); None without a year
+        or a first author.
 
     """
 
@@ -484,8 +499,12 @@ def entry_key(number: int, entry: str) -> EntryKey | None:
         )
         authors = _AUTHORS_MANY if many else len(names)
     else:
-        head = entry.split(",", 1)[0].split("(", 1)[0].strip()
-        if not head or len(head.split()) > 4:
+        before_year = _NAME_BEFORE_YEAR.match(entry)
+        head = (
+            before_year["name"] if before_year
+            else entry.split(",", 1)[0].split("(", 1)[0].strip()
+        )
+        if not head or len(head.split()) > 6:
             return None
         names, authors = [head], None
     first = normalized_name(names[0])

@@ -1910,6 +1910,8 @@ def _overview(report: ReferenceReport) -> str:
     numbering = (
         "numbered as printed"
         if printed == total
+        else "unnumbered, numbered in list order"
+        if not printed
         else f"{printed} numbered as printed, the others inferred"
     )
     if report.scan.style == STYLE_NONE:
@@ -1924,9 +1926,11 @@ def _overview(report: ReferenceReport) -> str:
             STYLE_WRITTEN: "written-out",
             STYLE_AUTHOR_YEAR: "author-year",
         }.get(report.scan.style, "superscript")
+        uncited = set(report.scan.uncited)
         cited = (
             f"{len(report.scan.citations)} {style} citations in the text "
-            f"cite {total - len(report.scan.uncited)} of them."
+            f"cite {sum(e.number not in uncited for e in report.entries)} "
+            "of them."
         )
     return (
         (f"{report.list_note} " if report.list_note else "")

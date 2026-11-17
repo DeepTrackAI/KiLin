@@ -713,6 +713,8 @@ class TestReferenceCheckRun(unittest.TestCase):
         self.assertEqual(summary["uncited"], [4])
         self.assertEqual(summary["unresolved"], ["Gray and Doe, 2019"])
         self.assertIn("author-year citations in the text", result.answer)
+        self.assertIn("unnumbered, numbered in list order", result.answer)
+        self.assertIn("cite 4 of them", result.answer)
         self.assertIn("Never cited in the text: 4", result.answer)
         self.assertIn(
             "Cited but not in the reference list: Gray and Doe, 2019",
