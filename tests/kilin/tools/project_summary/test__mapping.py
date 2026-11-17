@@ -127,7 +127,10 @@ class TestMapping(unittest.TestCase):
             "deep-learning model. If yes, write: name the architecture "
             "(at most 5 words).",
             "B. Does the document meet this: the document uses a public "
-            "dataset. If yes, write: the values of Dataset, Size",
+            "dataset. If yes, write: the document's Dataset, Size, one per "
+            "VALUE line",
+            "VALUE B1 Dataset: <for YES only: the document's dataset>",
+            "VALUE B2 Size: <for YES only: the document's size>",
             "NOTE 1: <facts, or NONE>", "CHECK B: YES, NO or UNCLEAR",
         ):
             with self.subTest(part=part):
@@ -153,6 +156,28 @@ class TestMapping(unittest.TestCase):
         self.assertEqual((model.answer, model.entry),
                          (CHECK_YES, "U-Net with five levels and…"))
         self.assertEqual(data.cells, ("BBBC", "40 images extra"))
+
+    def test_table_values(self) -> None:
+        for reply, answer, cells in (
+            ("VALUE B1 Dataset: BBBC\nVALUE B2 Size: 40 images",
+             CHECK_YES, ("BBBC", "40 images")),
+            ("VALUE B1: Dataset: BBBC\nVALUE B2 Size: **Size:** 40",
+             CHECK_YES, ("BBBC", "40")),
+            ("VALUE B1 Dataset: BBBC", CHECK_YES, ("BBBC", "not reported")),
+            # The header echoed instead of values.
+            ("ENTRY B: Dataset | Size", CHECK_UNCLEAR, ()),
+            ("VALUE B1 Dataset: Dataset\nVALUE B2 Size: NONE",
+             CHECK_UNCLEAR, ()),
+        ):
+            with self.subTest(reply=reply):
+                check = parse_notes(
+                    "CHECK B: YES\nQUOTE B: the public\n" + reply,
+                    TEMPLATE, 1, EXCERPT,
+                ).checks["Datasets"]
+                self.assertEqual((check.answer, check.cells),
+                                 (answer, cells))
+                if answer == CHECK_UNCLEAR:
+                    self.assertEqual(check.why, "no values were written")
 
     def test_checks_need_evidence(self) -> None:
         for reply, why in (

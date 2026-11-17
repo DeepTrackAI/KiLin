@@ -72,14 +72,16 @@ One model call per document (`_mapping.py`) asks for:
    sections): the document's facts about it, or `NONE`;
 2. for each per-document section, whether the document meets its `When:`
    condition (`YES`, `NO` or `UNCLEAR`), the excerpt's words that decide
-   it, and for a yes the entry its `Do:` asks for (for a table, one value
-   per column).
+   it, and for a yes the entry its `Do:` asks for; for a table, one
+   `VALUE` line per column, each asked for by its column's name.
 
 Code then checks the reply. A yes becomes unclear when its quoted words
 are not in the excerpt (ignoring case, punctuation and line breaks; a long
-quote may be found by its first four words) or when it has no entry, so no
-document is listed without evidence. Entries are cut to their word limit,
-and table rows padded with "not reported" or cut to their columns. A
+quote may be found by its first four words), when it has no entry, or
+when a table row has no value, so no document is listed without evidence.
+In a table, a column name written before a value ("Aim: ...") is removed,
+and a value that only repeats its column's name is "not reported", so an
+echoed header is not taken for a row. Entries are cut to their word limit. A
 document whose call fails is reported as not read; the others go on.
 
 ## Writing the report (the reduce step)

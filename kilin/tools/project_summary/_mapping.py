@@ -88,9 +88,11 @@ CHECK_YES: Final[str] = "yes"
 CHECK_NO: Final[str] = "no"
 CHECK_UNCLEAR: Final[str] = "unclear"
 _LINE = re.compile(
-    r"^\s*\**(NOTE|CHECK|QUOTE|ENTRY)\s+([0-9]+|[A-Z])\**\s*:\s*(.*?)\s*$",
+    r"^\s*\**(NOTE|CHECK|QUOTE|ENTRY|VALUE)\s+([0-9]+|[A-Z][0-9]{0,2})"
+    r"(?:\s+[^:\n]{1,60}?)?\**\s*:\s*(.*?)\s*$",
     re.MULTILINE | re.IGNORECASE,
 )
+_MISSING: Final[str] = "not reported"
 _NONE = re.compile(r"^(?:none|n/?a|-|—|not (?:reported|stated|mentioned))\.?$",
                    re.IGNORECASE)
 _LETTERS: Final[str] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -268,9 +270,9 @@ def map_prompt(
         for letter, s in zip(_LETTERS, checks):
             if s.columns:
                 action = (
-                    "the values of " + ", ".join(s.columns)
-                    + ", separated by \" | \", writing \"not reported\" "
-                    "for a missing one"
+                    "the document's " + ", ".join(s.columns)
+                    + ", one per VALUE line, writing \"not reported\" when "
+                    "the excerpt does not say"
                 )
             else:
                 action = s.do + (
@@ -282,13 +284,20 @@ def map_prompt(
                 + (f" {s.guidance}" if s.guidance else "")
             )
         parts.append("Questions:\n" + "\n".join(questions))
-        for letter, _ in zip(_LETTERS, checks):
+        for letter, s in zip(_LETTERS, checks):
             format_lines += [
                 f"CHECK {letter}: YES, NO or UNCLEAR",
                 f"QUOTE {letter}: <the excerpt's exact words that decide "
                 "it>",
-                f"ENTRY {letter}: <for YES only>",
             ]
+            if s.columns:
+                format_lines += [
+                    f"VALUE {letter}{index} {column}: <for YES only: the "
+                    f"document's {column.lower()}>"
+                    for index, column in enumerate(s.columns, start=1)
+                ]
+            else:
+                format_lines.append(f"ENTRY {letter}: <for YES only>")
     parts.append("Answer exactly in this format, one line each:\n"
                  + "\n".join(format_lines))
     return system, "\n\n".join(parts)
@@ -350,6 +359,59 @@ def quote_found(quote: str, excerpt: str) -> bool:
     return True
 
 
+def _cells(
+    section: TemplateSection,
+    letter: str,
+    lines: dict[tuple[str, str], str],
+    entry: str,
+) -> tuple[str, ...]:
+    """Return a table row's values, one per column, cleaned.
+
+    Parameters
+    ----------
+    section: TemplateSection
+        A per-document table section.
+    letter: str
+        Its letter in the reply.
+    lines: dict[tuple[str, str], str]
+        The reply's lines by kind and key.
+    entry: str
+        Its ``ENTRY`` line, read as values separated by ``|`` when there
+        are no ``VALUE`` lines.
+
+    Returns
+    -------
+    tuple[str, ...]
+        One value per column: from ``VALUE A1``, ``VALUE A2``, ... lines,
+        else the entry's ``|``-separated values (extra ones joined into the
+        last). A column name written before a value ("Aim: ...") is
+        removed; a value that is empty, "none", or only the column's name
+        is "not reported".
+
+    """
+
+    size = len(section.columns)
+    values = [lines.get(("VALUE", f"{letter}{index}"), "")
+              for index in range(1, size + 1)]
+    if not any(values) and entry:
+        values = [cell.strip() for cell in entry.strip("| ").split("|")]
+        if len(values) > size:
+            values = values[:size - 1] + [" ".join(values[size - 1:])]
+        values += [""] * (size - len(values))
+    cleaned: list[str] = []
+    for column, value in zip(section.columns, values):
+        value = re.sub(
+            rf"^\**\s*{re.escape(column)}\s*(?::\s*\**|\**\s*:)\s*", "",
+            value.strip(), flags=re.IGNORECASE,
+        ).strip()
+        if not value or _NONE.match(value) or (
+            value.casefold().strip(". ") == column.casefold()
+        ):
+            value = _MISSING
+        cleaned.append(value)
+    return tuple(cleaned)
+
+
 def parse_notes(
     reply: str,
     template: ReportTemplate,
@@ -374,9 +436,10 @@ def parse_notes(
     DocumentNotes
         Notes by section (``NONE`` and empty notes left out) and a check
         per per-document section: missing or unreadable answers are
-        unclear; a yes is unclear when its quote is not in the excerpt or
-        it has no entry; entries are cut to the section's word limit, and
-        table values padded with "not reported" or cut to the columns.
+        unclear; a yes is unclear when its quote is not in the excerpt, it
+        has no entry, or a table row has no value (``_cells``: values
+        that only repeat their column's name count as not reported);
+        entries are cut to the section's word limit.
 
     """
 
@@ -406,17 +469,19 @@ def parse_notes(
                 CHECK_UNCLEAR, quote,
                 why="the quoted words are not in the document",
             )
+        elif section.columns:
+            cells = _cells(section, letter, lines, entry)
+            if all(cell == _MISSING for cell in cells):
+                checks[section.name] = Check(
+                    CHECK_UNCLEAR, quote, why="no values were written"
+                )
+            else:
+                checks[section.name] = Check(
+                    CHECK_YES, quote, " | ".join(cells), cells
+                )
         elif not entry or _NONE.match(entry):
             checks[section.name] = Check(CHECK_UNCLEAR, quote,
                                          why="no entry was written")
-        elif section.columns:
-            cells = [cell.strip() for cell in entry.strip("| ").split("|")]
-            size = len(section.columns)
-            if len(cells) > size:
-                cells = cells[:size - 1] + [" ".join(cells[size - 1:])]
-            cells += ["not reported"] * (size - len(cells))
-            checks[section.name] = Check(CHECK_YES, quote, entry,
-                                         tuple(cells))
         else:
             words = entry.split()
             if section.words and len(words) > section.words[1]:
