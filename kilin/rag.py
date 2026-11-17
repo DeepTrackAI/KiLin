@@ -6028,14 +6028,9 @@ class RAGSession:
                 # report templates), read for each question.
                 decision = route_question(
                     self._router_chat(),
-<<<<<< HEAD
-                    config,
+                    with_project_routing(config, Path(self.project.root)),
                     self.turns,
                     question,
-======
-                    with_project_routing(config, Path(self.project.root)),
-                    self.turns, question,
->>>>>> 844e091 (Use any report template of a project, by name or by choice)
                     **(
                         {"excluded_turn_ids": excluded_turn_ids}
                         if excluded_turn_ids
