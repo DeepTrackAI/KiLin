@@ -174,6 +174,9 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/paper_overview/__init__.py`](../kilin/tools/paper_overview/__init__.py) | Expose the registered ``paper_overview`` tool. | [Per-tool README](../kilin/tools/paper_overview/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/paper_overview/_configuration.py`](../kilin/tools/paper_overview/_configuration.py) | Validate the defaults owned by the paper_overview tool. | [Per-tool README](../kilin/tools/paper_overview/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/paper_overview/tool.py`](../kilin/tools/paper_overview/tool.py) | Summarize one paper, chosen first, from its own passages. | [Per-tool README](../kilin/tools/paper_overview/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/project_summary/__init__.py`](../kilin/tools/project_summary/__init__.py) | Write one report on all the documents of a project, from a template. | [Per-tool README](../kilin/tools/project_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/project_summary/_documents.py`](../kilin/tools/project_summary/_documents.py) | Choose a project's documents and the excerpt read from each. | [Per-tool README](../kilin/tools/project_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/project_summary/_mapping.py`](../kilin/tools/project_summary/_mapping.py) | Take one document's notes for a project report, and check them. | [Per-tool README](../kilin/tools/project_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/__init__.py`](../kilin/tools/reference_check/__init__.py) | Expose the registered ``reference_check`` tool. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_citations.py`](../kilin/tools/reference_check/_citations.py) | Find a paper's numbered in-text citations and their citing sentences. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_configuration.py`](../kilin/tools/reference_check/_configuration.py) | Validate the defaults owned by the reference_check tool. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
@@ -217,7 +220,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Conversation memory | 8 |
 | GUI architecture | 10 |
 | Model management | 8 |
-| Per-tool README | 50 |
+| Per-tool README | 53 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 32 |
 | Source pipeline | 23 |
