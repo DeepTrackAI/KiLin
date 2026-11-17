@@ -167,11 +167,14 @@ from kilin._model_completion import (
 from kilin.atomic_writes import atomic_write_text
 from kilin.conversation_memory.feedback import FeedbackStore
 from kilin.conversation_memory.index import (
-    MemoryIndex, synchronize_memory,
+    MemoryIndex,
+    synchronize_memory,
 )
 from kilin.conversation_memory.recall import recall_topic
 from kilin.conversation_memory.retrieval import (
-    MemoryHit, render_memory_hits, search_memory,
+    MemoryHit,
+    render_memory_hits,
+    search_memory,
 )
 from kilin.conversation_memory.models import (
     new_turn_uuid,
@@ -323,6 +326,7 @@ from kilin.sources import (
     extract_source_units,
     read_repository_files,
 )
+from kilin.sources import source_kinds as kinds
 from kilin.sources.extensions.sources_json import (
     JSON_SOURCE_UNITS_FORMAT,
 )
@@ -388,9 +392,7 @@ ANSWER_PHASE_ROUTING: Final[AnswerPhase] = "routing"
 ANSWER_PHASE_ROUTED: Final[AnswerPhase] = "routed"
 ANSWER_PHASE_RETRIEVING: Final[AnswerPhase] = "retrieving"
 ANSWER_PHASE_EVIDENCE_READY: Final[AnswerPhase] = "evidence_ready"
-ANSWER_PHASE_MEMORY_RETRIEVING: Final[AnswerPhase] = (
-    "memory_retrieving"
-)
+ANSWER_PHASE_MEMORY_RETRIEVING: Final[AnswerPhase] = "memory_retrieving"
 ANSWER_PHASE_MEMORY_READY: Final[AnswerPhase] = "memory_ready"
 ANSWER_PHASE_GENERATING: Final[AnswerPhase] = "generating"
 ANSWER_PHASE_SAVING: Final[AnswerPhase] = "saving"
@@ -436,6 +438,9 @@ _TEXT_CACHE: Final[str] = "source_text.json"
 # How indexed text is built from passages (``_retrieval_text``); a change
 # rebuilds saved indexes.
 RETRIEVAL_TEXT_FORMAT: Final[str] = "code-path-and-module-summary-v1"
+# Languages whose passages are searched with their file path; recorded in
+# the index of projects that read JavaScript or R.
+CODE_PATH_LANGUAGES: Final[str] = "python-matlab-js-r"
 # Longest module summary put in front of a code passage for searching.
 _SUMMARY_MAX_CHARACTERS: Final[int] = 200
 # Opening of a module docstring, after optional comment lines.
@@ -475,6 +480,14 @@ _CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
 )
 # The separator between numbers inside one citation group.
 _CITATION_SEPARATOR: Final[re.Pattern[str]] = re.compile(r"\s*,\s*")
+# A citation written with a word, such as "[source 3]" or
+# "[Sources 3 and 6]". Earlier answers in the history show "[source]" in
+# place of their old numbers, and the model sometimes copies the word.
+_WORDED_CITATION: Final[re.Pattern[str]] = re.compile(
+    r"\[\s*(?:sources?|src)\s*:?\s*"
+    r"(\d+(?:\s*(?:,|and|&)\s*(?:sources?\s*)?\d+)*)\s*\]",
+    re.IGNORECASE,
+)
 
 
 def _incomplete_answer(error: IncompleteModelResponse) -> str:
@@ -530,9 +543,46 @@ def _model_summary(
     mode = "thinking on" if thinking else "thinking off"
     tokens = f"{max_new_tokens:,}".replace(",", " ")
     return (
-        f"Model: {model_id} "
-        f"({mode}, T={temperature}, {tokens} max tokens)"
+        f"Model: {model_id} " f"({mode}, T={temperature}, {tokens} max tokens)"
     )
+
+
+def _numbered_citations(answer: str) -> str:
+    """Write worded citations as plain numbers, such as "[3]".
+
+    Parameters
+    ----------
+    answer: str
+        Generated answer.
+
+    Returns
+    -------
+    str
+        The answer with "[source 3]" as "[3]" and "[sources 3 and 6]" as
+        "[3, 6]", so clients link them like other citations; everything
+        else is unchanged.
+
+    """
+
+    def numbers(match: re.Match[str]) -> str:
+        """Return one worded citation as a plain citation group.
+
+        Parameters
+        ----------
+        match: re.Match[str]
+            A worded citation such as "[sources 3 and 6]".
+
+        Returns
+        -------
+        str
+            Its numbers as one group, such as "[3, 6]".
+
+        """
+
+        found = re.findall(r"\d+", match.group(1))
+        return f"[{', '.join(found)}]"
+
+    return _WORDED_CITATION.sub(numbers, answer)
 
 
 def _invalid_citations(
@@ -1083,7 +1133,9 @@ class RAGSession:
                     self._prepare_retrieval(embedding_session)
                 )
             source_cards, source_card_vectors = self._prepare_source_cards(
-                chunks, indexes, embedding_session,
+                chunks,
+                indexes,
+                embedding_session,
             )
             self._emit_progress(
                 "loading_chat_model",
@@ -1153,9 +1205,7 @@ class RAGSession:
                 try:
                     model.close()
                 except BaseException as cleanup_error:
-                    error.add_note(
-                        f"Model cleanup failed: {cleanup_error!r}"
-                    )
+                    error.add_note(f"Model cleanup failed: {cleanup_error!r}")
             # __init__ releases the owned trace and conversation lock on
             # every construction failure, including this one.
             raise
@@ -1567,7 +1617,8 @@ class RAGSession:
         question = question.strip()
         # Every model this answer may call checks the same Stop request.
         for session in (
-            self.chat_session, getattr(self, "_router_session", None)
+            self.chat_session,
+            getattr(self, "_router_session", None),
         ):
             if session is not None:
                 session.stop_requested = stop_requested
@@ -1666,7 +1717,8 @@ class RAGSession:
             )
             route_options: dict[str, object] = (
                 {"excluded_turn_ids": excluded_turn_ids}
-                if excluded_turn_ids else {}
+                if excluded_turn_ids
+                else {}
             )
             if choice_callback is not None:
                 # Only the user knows why a question was asked twice. The
@@ -1704,18 +1756,24 @@ class RAGSession:
 
                 route_options["choose"] = ask_user
             decision = self._route(
-                question, config, use_router, turn_id, report_phase,
+                question,
+                config,
+                use_router,
+                turn_id,
+                report_phase,
                 **route_options,
             )
             # The boundary is enforced even if a custom router returns a
             # rejected turn. Router numbering remains the saved numbering.
             rejected = tuple(
-                number for number in decision.related_turn_ids
+                number
+                for number in decision.related_turn_ids
                 if number in excluded_turn_ids
             )
             if rejected:
                 related = tuple(
-                    number for number in decision.related_turn_ids
+                    number
+                    for number in decision.related_turn_ids
                     if number not in excluded_turn_ids
                 )
                 decision = replace(
@@ -1768,10 +1826,15 @@ class RAGSession:
             if decision.another_way and decision.repeated_turn is not None:
                 # Only after the user chose "Try another way": say that the
                 # last answer missed, so the new one is not a copy of it.
-                resolved_guidance = " ".join(filter(None, (
-                    resolved_guidance,
-                    another_way_guidance(decision.repeated_turn),
-                )))
+                resolved_guidance = " ".join(
+                    filter(
+                        None,
+                        (
+                            resolved_guidance,
+                            another_way_guidance(decision.repeated_turn),
+                        ),
+                    )
+                )
             if resolved_guidance or answer_guidance is not None:
                 effective["answer_guidance"] = resolved_guidance
             mode = intent.retrieval_mode
@@ -1780,7 +1843,8 @@ class RAGSession:
             if (
                 historical_topic is not None
                 and config.conversation_memory.enabled
-                and intent.memory_read and intent.tool is None
+                and intent.memory_read
+                and intent.tool is None
             ):
                 # Saved conversations, not project documents or reused
                 # evidence, answer an explicit question about chat history.
@@ -1857,7 +1921,9 @@ class RAGSession:
                     # The user's own words; a question that points back
                     # also carries its related turns' questions.
                     search_text = answering_search_text(
-                        question, self.turns, decision,
+                        question,
+                        self.turns,
+                        decision,
                         excluded_turn_ids=excluded_turn_ids,
                     )
 
@@ -1966,8 +2032,10 @@ class RAGSession:
                     search_text,
                     **(
                         {"_query_vectors": query_vectors}
-                        if source_limits is None and use_router
-                        and _EXTRA_SEARCHES else {}
+                        if source_limits is None
+                        and use_router
+                        and _EXTRA_SEARCHES
+                        else {}
                     ),
                     trace_turn_id=turn_id,
                     status_callback=lambda message: report_phase(
@@ -1976,10 +2044,12 @@ class RAGSession:
                     scope=scope,
                     prefer_source_code=intent.prefer_source_code,
                     **(
-                        {"source_first": (
-                            source_limits.max_sources,
-                            source_limits.passages_per_source > 1,
-                        )}
+                        {
+                            "source_first": (
+                                source_limits.max_sources,
+                                source_limits.passages_per_source > 1,
+                            )
+                        }
                         if getattr(intent, "retrieval_strategy", None)
                         == RETRIEVAL_STRATEGY_SOURCE_FIRST
                         else {}
@@ -1989,7 +2059,8 @@ class RAGSession:
                             "source_limits": source_limits,
                             "source_report": source_report,
                         }
-                        if source_limits is not None else {}
+                        if source_limits is not None
+                        else {}
                     ),
                 )
                 page = effective["retrieval_count"]
@@ -2002,8 +2073,10 @@ class RAGSession:
                 # passage budget, so asking for more results cannot help.
                 # Hybrid searches can widen within a separate hard cap.
                 while (
-                    use_router and source_limits is None
-                    and searches < _EXTRA_SEARCHES and evidence
+                    use_router
+                    and source_limits is None
+                    and searches < _EXTRA_SEARCHES
+                    and evidence
                 ):
                     next_count = min(
                         page * (searches + 2),
@@ -2012,10 +2085,15 @@ class RAGSession:
                     if next_count <= page * (searches + 1):
                         break
                     texts = [item.text for item in evidence]
-                    if passages_answer(
-                        question, texts, self._ask_check,
-                        max_characters=_MAX_EVIDENCE_CHECK_CHARACTERS,
-                    ) is not False:
+                    if (
+                        passages_answer(
+                            question,
+                            texts,
+                            self._ask_check,
+                            max_characters=_MAX_EVIDENCE_CHECK_CHARACTERS,
+                        )
+                        is not False
+                    ):
                         break
                     searches += 1
                     report_phase(
@@ -2065,16 +2143,17 @@ class RAGSession:
                         source_report.get("selected_sources", ())
                     )
                     limited = allocate_evidence(
-                        evidence, source_limits,
+                        evidence,
+                        source_limits,
                         priority_sources=chosen_sources,
                     )
                     evidence = tuple(
                         replace(item, citation=index)
                         for index, item in enumerate(limited.items, 1)
                     )
-                    indexed = tuple(dict.fromkeys(
-                        item.path for item in self.chunks
-                    ))
+                    indexed = tuple(
+                        dict.fromkeys(item.path for item in self.chunks)
+                    )
                     # Exhaustive mode means *all requested sources*, not
                     # merely those retained by the source-count cap.
                     if source_limits.coverage == COVERAGE_EXHAUSTIVE:
@@ -2085,14 +2164,15 @@ class RAGSession:
                         ):
                             requested = tuple(scope)
                         else:
-                            requested = tuple(dict.fromkeys((
-                                *indexed, *self._source_files()
-                            )))
+                            requested = tuple(
+                                dict.fromkeys(
+                                    (*indexed, *self._source_files())
+                                )
+                            )
                     else:
                         requested = chosen_sources or tuple(scope)
                     unreadable = tuple(
-                        path for path in requested
-                        if path not in set(indexed)
+                        path for path in requested if path not in set(indexed)
                     )
                     raw_hits = source_report.get("budget_limits_hit", ())
                     # A source omitted before passage selection must still
@@ -2104,11 +2184,14 @@ class RAGSession:
                             source_hits.append("sources")
                         if len(chosen_sources) >= source_limits.max_passages:
                             source_hits.append("passages")
-                    hits = tuple(dict.fromkeys((
-                        *raw_hits, *source_hits, *limited.limits_hit
-                    )))
+                    hits = tuple(
+                        dict.fromkeys(
+                            (*raw_hits, *source_hits, *limited.limits_hit)
+                        )
+                    )
                     coverage = coverage_report(
-                        requested, evidence,
+                        requested,
+                        evidence,
                         mode=source_limits.coverage,
                         unavailable=unreadable,
                         limits_hit=hits,
@@ -2123,8 +2206,10 @@ class RAGSession:
                     effective["coverage"] = coverage
                     effective["evidence_limits"] = asdict(source_limits)
                     trace.emit(
-                        "retrieval.coverage", component="retrieval",
-                        data=coverage, turn_id=turn_id,
+                        "retrieval.coverage",
+                        component="retrieval",
+                        data=coverage,
+                        turn_id=turn_id,
                     )
                     if (
                         source_limits.coverage == COVERAGE_EXHAUSTIVE
@@ -2231,14 +2316,17 @@ class RAGSession:
                     for number in history_ids
                 )
                 memory_hits = search_memory(
-                    question, memory_index, self.embedding_session,
+                    question,
+                    memory_index,
+                    self.embedding_session,
                     max_hits=config.conversation_memory.max_hits,
                     max_tokens=config.conversation_memory.max_tokens,
                     # A historical check must include saved turns already
                     # in the current chat; otherwise an existing discussion
                     # can be falsely reported as absent from project memory.
                     excluded_uuids=(
-                        frozenset() if memory_recall_checked
+                        frozenset()
+                        if memory_recall_checked
                         else previously_shown
                     ),
                     query_text=self._format_memory_query(
@@ -2247,9 +2335,9 @@ class RAGSession:
                     recall_topic=historical_topic,
                 )
                 memory_count = len(memory_hits)
-                memory_turn_count = len({
-                    hit.record.turn_uuid for hit in memory_hits
-                })
+                memory_turn_count = len(
+                    {hit.record.turn_uuid for hit in memory_hits}
+                )
                 memory_duration_ms = round(
                     (perf_counter() - memory_started) * 1000, 3
                 )
@@ -2308,18 +2396,14 @@ class RAGSession:
                                         "conversation_id": (
                                             origin.conversation_id
                                         ),
-                                        "turn_number": (
-                                            origin.turn_number
-                                        ),
+                                        "turn_number": (origin.turn_number),
                                     }
                                     for origin in hit.record.origins
                                 ],
                                 "relevance": hit.relevance,
                                 "score": hit.score,
                             }
-                            for number, hit in enumerate(
-                                memory_hits, start=1
-                            )
+                            for number, hit in enumerate(memory_hits, start=1)
                         ],
                         "memory_token_estimate": estimate_tokens(
                             render_memory_hits(memory_hits)
@@ -2339,7 +2423,8 @@ class RAGSession:
                     decision,
                     **(
                         {"excluded_turn_ids": excluded_turn_ids}
-                        if excluded_turn_ids else {}
+                        if excluded_turn_ids
+                        else {}
                     ),
                     trace_turn_id=turn_id,
                     report_phase=report_phase,
@@ -2358,7 +2443,10 @@ class RAGSession:
                     effective["completion"] = {
                         key: result.summary[key]
                         for key in (
-                            "status", "reason", "finish_reason", "message",
+                            "status",
+                            "reason",
+                            "finish_reason",
+                            "message",
                             "incomplete_items",
                         )
                         if key in result.summary
@@ -2378,13 +2466,16 @@ class RAGSession:
                     [
                         {"role": SYSTEM_ROLE, "content": system_prompt},
                         *history_messages(
-                            self.turns, history_ids,
+                            self.turns,
+                            history_ids,
                             excluded_turn_ids=excluded_turn_ids,
                         ),
                     ]
                 )
                 prompt = _answer_prompt(
-                    question, evidence, resolved_guidance,
+                    question,
+                    evidence,
+                    resolved_guidance,
                     memory_hits=memory_hits,
                     memory_recall_checked=memory_recall_checked,
                 )
@@ -2413,7 +2504,8 @@ class RAGSession:
                 if token_callback is not None:
                     initial_generation = (
                         f"Reading {len(evidence)} references"
-                        if evidence else "Reading the conversation"
+                        if evidence
+                        else "Reading the conversation"
                     )
                 report_phase(
                     ANSWER_PHASE_GENERATING,
@@ -2426,7 +2518,8 @@ class RAGSession:
                         *(
                             message["content"]
                             for message in history_messages(
-                                self.turns, history_ids,
+                                self.turns,
+                                history_ids,
                                 excluded_turn_ids=excluded_turn_ids,
                             )
                             if message["role"] == USER_ROLE
@@ -2437,7 +2530,8 @@ class RAGSession:
                 # Persist configured thinking separately so reopening a
                 # conversation cannot turn an intent override into state.
                 effective["thinking_effective"] = (
-                    self.chat_session.thinking if intent.thinking is None
+                    self.chat_session.thinking
+                    if intent.thinking is None
                     else intent.thinking
                 )
                 if intent.thinking is not None:
@@ -2458,8 +2552,10 @@ class RAGSession:
                 except IncompleteModelResponse as error:
                     effective["completion"] = error.to_dict()
                     trace.emit(
-                        "generation.incomplete", component="rag",
-                        data=error.to_dict(), turn_id=turn_id,
+                        "generation.incomplete",
+                        component="rag",
+                        data=error.to_dict(),
+                        turn_id=turn_id,
                     )
                     answer = _incomplete_answer(error)
                     evidence = ()
@@ -2484,8 +2580,10 @@ class RAGSession:
                 if token_callback is not None:
                     stream_token("\n\n" + coverage_notice)
 
-            # One fast, deterministic check; do not modify or retry the
-            # answer even when the model cites unavailable evidence.
+            # Only the citation format is corrected ("[source 3]" -> "[3]").
+            # One fast, deterministic check follows; do not modify or retry
+            # the answer even when the model cites unavailable evidence.
+            answer = _numbered_citations(answer)
             invalid = _invalid_citations(answer, evidence)
             if invalid:
                 # The existing checkpoint records the flag in turn metadata;
@@ -2553,7 +2651,8 @@ class RAGSession:
                 data={
                     **representation,
                     "summary": (
-                        summary if summary is not None
+                        summary
+                        if summary is not None
                         else representation["summary"]
                     ),
                 },
@@ -2668,16 +2767,11 @@ class RAGSession:
         previous_owns_trace = self._owns_trace
         if previous_owns_trace and trace is not previous_trace:
             previous_trace.close()
-        if (
-            old_ownership is not None
-            and old_ownership is not target_ownership
-        ):
+        if old_ownership is not None and old_ownership is not target_ownership:
             old_ownership.release()
 
         self.trace = trace
-        self._owns_trace = (
-            previous_owns_trace and trace is previous_trace
-        )
+        self._owns_trace = previous_owns_trace and trace is previous_trace
         self._conversation_ownership = target_ownership
         self.chat_session.trace = trace
         self.embedding_session.trace = trace
@@ -2880,7 +2974,9 @@ class RAGSession:
                 self.embedding_session
             )
         cards, vectors = self._prepare_source_cards(
-            chunks, indexes, self.embedding_session,
+            chunks,
+            indexes,
+            self.embedding_session,
         )
         self.chunks = chunks
         self.indexes = indexes
@@ -2913,7 +3009,9 @@ class RAGSession:
         if not policy.enabled:
             raise RuntimeError("Enable source cards before regenerating.")
         cards, vectors = self._prepare_source_cards(
-            self.chunks, self.indexes, self.embedding_session,
+            self.chunks,
+            self.indexes,
+            self.embedding_session,
             force_regenerate=True,
         )
         self.source_cards = cards
@@ -2937,7 +3035,9 @@ class RAGSession:
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
         cards, vectors = self._prepare_source_cards(
-            self.chunks, self.indexes, self.embedding_session,
+            self.chunks,
+            self.indexes,
+            self.embedding_session,
         )
         self.source_cards = cards
         self.source_card_vectors = vectors
@@ -2977,16 +3077,12 @@ class RAGSession:
             "temperature": previous.temperature,
             "max_new_tokens": previous.max_new_tokens,
         }
-        totals = (
-            previous.input_token_total, previous.output_token_total
-        )
+        totals = (previous.input_token_total, previous.output_token_total)
         router = getattr(self, "_router_session", None)
         self._router_session = None
         self.chat_session = None
         release_error = None
-        for model in (
-            router if router is not previous else None, previous
-        ):
+        for model in (router if router is not previous else None, previous):
             if model is None:
                 continue
             try:
@@ -3010,15 +3106,11 @@ class RAGSession:
                 "Reopen the project."
             ) from release_error
         try:
-            self.trace.emit(
-                "source_cards.chat.released", component="rag"
-            )
+            self.trace.emit("source_cards.chat.released", component="rag")
             yield
         finally:
             try:
-                restored = self._new_chat_session(
-                    previous.model_id, **options
-                )
+                restored = self._new_chat_session(previous.model_id, **options)
                 try:
                     restored.restore_history(messages)
                     restored.input_token_total = totals[0]
@@ -3027,9 +3119,7 @@ class RAGSession:
                     restored.close()
                     raise
                 self.chat_session = restored
-                self.trace.emit(
-                    "source_cards.chat.restored", component="rag"
-                )
+                self.trace.emit("source_cards.chat.restored", component="rag")
             except BaseException as error:
                 self.chat_session = None
                 try:
@@ -3158,7 +3248,11 @@ class RAGSession:
         self.router_model = model_id
 
     def router_reply(
-        self: RAGSession, system: str, prompt: str, *, max_new_tokens: int,
+        self: RAGSession,
+        system: str,
+        prompt: str,
+        *,
+        max_new_tokens: int,
         language_context: Sequence[str] = (),
     ) -> str:
         """Ask the router model a side question, such as a chat title.
@@ -3509,14 +3603,17 @@ class RAGSession:
         ):
             # HTML read as page text is evidence, not executable markup.
             # Its displayed code examples must not create graph links.
-            graph_files = [
-                source for source in source_files
-                if as_code or source.path.suffix.lower() != ".html"
-            ] if use_code_graph else []
+            graph_files = (
+                [
+                    source
+                    for source in source_files
+                    if as_code or source.path.suffix.lower() != ".html"
+                ]
+                if use_code_graph
+                else []
+            )
             graph_paths = {source.path for source in graph_files}
-            graph_units = [
-                unit for unit in units if unit.path in graph_paths
-            ]
+            graph_units = [unit for unit in units if unit.path in graph_paths]
             if not graph_files or not graph_units:
                 # An HTML-only document can have no visible text or units.
                 code_graph = CodeGraph((), ())
@@ -3632,12 +3729,9 @@ class RAGSession:
                 saved_metadata = None
 
         if not selected_count:
-            changes["configuration_changed"] = (
-                saved_metadata is None
-                or any(
-                    saved_metadata.get(key) != value
-                    for key, value in expected_metadata.items()
-                )
+            changes["configuration_changed"] = saved_metadata is None or any(
+                saved_metadata.get(key) != value
+                for key, value in expected_metadata.items()
             )
             return self._empty_retrieval(changes, current_manifest)
 
@@ -3981,11 +4075,13 @@ class RAGSession:
             code_graph=CodeGraph((), ()),
         )
         self.trace.emit(
-            "index.empty", component="rag",
+            "index.empty",
+            component="rag",
             data={"chunk_count": 0, "changes": changes},
         )
         self._emit_progress(
-            "index_ready", 85.0,
+            "index_ready",
+            85.0,
             "No source passages to index; ready without retrieval evidence.",
         )
         return [], indexes, "empty", changes
@@ -4160,14 +4256,14 @@ class RAGSession:
             vector_index = getattr(self, "source_card_vectors", None)
             query_vector = (
                 _query_vectors.get(query_text)
-                if _query_vectors is not None else None
+                if _query_vectors is not None
+                else None
             )
-            has_source_cards = (
-                isinstance(vector_index, SourceCardVectorIndex)
-                and any(
-                    not card_kinds or entry.kind in card_kinds
-                    for entry in vector_index.records
-                )
+            has_source_cards = isinstance(
+                vector_index, SourceCardVectorIndex
+            ) and any(
+                not card_kinds or entry.kind in card_kinds
+                for entry in vector_index.records
             )
             if query_vector is None and (
                 _query_vectors is not None
@@ -4218,7 +4314,8 @@ class RAGSession:
                 question,
                 count=(
                     max(depth, len(self.chunks))
-                    if source_first is not None else depth
+                    if source_first is not None
+                    else depth
                 ),
             )
             lexical = keep(lexical_results[:depth])
@@ -4256,14 +4353,12 @@ class RAGSession:
                     question,
                     count=(
                         max(depth, len(self.chunks))
-                        if source_first is not None else depth
+                        if source_first is not None
+                        else depth
                     ),
                 )
                 code = keep(code_results[:depth])
-                report(
-                    "Relationship search ranked "
-                    f"{len(code)} results"
-                )
+                report("Relationship search ranked " f"{len(code)} results")
         trace.emit(
             "retrieval.code.ranked",
             component="retrieval",
@@ -4317,8 +4412,7 @@ class RAGSession:
             )
             if card_kinds:
                 card_matches = tuple(
-                    match for match in card_matches
-                    if match.kind in card_kinds
+                    match for match in card_matches if match.kind in card_kinds
                 )
             chosen = self._source_passages(
                 semantic_results,
@@ -4328,14 +4422,16 @@ class RAGSession:
                 count=count,
                 max_sources=(
                     source_limits.max_sources
-                    if source_limits is not None else source_first[0]
+                    if source_limits is not None
+                    else source_first[0]
                 ),
                 compare=source_first[1],
                 scope=named,
                 trace_turn_id=trace_turn_id,
                 per_source=(
                     source_limits.passages_per_source
-                    if source_limits is not None else 1
+                    if source_limits is not None
+                    else 1
                 ),
                 metadata=source_metadata,
                 exhaustive=(
@@ -4362,7 +4458,8 @@ class RAGSession:
             focused = [
                 result
                 for result in self._rank_everything(
-                    question, trace_turn_id,
+                    question,
+                    trace_turn_id,
                     semantic_results=semantic_results,
                 )
                 if result.chunk.path == named[0]
@@ -4425,7 +4522,8 @@ class RAGSession:
         expansion_plan = plan
         if self._uses_document_headers() and plan.paths:
             documents = {
-                chunk.path for chunk in self.chunks
+                chunk.path
+                for chunk in self.chunks
                 if chunk.kind in DOCUMENT_KINDS
             }
             expansion_plan = replace(
@@ -4444,24 +4542,23 @@ class RAGSession:
         if source_first is not None and source_limits is not None:
             # Expansion must not bypass the selected source set.
             allowed = set(chosen_source_paths)
-            expanded = [
-                chunk for chunk in expanded if chunk.path in allowed
-            ]
+            expanded = [chunk for chunk in expanded if chunk.path in allowed]
         elif source_first is not None and len(named) > 1:
             # Retain explicit scopes for direct calls without evidence limits.
             allowed = set(named)
-            expanded = [
-                chunk for chunk in expanded if chunk.path in allowed
-            ]
+            expanded = [chunk for chunk in expanded if chunk.path in allowed]
         direct_paths = set(plan.paths) | set(scope)
         direct_ids = {
-            chunk.identifier for chunk in _chunks_for_functions(
+            chunk.identifier
+            for chunk in _chunks_for_functions(
                 self.chunks, self.indexes.code_graph, plan.functions
             )
         }
         alternative_ids = {
-            chunk.identifier for chunk in _chunks_for_functions(
-                self.chunks, self.indexes.code_graph,
+            chunk.identifier
+            for chunk in _chunks_for_functions(
+                self.chunks,
+                self.indexes.code_graph,
                 plan.alternative_functions,
             )
         }
@@ -4530,7 +4627,8 @@ class RAGSession:
         )
         if source_limits is not None:
             selected = allocate_evidence(
-                evidence, source_limits,
+                evidence,
+                source_limits,
                 priority_sources=chosen_source_paths,
             )
             evidence = tuple(
@@ -4538,11 +4636,13 @@ class RAGSession:
                 for index, item in enumerate(selected.items, start=1)
             )
             if source_report is not None:
-                source_report.update({
-                    "budget_omitted": selected.omitted,
-                    "budget_limits_hit": selected.limits_hit,
-                    "budget_estimated_tokens": selected.estimated_tokens,
-                })
+                source_report.update(
+                    {
+                        "budget_omitted": selected.omitted,
+                        "budget_limits_hit": selected.limits_hit,
+                        "budget_estimated_tokens": selected.estimated_tokens,
+                    }
+                )
         trace.emit(
             "evidence.finalized",
             component="retrieval",
@@ -4609,7 +4709,8 @@ class RAGSession:
             SOURCE_CARD_KINDS.get(kind)
         source_first = (
             (limits.max_sources, request.compare)
-            if request.strategy == "source_first" else None
+            if request.strategy == "source_first"
+            else None
         )
         details: dict[str, object] = {}
         evidence = self._retrieve(
@@ -4618,37 +4719,40 @@ class RAGSession:
             trace_turn_id=trace_turn_id,
             scope=request.scope,
             source_first=source_first,
-            source_limits=(
-                limits if source_first is not None else None
-            ),
+            source_limits=(limits if source_first is not None else None),
             source_report=details,
             card_kinds=request.card_kinds,
         )
-        if request.scope and (
-            len(request.scope) > 1 or not request.compare
-        ):
+        if request.scope and (len(request.scope) > 1 or not request.compare):
             allowed = set(request.scope)
-            evidence = tuple(
-                item for item in evidence if item.path in allowed
-            )
+            evidence = tuple(item for item in evidence if item.path in allowed)
         chosen_sources = tuple(details.get("selected_sources", ()))
         final = allocate_evidence(
-            evidence, limits,
+            evidence,
+            limits,
             priority_sources=chosen_sources or request.scope,
         )
         evidence = final.items
         keys = {
             (
-                item.path, item.start_line, item.end_line,
-                item.text, item.symbol, item.cell,
+                item.path,
+                item.start_line,
+                item.end_line,
+                item.text,
+                item.symbol,
+                item.cell,
             ): item
             for item in self.chunks
         }
         passages = []
         for item in evidence:
             key = (
-                item.path, item.start_line, item.end_line,
-                item.text, item.symbol, item.cell,
+                item.path,
+                item.start_line,
+                item.end_line,
+                item.text,
+                item.symbol,
+                item.cell,
             )
             if key not in keys:
                 raise RuntimeError(
@@ -4658,14 +4762,16 @@ class RAGSession:
         if request.strategy == "source_first":
             sources = chosen_sources
         else:
-            sources = tuple(dict.fromkeys(
-                item.path for item in passages
-            ))
+            sources = tuple(dict.fromkeys(item.path for item in passages))
         if limits.coverage == COVERAGE_EXHAUSTIVE:
-            requested = request.scope or tuple(dict.fromkeys((
-                *(item.path for item in self.chunks),
-                *self._source_files(),
-            )))
+            requested = request.scope or tuple(
+                dict.fromkeys(
+                    (
+                        *(item.path for item in self.chunks),
+                        *self._source_files(),
+                    )
+                )
+            )
         else:
             requested = sources or request.scope
         indexed = {item.path for item in self.chunks}
@@ -4678,7 +4784,8 @@ class RAGSession:
             if len(sources) >= limits.max_passages:
                 hits.add("passages")
         coverage = coverage_report(
-            requested, evidence,
+            requested,
+            evidence,
             mode=limits.coverage,
             unavailable=tuple(
                 path for path in requested if path not in indexed
@@ -4686,8 +4793,10 @@ class RAGSession:
             limits_hit=tuple(sorted(hits)),
         )
         getattr(self, "trace", NullTraceLogger()).emit(
-            "retrieval.tool.coverage", component="retrieval",
-            data=coverage, turn_id=trace_turn_id,
+            "retrieval.tool.coverage",
+            component="retrieval",
+            data=coverage,
+            turn_id=trace_turn_id,
         )
         return RetrievalResult(tuple(passages), sources, coverage)
 
@@ -4753,9 +4862,11 @@ class RAGSession:
         language_context = (
             *(
                 turn.question
-                for turn in reversed(self._earlier_turns(
-                    decision, excluded_turn_ids=excluded_turn_ids
-                ))
+                for turn in reversed(
+                    self._earlier_turns(
+                        decision, excluded_turn_ids=excluded_turn_ids
+                    )
+                )
             ),
             question,
         )
@@ -4764,9 +4875,7 @@ class RAGSession:
         model_policy = TOOL_REGISTRY[use.name].model_calls
         model_calls: list[dict[str, object]] = []
 
-        def ask_model(
-            system: str, prompt: str, tokens: int | None
-        ) -> str:
+        def ask_model(system: str, prompt: str, tokens: int | None) -> str:
             """Capture thinking without exposing it to tool parsers.
 
             Parameters
@@ -4803,7 +4912,8 @@ class RAGSession:
                 call: dict[str, object] = {
                     "thinking": (
                         self.chat_session.thinking
-                        if override is None else override
+                        if override is None
+                        else override
                     ),
                     "requested_max_new_tokens": tokens,
                     "attempt": attempt,
@@ -4811,16 +4921,21 @@ class RAGSession:
                 model_calls.append(call)
                 try:
                     raw = side_reply(
-                        self.chat_session, system, prompt,
+                        self.chat_session,
+                        system,
+                        prompt,
                         max_new_tokens=tokens,
                         language_context=language_context,
-                        inherit_settings=True, preserve_thinking=True,
-                        require_complete=True, thinking=override,
+                        inherit_settings=True,
+                        preserve_thinking=True,
+                        require_complete=True,
+                        thinking=override,
                     )
                 except IncompleteModelResponse as error:
                     call.update(error.to_dict())
                     if not (
-                        attempt == 1 and call["thinking"]
+                        attempt == 1
+                        and call["thinking"]
                         and error.finish_reason == "length"
                         and thinking_is_open(error.raw_text)
                     ):
@@ -4829,14 +4944,17 @@ class RAGSession:
                     # Keep the user's allowance, not a short metadata cap.
                     override, tokens = False, None
                     trace.emit(
-                        "tool.generation.retry", component="tool",
+                        "tool.generation.retry",
+                        component="tool",
                         data={"name": use.name, **error.to_dict()},
                         turn_id=trace_turn_id,
                     )
                     report_phase(
                         ANSWER_PHASE_PROCESSING,
-                        message=("Output limit reached while thinking; "
-                                 "retrying once without thinking."),
+                        message=(
+                            "Output limit reached while thinking; "
+                            "retrying once without thinking."
+                        ),
                     )
                     continue
                 call["status"] = "complete"
@@ -4879,10 +4997,15 @@ class RAGSession:
 
             try:
                 return side_reply(
-                    self.chat_session, system, prompt,
-                    max_new_tokens=tokens, token_callback=token_callback,
-                    language_context=language_context, inherit_settings=True,
-                    preserve_thinking=True, require_complete=True,
+                    self.chat_session,
+                    system,
+                    prompt,
+                    max_new_tokens=tokens,
+                    token_callback=token_callback,
+                    language_context=language_context,
+                    inherit_settings=True,
+                    preserve_thinking=True,
+                    require_complete=True,
                 )
             except IncompleteModelResponse as error:
                 if token_callback is not None and thinking_is_open(
@@ -4931,7 +5054,9 @@ class RAGSession:
         request = ToolRequest(
             question=question,
             text=answering_search_text(
-                question, self.turns, decision,
+                question,
+                self.turns,
+                decision,
                 excluded_turn_ids=excluded_turn_ids,
             ),
             guidance=answer_guidance,
@@ -4948,7 +5073,8 @@ class RAGSession:
             data={
                 "name": use.name,
                 "settings": (
-                    asdict(use.settings) if is_dataclass(use.settings)
+                    asdict(use.settings)
+                    if is_dataclass(use.settings)
                     else repr(use.settings)
                 ),
                 "internal": TOOL_REGISTRY[use.name].internal_defaults,
@@ -4959,12 +5085,14 @@ class RAGSession:
                 result = run_tool(use, request, context)
             except IncompleteModelResponse as error:
                 trace.emit(
-                    "tool.generation.incomplete", component="tool",
+                    "tool.generation.incomplete",
+                    component="tool",
                     data={"name": use.name, **error.to_dict()},
                     turn_id=trace_turn_id,
                 )
                 result = ToolResult(
-                    _incomplete_answer(error), (),
+                    _incomplete_answer(error),
+                    (),
                     {"name": use.name, **error.to_dict()},
                 )
         if result.streamed and token_callback is not None:
@@ -4972,12 +5100,16 @@ class RAGSession:
             if failures:
                 token_callback(incomplete_notice(failures))
         if model_calls:
-            result = replace(result, summary={
-                **result.summary,
-                "internal_generation": {
-                    "policy": asdict(model_policy), "calls": model_calls,
+            result = replace(
+                result,
+                summary={
+                    **result.summary,
+                    "internal_generation": {
+                        "policy": asdict(model_policy),
+                        "calls": model_calls,
+                    },
                 },
-            })
+            )
         if not tool_thoughts:
             return result
 
@@ -5027,13 +5159,15 @@ class RAGSession:
 
         last_eligible = next(
             (
-                number for number in range(len(self.turns), 0, -1)
+                number
+                for number in range(len(self.turns), 0, -1)
                 if number not in excluded_turn_ids
             ),
             None,
         )
         pending = [
-            number for number in decision.related_turn_ids
+            number
+            for number in decision.related_turn_ids
             if 0 < number <= len(self.turns)
             and number not in excluded_turn_ids
         ]
@@ -5044,7 +5178,8 @@ class RAGSession:
         while pending:
             number = pending.pop()
             if (
-                number in found or not 1 <= number <= len(self.turns)
+                number in found
+                or not 1 <= number <= len(self.turns)
                 or number in excluded_turn_ids
             ):
                 continue
@@ -5140,9 +5275,7 @@ class RAGSession:
 
         """
 
-        records = getattr(
-            getattr(self, "source_cards", None), "records", ()
-        )
+        records = getattr(getattr(self, "source_cards", None), "records", ())
         merged: dict[Path, dict[str, str]] = {}
         for record in records or ():
             card = getattr(record.result, "card", None)
@@ -5153,9 +5286,7 @@ class RAGSession:
                 fields.setdefault(key, value)
         return merged
 
-    def _card_fields(
-        self: RAGSession, path: Path
-    ) -> dict[str, str] | None:
+    def _card_fields(self: RAGSession, path: Path) -> dict[str, str] | None:
         """Return the fields of one source's cards, for tools.
 
         Parameters
@@ -5173,9 +5304,7 @@ class RAGSession:
 
         """
 
-        records = getattr(
-            getattr(self, "source_cards", None), "records", ()
-        )
+        records = getattr(getattr(self, "source_cards", None), "records", ())
         fields: dict[str, str] = {}
         found = False
         for record in records or ():
@@ -5276,16 +5405,10 @@ class RAGSession:
         named = list(dict.fromkeys(scope))
         if len(named) > 1:
             allowed = set(named)
-            available = [
-                item for item in available if item.path in allowed
-            ]
+            available = [item for item in available if item.path in allowed]
         elif len(named) == 1:
-            target = [
-                item for item in available if item.path == named[0]
-            ]
-            others = [
-                item for item in available if item.path != named[0]
-            ]
+            target = [item for item in available if item.path == named[0]]
+            others = [item for item in available if item.path != named[0]]
             available = [*target, *others] if compare else target
 
         full_passages = hybrid_search(
@@ -5297,7 +5420,10 @@ class RAGSession:
         unrelated: list[Path] = []
         if not exhaustive and len(named) < 2:
             relevant = relevant_sources(
-                available, full_passages, depth=count, keep=named,
+                available,
+                full_passages,
+                depth=count,
+                keep=named,
                 minimum=max(2 if compare else 1, requested),
             )
             unrelated = [
@@ -5307,18 +5433,22 @@ class RAGSession:
         limit = min(max_sources, count)
         chosen = [item.path for item in available[:limit]]
         passages = select_source_passages(
-            full_passages, chosen, count=count,
+            full_passages,
+            chosen,
+            count=count,
             per_source=per_source,
         )
         if metadata is not None:
-            metadata.update({
-                "selected_sources": tuple(chosen),
-                "candidate_sources": tuple(
-                    item.path for item in available
-                ),
-                "ranked_source_count": len(available),
-                "unrelated_sources": tuple(unrelated),
-            })
+            metadata.update(
+                {
+                    "selected_sources": tuple(chosen),
+                    "candidate_sources": tuple(
+                        item.path for item in available
+                    ),
+                    "ranked_source_count": len(available),
+                    "unrelated_sources": tuple(unrelated),
+                }
+            )
         trace = getattr(self, "trace", NullTraceLogger())
         trace.emit(
             "retrieval.sources.ranked",
@@ -5382,7 +5512,8 @@ class RAGSession:
                 count=everything,
                 trace_turn_id=trace_turn_id,
             )
-            if semantic_results is None else list(semantic_results)
+            if semantic_results is None
+            else list(semantic_results)
         )
         lexical = lexical_search(self.indexes.lexical, text, count=everything)
         code = (
@@ -5488,16 +5619,16 @@ class RAGSession:
         config = self._behavior_config()
         if not config.conversation_memory.enabled:
             return MemoryIndex("", (), {})
-        identity = getattr(
-            self.indexes, "embedding_model_identity", None
-        )
+        identity = getattr(self.indexes, "embedding_model_identity", None)
         if not identity:
             identity = (
                 f"{self.embedding_session.model_id}@"
                 f"{self.embedding_session.model_source}"
             )
         return synchronize_memory(
-            self.project.root, config, self.embedding_session,
+            self.project.root,
+            config,
+            self.embedding_session,
             model_identity=identity,
         )
 
@@ -5613,7 +5744,8 @@ class RAGSession:
             for number, turn in enumerate(turns, 1)
             if ratings.get(
                 turn.conversation_turn_uuid, ASSISTANT_ROLE
-            ).reaction == "disliked"
+            ).reaction
+            == "disliked"
         )
 
     def _history_without_disliked(
@@ -5645,7 +5777,8 @@ class RAGSession:
             return messages
         system = next(
             (
-                message["content"] for message in messages
+                message["content"]
+                for message in messages
                 if message.get("role") == SYSTEM_ROLE
             ),
             None,
@@ -5655,7 +5788,8 @@ class RAGSession:
         return [
             {"role": SYSTEM_ROLE, "content": system},
             *history_messages(
-                self.turns, list(range(1, len(self.turns) + 1)),
+                self.turns,
+                list(range(1, len(self.turns) + 1)),
                 excluded_turn_ids=excluded,
             ),
         ]
@@ -5747,10 +5881,14 @@ class RAGSession:
                 turn_id=turn_id,
             ):
                 decision = route_question(
-                    self._router_chat(), config, self.turns, question,
+                    self._router_chat(),
+                    config,
+                    self.turns,
+                    question,
                     **(
                         {"excluded_turn_ids": excluded_turn_ids}
-                        if excluded_turn_ids else {}
+                        if excluded_turn_ids
+                        else {}
                     ),
                     **({"choose": choose} if choose is not None else {}),
                 )
@@ -5906,9 +6044,7 @@ class RAGSession:
             system_prompt=self._system_prompt(),
             allow_download=self.project.profile.allow_download,
             trace=self.trace,
-            block_unrequested_cjk=(
-                self.project.profile.block_unrequested_cjk
-            ),
+            block_unrequested_cjk=(self.project.profile.block_unrequested_cjk),
             **settings,
         )
 
@@ -5993,6 +6129,10 @@ class RAGSession:
             metadata["json_source_units"] = JSON_SOURCE_UNITS_FORMAT
         # Indexes built from plain chunk text are rebuilt once.
         metadata["retrieval_text"] = RETRIEVAL_TEXT_FORMAT
+        # JavaScript and R passages are searched with their file path, as
+        # Python and MATLAB ones are; projects reading them re-index once.
+        if {".js", ".r"} & set(profile.extensions):
+            metadata["code_path_languages"] = CODE_PATH_LANGUAGES
         # Projects that read PDFs re-index when the PDF text extractor
         # changes; other projects are unaffected.
         if ".pdf" in profile.extensions:
@@ -6142,21 +6282,31 @@ class RAGSession:
             """
 
             self._emit_count_progress(
-                "building_source_cards", 86.0, 89.0,
-                "Summarizing papers", current, total, started,
+                "building_source_cards",
+                86.0,
+                89.0,
+                "Summarizing papers",
+                current,
+                total,
+                started,
             )
 
         infos = self._document_infos(chunks)
         return reconcile_source_cards(
-            self.project, chunks, manifest, embedding_session,
+            self.project,
+            chunks,
+            manifest,
+            embedding_session,
             backend=self.backend,
             titles={path: item.title for path, item in infos.items()},
             expected_dimension=(
                 len(indexes.semantic.embeddings[0])
                 if isinstance(indexes, PersistentIndexes)
-                and indexes.semantic.embeddings else None
+                and indexes.semantic.embeddings
+                else None
             ),
-            trace=self.trace, progress=report,
+            trace=self.trace,
+            progress=report,
             force_regenerate=force_regenerate,
             generation_guard=(
                 self._card_generation_guard
@@ -6260,7 +6410,8 @@ class RAGSession:
             # Earlier evidence stays with its turn; history is Q/A only.
             messages.extend(
                 history_messages(
-                    turns, list(range(1, len(turns) + 1)),
+                    turns,
+                    list(range(1, len(turns) + 1)),
                     excluded_turn_ids=self._excluded_history_turns(turns),
                 )
             )
@@ -6436,9 +6587,7 @@ class RAGSession:
             timestamp = datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H-%M-%S-%fZ"
             )
-            archived_path = path.with_name(
-                f"conversation_{timestamp}.json"
-            )
+            archived_path = path.with_name(f"conversation_{timestamp}.json")
             path.replace(archived_path)
             return archived_path
 
@@ -6781,9 +6930,11 @@ def _add_related_evidence(
     start = len(fresh) + 1
     return fresh + tuple(
         replace(
-            item, citation=number,
+            item,
+            citation=number,
             context_role=(
-                "related" if item.context_role == "direct"
+                "related"
+                if item.context_role == "direct"
                 else item.context_role
             ),
         )
@@ -6825,9 +6976,11 @@ def _merge_evidence(
     kept = ordered[-_MAX_REUSED_EVIDENCE:]
     return tuple(
         replace(
-            item, citation=number,
+            item,
+            citation=number,
             context_role=(
-                "related" if item.context_role == "direct"
+                "related"
+                if item.context_role == "direct"
                 else item.context_role
             ),
         )
@@ -6936,7 +7089,8 @@ def _answer_prompt(
         # There are no numbered source citations in a memory-only answer.
         # Explicitly distinguish remembered discussion from verified facts.
         sections = [
-            f"Question:\n{question}", render_memory_hits(memory_hits),
+            f"Question:\n{question}",
+            render_memory_hits(memory_hits),
             _MEMORY_ANSWER_RULES,
         ]
         if memory_recall_checked:
@@ -6953,16 +7107,17 @@ def _answer_prompt(
             return f"{question}\n\n{guidance.strip()}"
         return question
     evidence_label = (
-        "PROJECT SOURCE EVIDENCE "
-        "(numbered documentary citations only):"
-        if memory_hits else "Evidence:"
+        "PROJECT SOURCE EVIDENCE " "(numbered documentary citations only):"
+        if memory_hits
+        else "Evidence:"
     )
     sections = [f"Question:\n{question}", evidence_label]
     for item in evidence:
         sections.append(evidence_block(item, item.citation))
     numbers = sorted({item.citation for item in evidence})
     cited = (
-        f"[{numbers[0]}]" if len(numbers) == 1
+        f"[{numbers[0]}]"
+        if len(numbers) == 1
         else f"[{numbers[0]}] to [{numbers[-1]}]"
     )
     sections.append(
@@ -6988,9 +7143,12 @@ def _answer_prompt(
     if memory_hits:
         # Source evidence has its own citations and ranking; memory is an
         # independent, lower-trust section with memory-only labels.
-        sections.extend((
-            render_memory_hits(memory_hits), _MEMORY_ANSWER_RULES,
-        ))
+        sections.extend(
+            (
+                render_memory_hits(memory_hits),
+                _MEMORY_ANSWER_RULES,
+            )
+        )
     if memory_recall_checked:
         if not memory_hits:
             sections.append(
@@ -7031,9 +7189,7 @@ def _per_source_instruction(
 
     sources = list(dict.fromkeys(item.path for item in evidence))
     count = requested_source_count(question)
-    if len(sources) < 2 or not (
-        count >= 2 or asks_for_all_sources(question)
-    ):
+    if len(sources) < 2 or not (count >= 2 or asks_for_all_sources(question)):
         return ""
     basenames = [path.name for path in sources]
     labels = [
@@ -7224,9 +7380,7 @@ def _write_json(path: Path, data: dict[str, object]) -> None:
 
     """
 
-    atomic_write_text(
-        path, json.dumps(data, indent=2, sort_keys=True) + "\n"
-    )
+    atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def _chunk_trace_data(
@@ -7349,7 +7503,7 @@ def _module_summaries(chunks: Sequence[Chunk]) -> dict[Path, str]:
         match = _MODULE_DOCSTRING.match(chunk.text)
         if match is None:
             continue
-        body = chunk.text[match.end():].split(match.group(1), 1)[0]
+        body = chunk.text[match.end() :].split(match.group(1), 1)[0]
         lines = [line.strip() for line in body.splitlines()]
         first = next((line for line in lines if line), "")
         if first:
@@ -7377,10 +7531,10 @@ def _retrieval_text(
     Returns
     -------
     str
-        For Python and MATLAB code, the file path, then the module summary
-        when there is one, then the passage text; for a paper passage with
-        a header, the header, then the passage text; for other passages,
-        the passage text.
+        For source code in any built-in language, the file path, then the
+        module summary when there is one, then the passage text; for a
+        paper passage with a header, the header, then the passage text;
+        for other passages, the passage text.
 
     Notes
     -----
@@ -7391,7 +7545,7 @@ def _retrieval_text(
 
     if headers and chunk.identifier in headers:
         return f"{headers[chunk.identifier]}\n\n{chunk.text}"
-    if not str(chunk.kind).startswith(("python_", "matlab_")):
+    if not str(chunk.kind).startswith(kinds.CODE_KIND_PREFIXES):
         return chunk.text
     header = [chunk.path.as_posix()]
     summary = summaries.get(chunk.path)
