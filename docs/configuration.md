@@ -349,6 +349,23 @@ packaged `PROJECT_PROFILE` defaults. For example:
 }
 ```
 
+The six bundled project types explicitly set the following new-project
+answer-generation defaults:
+
+| Project type | Temperature | Thinking |
+| --- | ---: | --- |
+| Code Repository (`code`) | `0.2` | Off |
+| Literature (`literature`) | `0.3` | Off |
+| Reviewing (`reviewing`) | `0.2` | Off |
+| Writing Assistant (`writing`) | `0.6` | Off |
+| Brainstorming (Grounded) (`grounded_brainstorming`) | `0.6` | Off |
+| Brainstorming (Creative) (`creative_brainstorming`) | `0.9` | Off |
+
+Lower temperatures favor controlled code, factual, and review support;
+higher temperatures allow more variety in writing and ideation. The global
+`PROJECT_PROFILE` settings remain fallbacks for custom types that omit
+these fields. They do not override the explicit bundled type settings.
+
 These settings initialize `profile.ini` only when creating a project.
 Explicit creation settings override them. Once saved, a project's own
 profile is authoritative; reopening it never re-applies project-type

@@ -72,5 +72,6 @@ class TestGUIGenerationSettings(unittest.TestCase):
         self.assertEqual(
             profile["max_new_tokens"], core.max_new_tokens
         )
-        self.assertTrue(core.thinking)
+        self.assertIs(core.thinking, False)
+        self.assertEqual(core.temperature, 0.2)
         self.assertEqual(core.max_new_tokens, 8192)

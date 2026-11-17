@@ -39,7 +39,7 @@
   },
   "generation": {
     "temperature": 0.6,
-    "thinking": true
+    "thinking": false
   },
   "default_intent": "grounded_ideation",
   "intents": {

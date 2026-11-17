@@ -519,12 +519,16 @@ copied into the user-preferences file. Before reinstalling an earlier KíLín
 version with edited installed defaults, manually preserve those edits.
 KíLín does not automatically migrate edits to installed package resources.
 
-**Generation defaults** for new projects remain core-owned in
-`kilin/kilin_defaults.json` (`PROJECT_PROFILE`): `thinking=true`,
-`temperature=0.0`, and `max_new_tokens=8192`. All interfaces use these
-new-project generation defaults. Existing projects retain the settings in
-their own `profile.ini`, including an explicit 256-token limit. A saved
-project profile takes precedence over global defaults and user preferences.
+**Generation defaults** for new projects are core-owned. Each bundled
+project type defines a nonzero `temperature` and `thinking=false` in its
+`kilin/project_types/<type_id>.json` file. See the
+[project-type defaults](../../docs/configuration.md#new-project-generation-defaults)
+for the six temperatures. The generic `PROJECT_PROFILE` fallback in
+`kilin/kilin_defaults.json` remains `thinking=true`, `temperature=0.0`,
+and `max_new_tokens=8192` for types that omit these fields. Existing
+projects retain the settings in their own `profile.ini`, including an
+explicit 256-token limit. A saved project profile takes precedence over
+all creation defaults and user preferences.
 
 With no project open, settings edits update the user preferences. With a
 project open, the Settings switch chooses **This project** (the default) or

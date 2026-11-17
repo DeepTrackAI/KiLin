@@ -34,6 +34,10 @@
     "max_hits": 4,
     "max_tokens": 2000
   },
+  "generation": {
+    "temperature": 0.2,
+    "thinking": false
+  },
   "default_intent": "question_answering",
   "intents": {
     "question_answering": {

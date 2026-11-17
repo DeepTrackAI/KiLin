@@ -276,6 +276,33 @@ class TestPackagedProjectTypes(unittest.TestCase):
                     type_id,
                 )
 
+    def test_packaged_generation_defaults_are_explicit(self) -> None:
+        """Use nonzero, type-specific temperatures without thinking."""
+
+        expected_temperatures = {
+            "code": 0.2,
+            "literature": 0.3,
+            "reviewing": 0.2,
+            "writing": 0.6,
+            "grounded_brainstorming": 0.6,
+            "creative_brainstorming": 0.9,
+        }
+        for type_id, definition in load_project_types().items():
+            with self.subTest(type_id=type_id):
+                self.assertIs(definition.generation_thinking, False)
+                self.assertIsNotNone(definition.generation_temperature)
+                self.assertGreater(definition.generation_temperature, 0)
+                if type_id in expected_temperatures:
+                    self.assertEqual(
+                        definition.generation_temperature,
+                        expected_temperatures[type_id],
+                    )
+                profile = project.default_project_profile(type_id)
+                self.assertIs(profile.thinking, False)
+                self.assertEqual(
+                    profile.temperature, definition.generation_temperature
+                )
+
     def test_packaged_intents_are_valid_and_usable(self) -> None:
         """Exercise parsed options for every current and future intent."""
 
