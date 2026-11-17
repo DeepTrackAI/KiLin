@@ -1,4 +1,4 @@
-# Building and validating KíLín for macOS
+# Building and validating KíLín for macOS and Windows
 
 ## Scope and limitations
 
@@ -90,6 +90,68 @@ These remain manual checks until real GUI and backend integration tests
 are available in the native environment. Passing the CI smoke check
 does not guarantee that an unnotarized app will open without a macOS
 security prompt on other machines.
+
+## Windows installer
+
+`setup/windows/kilin.iss` is an Inno Setup script for 64-bit Windows; on
+Windows, with uv 0.8 or later and Inno Setup 6, build it with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File setup\windows\build_installer.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File setup\windows\build_installer.ps1 -Wheel
+```
+
+Both write `dist\KiLin-Setup-<version>.exe`. The first installs the
+matching version from PyPI; `-Wheel` bundles a wheel of this checkout.
+The installer holds only uv, an icon and the optional wheel:
+
+- It installs for the current user, without administrator rights, into
+  `%LOCALAPPDATA%\Programs\KiLin`.
+- Before copying any file, uv downloads Python 3.12 and installs
+  `kilin[app]` into `%LOCALAPPDATA%\kilin\runtime\<version>`, with
+  `--torch-backend auto`: the CUDA build of PyTorch for an NVIDIA GPU, the
+  CPU build otherwise (PyPI alone has only the CPU build on Windows). A
+  failure stops Setup with a message and the log
+  `%LOCALAPPDATA%\kilin\runtime\install.log`; an earlier version is
+  untouched. After an update, other versions' runtimes are removed.
+- There is no licence page. As on macOS, the welcome dialog shows the
+  terms of use on first launch and records their acceptance.
+- The Start-menu shortcut opens `kilin-gui.exe` without a console window.
+- `KILIN_APP_UV` and `KILIN_APP_SPEC` are set in the user environment so
+  the application's backend-repair commands use the same uv and build, as
+  the macOS launcher does.
+- Uninstalling removes the program and the runtime, and keeps projects
+  and preferences.
+
+If KíLín is already installed, Setup first compares versions and offers
+to upgrade (a newer installer), reinstall (the same version, for example
+to repair it) or install the older version, or to remove KíLín.
+
+While uv installs, a progress page shows the percentage, the size
+downloaded and an estimate of the time left, above a list of the large
+downloads, such as PyTorch, each marked downloading or downloaded, newest
+first. uv only reports when a file starts and ends, so the progress
+follows the bytes the busiest network interface receives; other traffic
+at the same time makes it run slightly ahead. The first install takes
+several minutes.
+
+On the last page, **Show the install log** opens `install.log`. It lists
+each large download as `Downloaded torch (2.4 GiB)`, then the installed
+packages and their versions as lines starting with `+`.
+
+**The installer is not code-signed.** Windows SmartScreen shows "Windows
+protected your PC" for it; testers who trust the build choose **More
+info → Run anyway**. Signing for public release needs a code-signing
+certificate (or a signing service such as Azure Trusted Signing), a
+separate decision like Apple notarization.
+
+The `.github/workflows/windows_app.yml` workflow builds the installer with
+a checkout wheel on a Windows runner, installs it silently, checks the
+runtime, the shortcut and the repair variables, and uninstalls it. Every
+run uploads the unsigned installer as a development artifact. Before
+sharing a build, also test on a real Windows PC: first install, update
+over an earlier version, an NVIDIA computer, a model download and a basic
+answer.
 
 ## Deferred public distribution
 

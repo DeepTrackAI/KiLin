@@ -381,6 +381,12 @@ console.
    `dist/KíLín.dmg`. `--wheel` embeds a checkout wheel. Both builds
    are signed ad hoc only and are **not notarized**. See the
    [macOS build guide](release.md) for native and manual validation.
+5. Build a development Windows installer on Windows with uv 0.8 or later
+   and Inno Setup 6:
+   `powershell -NoProfile -ExecutionPolicy Bypass -File setup\windows\build_installer.ps1`.
+   It writes `dist\KiLin-Setup-<version>.exe`; `-Wheel` embeds a
+   checkout wheel. The installer is **not code-signed**. See the
+   [Windows installer](release.md#windows-installer) section.
 
 The builder resolves `uv` symlinks (including Homebrew's), checks that
 its target is an Apple-silicon executable, and bundles the resolved binary.

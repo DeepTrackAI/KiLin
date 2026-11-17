@@ -27,6 +27,14 @@ Security after attempting to open it. Do not remove quarantine as a
 general installation step. See the
 [macOS build guide](docs/release.md) for verification and limitations.
 
+**Windows installer** (64-bit Windows 10 or 11): run
+`KiLin-Setup-<version>.exe`. It needs no administrator rights. While
+installing, it downloads Python 3.12 and KíLín's packages, including the
+CUDA build of PyTorch on computers with an NVIDIA GPU, so it needs network
+access. The installer is not code-signed, so Windows SmartScreen may warn;
+choose **More info → Run anyway** only for a build you trust. See the
+[Windows section of the build guide](docs/release.md#windows-installer).
+
 **pip** (macOS, Linux, experimental Windows; Python 3.12):
 
 ```sh
