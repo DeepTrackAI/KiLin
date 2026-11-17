@@ -90,8 +90,16 @@ document whose call fails is reported as not read; the others go on.
   document's note for it, citing documents as `[n]`, comparing and
   grouping them rather than describing them one by one. When the notes
   exceed `GROUP_TOKENS`, each group is first condensed into short lines of
-  facts that keep their document numbers. A section outside its limits is
-  rewritten up to `REPAIR_ATTEMPTS` times.
+  facts that keep their document numbers. The prompt asks for citations
+  such as `[2]` or `[1, 4]` (never "Document 2"), agreements and
+  disagreements between at least two documents, and no claims about what
+  the documents lack unless the notes show it. Code then checks each
+  section: every bracket must cite existing documents (`[n1]` or `[7]` of
+  five does not), documents must not be named in the text ("Document 4"),
+  and a section written from notes must cite at least one document. A
+  section with such a problem, or outside its limits, is rewritten up to
+  `REPAIR_ATTEMPTS` times; brackets still citing no document are then
+  removed, and what remains wrong is listed under the report.
 - **Per-document sections**: assembled by code, never by the model: a
   count ("3 of 12 documents."), the unclear documents with why and those
   not read, then one entry or table row per matching document.

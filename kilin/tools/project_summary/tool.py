@@ -116,6 +116,8 @@ from kilin.tools.project_summary._mapping import (
 )
 from kilin.tools.project_summary._reduce import (
     chosen_numbers,
+    citation_problem,
+    clean_citations,
     condense_prompt,
     documents_line,
     documents_list,
@@ -615,8 +617,9 @@ def _write_section(
     documents: Sequence[ProjectDocument],
     settings: ProjectSummarySettings,
     context: ToolContext,
+    failures: list[str],
 ) -> str:
-    """Write one section from all documents' notes, fixing its length.
+    """Write one section from all documents' notes, fixing its problems.
 
     Parameters
     ----------
@@ -632,12 +635,18 @@ def _write_section(
         The settings, for repair attempts.
     context: ToolContext
         Tool services, for model calls.
+    failures: list[str]
+        Problems left after the repairs, appended for the report's check
+        line.
 
     Returns
     -------
     str
         The section's content; when the notes do not fit one call, written
-        from each group's condensed facts.
+        from each group's condensed facts. A section outside its limits or
+        citing documents wrongly (``citation_problem``) is rewritten up to
+        ``repair_attempts`` times; brackets still citing no document are
+        then removed.
 
     """
 
@@ -660,13 +669,42 @@ def _write_section(
     content = _clean(context.ask_model(
         *section_prompt(template, section, text, len(documents)), None
     ), section)
+    cite = bool(lines) and not section.inline
+
+    def problem_of(text: str) -> str:
+        """Return the section's first problem, or ``""``.
+
+        Parameters
+        ----------
+        text: str
+            The section's content.
+
+        Returns
+        -------
+        str
+            Its citation problem, else its length or form problem.
+
+        """
+
+        return citation_problem(text, len(documents), cite) or (
+            section_problem(section, text, _config.TEMPLATE_RULES) or ""
+        )
+
     for _ in range(settings.repair_attempts):
-        problem = section_problem(section, content, _config.TEMPLATE_RULES)
+        problem = problem_of(content)
         if not problem:
             break
         content = _clean(context.ask_model(
             *fix_prompt(section, content, problem), None
         ), section) or content
+    content, removed = clean_citations(content, len(documents))
+    if removed:
+        failures.append(
+            f"{section.name}: {removed} citation(s) of no document removed."
+        )
+    left = citation_problem(content, len(documents), cite)
+    if left:
+        failures.append(f"{section.name}: {left}")
     return content
 
 
@@ -767,7 +805,8 @@ def run(
         try:
             if section.source == SECTION_SOURCE_NOTES:
                 written[section.name] = _write_section(
-                    template, section, notes, documents, settings, context
+                    template, section, notes, documents, settings, context,
+                    failures,
                 )
             elif section.source == SECTION_SOURCE_PER_DOCUMENT:
                 written[section.name] = per_document_markdown(

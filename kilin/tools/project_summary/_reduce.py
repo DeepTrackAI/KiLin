@@ -42,6 +42,11 @@ Module Structure
 
     The document numbers a reply chooses.
 
+- ``citation_problem`` and ``clean_citations``
+
+    Whether a section cites documents as it must, and its invalid
+    citations removed.
+
 - ``per_document_markdown``, ``documents_line`` and ``documents_list``
 
     The parts written by code.
@@ -75,6 +80,8 @@ from kilin.tools.project_summary._mapping import (
 
 __all__ = [
     "chosen_numbers",
+    "citation_problem",
+    "clean_citations",
     "condense_prompt",
     "documents_line",
     "documents_list",
@@ -88,11 +95,20 @@ __all__ = [
 
 _SYSTEM: Final[str] = (
     "You write one section of a report on a collection of scientific "
-    "documents, from notes on each document. Use only the notes. Cite the "
-    "documents a statement rests on as [n] right after it, with the "
-    "numbers the notes give. Compare and group the documents; do not "
-    "describe them one by one."
+    "documents, from notes on each document. Say only what the notes say. "
+    "After each statement, cite the documents it rests on by the numbers "
+    "the notes give, in brackets, such as [2] or [1, 4]. Never refer to a "
+    "document as \"Document 2\" or \"the first document\": cite it. "
+    "Compare and group the documents; do not describe them one by one. An "
+    "agreement or a disagreement involves at least two different "
+    "documents; one document's strengths and limits are not a "
+    "disagreement. Do not claim that the documents lack something unless "
+    "the notes show it."
 )
+# A bracketed citation, and one naming a document in prose ("Document 4",
+# "Documents 1 and 2").
+_BRACKETS = re.compile(r"\[([^\[\]]{1,40})\]")
+_DOCUMENT_WORDS = re.compile(r"\bDocuments?\s+\d", re.IGNORECASE)
 _NUMBERS = re.compile(r"\d+")
 # Unclear documents named in a per-document section's count line.
 _UNCLEAR_NAMED: Final[int] = 10
@@ -272,8 +288,9 @@ def fix_prompt(
     user = (
         f"This report section has a problem: {problem}\nLength wanted: "
         f"{_length(section)}\n\nSection “{section.name}”:\n{content}\n\n"
-        "Rewrite it to fit, keeping its facts and its [n] citations and "
-        "adding nothing. Write only the content."
+        "Rewrite it to fix that, keeping its facts and its citations of "
+        "documents, such as [2] or [1, 4], and adding nothing. Write only "
+        "the content."
     )
     return _SYSTEM, user
 
@@ -378,6 +395,128 @@ def chosen_numbers(reply: str, documents: int, most: int) -> list[int]:
         if 1 <= number <= documents and number not in chosen:
             chosen.append(number)
     return chosen[:most]
+
+
+def _cited(marker: str, documents: int) -> list[int] | None:
+    """Return the document numbers one bracketed citation holds.
+
+    Parameters
+    ----------
+    marker: str
+        The text between the brackets ("1, 4", "2-3", "n1").
+    documents: int
+        How many documents there are.
+
+    Returns
+    -------
+    list[int] | None
+        The numbers (a range "2-3" gives 2 and 3); None when the marker is
+        not a citation of existing documents.
+
+    """
+
+    numbers: list[int] = []
+    for part in re.split(r"\s*[,;]\s*", marker.strip()):
+        found = re.fullmatch(r"(\d+)(?:\s*[–-]\s*(\d+))?", part)
+        if not found:
+            return None
+        low = int(found.group(1))
+        high = int(found.group(2) or low)
+        if not 1 <= low <= high <= documents:
+            return None
+        numbers.extend(range(low, high + 1))
+    return numbers or None
+
+
+def citation_problem(content: str, documents: int, cite: bool) -> str:
+    """Return what is wrong with how a section cites documents, or ``""``.
+
+    Parameters
+    ----------
+    content: str
+        A section written from the notes.
+    documents: int
+        How many documents there are.
+    cite: bool
+        Whether the section must cite at least one document (it was
+        written from notes).
+
+    Returns
+    -------
+    str
+        A problem for the repair prompt: brackets that are not citations
+        of existing documents ("[n1]", "[7]" of 5); documents named in
+        prose ("Document 4") instead of cited; or no citation at all.
+        ``""`` when the citations are valid.
+
+    """
+
+    invalid = [
+        f"[{marker}]" for marker in _BRACKETS.findall(content)
+        if _cited(marker, documents) is None
+    ]
+    if invalid:
+        return (
+            f"It has citations that are not document numbers from 1 to "
+            f"{documents}: {', '.join(dict.fromkeys(invalid))}. Cite "
+            "documents as [2] or [1, 4]."
+        )
+    if _DOCUMENT_WORDS.search(content):
+        return (
+            "It names documents in the text (\"Document 4\") instead of "
+            "citing them; cite them as [4] after the statement."
+        )
+    if cite and not any(
+        _cited(marker, documents) for marker in _BRACKETS.findall(content)
+    ):
+        return "It cites no document; cite the documents each statement "\
+            "rests on, as [2] or [1, 4]."
+    return ""
+
+
+def clean_citations(content: str, documents: int) -> tuple[str, int]:
+    """Return a section with brackets that cite no document removed.
+
+    Parameters
+    ----------
+    content: str
+        A section.
+    documents: int
+        How many documents there are.
+
+    Returns
+    -------
+    tuple[str, int]
+        The content without the invalid brackets (and the space before
+        them), and how many were removed.
+
+    """
+
+    removed = 0
+
+    def drop(match: re.Match[str]) -> str:
+        """Return a citation, or nothing for an invalid one.
+
+        Parameters
+        ----------
+        match: re.Match[str]
+            A bracketed marker with the spaces before it.
+
+        Returns
+        -------
+        str
+            The match when it cites documents, else ``""``.
+
+        """
+
+        nonlocal removed
+        if _cited(match.group(1), documents) is not None:
+            return match.group(0)
+        removed += 1
+        return ""
+
+    cleaned = re.sub(r"\s*\[([^\[\]]{1,40})\]", drop, content)
+    return cleaned, removed
 
 
 def per_document_markdown(

@@ -38,6 +38,8 @@ from kilin.tools.project_summary._documents import ProjectDocument
 from kilin.tools.project_summary._mapping import Check, DocumentNotes
 from kilin.tools.project_summary._reduce import (
     chosen_numbers,
+    citation_problem,
+    clean_citations,
     documents_line,
     documents_list,
     note_groups,
@@ -214,6 +216,35 @@ class TestRun(_Project):
         prompts = [c.args[1] for c in context.ask_model.call_args_list]
         self.assertEqual(sum("Condense" in p for p in prompts), 2)
 
+    def test_citations_are_repaired_or_removed(self) -> None:
+        def model(system, prompt, tokens):
+            if "Section: Themes" in prompt:
+                return "Networks are studied [n1], and plants [n3]."
+            if "has a problem" in prompt:
+                return "Networks are studied [1, 3], and plants [2]."
+            return _model(system, prompt, tokens)
+        result, context = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertIn("## Themes\n\nNetworks are studied [1, 3], and "
+                      "plants [2].", report)
+        fix = next(c.args[1] for c in context.ask_model.call_args_list
+                   if "has a problem" in c.args[1])
+        self.assertIn("[n1], [n3]", fix)
+        self.assertTrue(result.summary["valid"])
+
+        def stubborn(system, prompt, tokens):
+            if "Section: Themes" in prompt or "has a problem" in prompt:
+                return "Document 1 studies networks [n1] and plants [2]."
+            return _model(system, prompt, tokens)
+        result, _ = self._run(model=stubborn)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertIn("## Themes\n\nDocument 1 studies networks and plants "
+                      "[2].", report)
+        self.assertIn("Themes: 1 citation(s) of no document removed.",
+                      result.answer)
+        self.assertIn("names documents in the text", result.answer)
+        self.assertFalse(result.summary["valid"])
+
     def test_cancel_and_quick(self) -> None:
         result, context = self._run(confirm=Mock(return_value="cancel"),
                                     confirmation="always")
@@ -334,6 +365,25 @@ class TestReduce(unittest.TestCase):
                          "1 document, listed at the end of the report [1].")
         self.assertIn("[4] Doc 4 (`4.md`)", documents_list(documents))
         self.assertEqual(chosen_numbers("I pick 4 and 2", 4, 1), [4])
+        for content, cite, problem in (
+            ("Shown [1, 3] and [2-3].", True, ""),
+            ("Shown [n1] and [n2].", True, "[n1], [n2]"),
+            ("Shown [6].", True, "[6]"),
+            ("Document 4 and Documents 1 and 2 agree.", False,
+             "names documents in the text"),
+            ("Shown without citations.", True, "cites no document"),
+            ("Shown without citations.", False, ""),
+        ):
+            with self.subTest(content=content):
+                found = citation_problem(content, 5, cite)
+                if problem:
+                    self.assertIn(problem, found)
+                else:
+                    self.assertEqual(found, "")
+        self.assertEqual(
+            clean_citations("A [n1], b [2] and c [7].", 5),
+            ("A, b [2] and c.", 2),
+        )
         groups = note_groups([(1, "a " * 30), (2, "b"), (3, "c")], 10)
         self.assertEqual([[n for n, _ in g] for g in groups], [[1], [2, 3]])
 
