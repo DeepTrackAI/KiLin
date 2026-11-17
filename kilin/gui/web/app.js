@@ -7961,9 +7961,8 @@ byId("project-form").addEventListener("submit", (event) => {
   const included = selectedSources.filter((path) => selected[path].length);
   if (selectedSources.length && !included.length) return showError("Select at least one file.");
   error.classList.add("hidden");
-  // A name set in Settings names the project. Otherwise the engine names
-  // it after the first source; an empty project gets a free "new-project"
-  // name in the projects folder.
+  // A name set in Settings names the project. Without one, the core
+  // allocates a free source-derived or "new-project" directory atomically.
   const name = byId("project-title").value.trim();
   if (/[\\/]/.test(name) || name.startsWith(".")) {
     return showError("A project name cannot start with a dot or contain / or \\.");
@@ -7971,7 +7970,7 @@ byId("project-form").addEventListener("submit", (event) => {
   if (savedProjects.some((project) => project.name === name)) {
     return showError(`A project named ${name} already exists. Choose another name in Settings.`);
   }
-  const destination = name ? projectPath(name) : included.length ? "" : emptyProjectPath();
+  const destination = name ? projectPath(name) : "";
   setBusy(true, "Opening project…");
   requestAnimationFrame(() => activity.scrollIntoView({ block: "nearest" }));
   bridge.openProject(
@@ -8137,19 +8136,6 @@ async function deleteOpenProject() {
   returnToLaunch();
   // Sent after closing: the engine refuses to delete an open project.
   bridge.deleteProject(folder);
-}
-
-/**
- * Pick a free folder for a project created without sources.
- *
- * @returns "<projects folder>/new-project", numbered when that name is
- *   taken by a listed project.
- */
-function emptyProjectPath() {
-  const taken = new Set(savedProjects.map((project) => project.name));
-  let name = "new-project";
-  for (let number = 2; taken.has(name); number += 1) name = `new-project-${number}`;
-  return projectPath(name);
 }
 
 /**

@@ -204,13 +204,14 @@ resumed without downloading new models; creating and answering in new
 projects still requires the configured models. Changing the type selected
 for a new project does not filter or hide existing resumable projects.
 Repeated creation from the same sources allocates independent numbered
-folders. An explicitly selected occupied destination is
-never reused: the interface offers to resume an existing project separately,
-without importing pending sources or applying new-project settings, or lets
-you choose another destination. The current session stays open on conflicts.
-A saved workspace can be reopened through Resume without adding
-sources. New projects may start without sources: they get a free
-`new-project` folder in the workspace folder. Their managed `sources/`
+folders. An explicitly named occupied destination is never reused: the
+interface offers to resume an existing project separately, without importing
+pending sources or applying new-project settings, or lets you choose another
+destination. The current session stays open on conflicts. A saved workspace
+can be reopened through Resume without adding sources. New projects may start
+without sources: the core allocates `new-project`, `new-project-2`, and so on,
+skipping any existing folder, including folders absent from the saved-project
+list. Their managed `sources/`
 folder is initially empty, and sources can be added later. No development example is selected
 automatically. A workspace is a directory organization convention, not an
 execution sandbox or a boundary for hostile inputs.

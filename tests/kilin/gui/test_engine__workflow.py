@@ -158,20 +158,24 @@ class TestEngineWorkflow(unittest.TestCase):
 
     @patch("kilin.gui.engine.RAGSession")
     @patch("kilin.gui.engine.prepare_sources_workspace")
-    def test_blank_source_requires_workspace_without_using_examples(
+    def test_blank_source_requests_core_allocation_without_examples(
         self, prepare, rag_session
         ) -> None:
-        """Reject a source-free request without its explicit destination."""
+        """Let the core name empty projects without example paths."""
 
         events: list[dict[str, object]] = []
         engine = ChatEngine(self.root, events.append)
+        prepare.side_effect = RuntimeError("allocation unavailable")
 
         engine.open_project([], "literature", "", selected_files={})
 
-        prepare.assert_not_called()
+        prepare.assert_called_once_with(
+            [], "literature", None, selected_files={},
+            workspace_root=self.root,
+        )
         rag_session.assert_not_called()
         self.assertEqual(events[-1]["event"], "error")
-        self.assertIn("Choose a workspace folder", events[-1]["message"])
+        self.assertIn("allocation unavailable", events[-1]["message"])
         self.assertIsNone(engine.session)
         self.assertEqual(list(self.root.iterdir()), [])
 

@@ -1915,7 +1915,8 @@ class ChatEngine:
         """Create and activate a new, independently owned workspace.
 
         Creation is exclusive and cannot resume an existing project. Empty
-        source lists require an explicit nonexistent or empty destination.
+        source lists without a destination allocate a free ``new-project``
+        name beneath the configured projects folder.
 
         Parameters
         ----------
@@ -1924,8 +1925,8 @@ class ChatEngine:
         type_id: str
             Registered project-type identifier.
         workspace: str
-            Workspace folder; required without sources. With sources, a blank
-            value derives a name beneath the configured workspace parent.
+            Explicit workspace folder, or blank to allocate a name beneath
+            the configured projects folder, including for empty projects.
         selected_files: dict[str, list[str]] | None, optional
             Checked file paths within each source folder. Defaults to ``None``.
         settings: dict[str, object] | None, optional
@@ -1977,10 +1978,6 @@ class ChatEngine:
                     backend: validate_effort_levels(levels)
                     for backend, levels in created_levels.items()
                 }
-            if not sources and not workspace.strip():
-                raise ValueError(
-                    "Choose a workspace folder for a project without sources."
-                )
             if selected_files is not None:
                 # Resolve path aliases before matching checked files.
                 selected_files = {
@@ -4940,19 +4937,20 @@ def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:
         Parent directory for default managed workspaces; it is not an execution
         sandbox.
     chosen: str
-        Explicit workspace path string, or an empty string to derive one from
-        the first source.
+        Explicit workspace path string, or an empty string to derive one
+        from the first source or use ``new-project`` for an empty project.
 
     Returns
     -------
     pathlib.Path
-        Resolved explicit destination, or a deterministic source-name/path-hash
-        destination beneath sandbox.
+        Resolved explicit destination, or a deterministic default name
+        beneath sandbox.
 
     Notes
     -----
-    Deriving a default uses the core naming helper and first supplied source.
-    Creation may select a numbered sibling. Preview does not reserve a path.
+    Deriving a default uses the core naming helper, including for empty
+    projects. Creation may select a numbered sibling. Preview does not
+    reserve a path.
 
     """
 

@@ -4,8 +4,8 @@ The projects folder holds the projects. Run the production page functions
 in Node with stubs: the field shows the folder in use, Use default is
 offered only when a folder was chosen, a missing folder is explained, a
 switch is offered and allowed only on the start screen (read-only from a
-project), and an empty project gets a free name inside it. Saving and the
-engine restart are tested on the Qt side.
+project). Automatically named projects delegate name allocation to the core.
+Saving and the engine restart are tested on the Qt side.
 
 """
 
@@ -54,15 +54,83 @@ class TestProjectsFolderFrontend(unittest.TestCase):
         )
         start = source.index('byId("project-form").addEventListener(')
         create = source[start : source.index("\n});\n", start)]
-        # A name set in Settings wins; a taken one is refused first.
+        # Unnamed projects are allocated by the core, not the saved list.
         self.assertIn(
-            "const destination = name ? projectPath(name) : "
-            'included.length ? "" : emptyProjectPath();',
+            'const destination = name ? projectPath(name) : "";',
             create,
         )
         self.assertLess(
             create.index("already exists"), create.index("bridge.openProject(")
         )
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
+    def test_unnamed_project_submits_blank_destination(self):
+        """Delegate unnamed creation to the core with or without sources."""
+        source = (_WEB / "app.js").read_text(encoding="utf-8")
+        start = source.index('byId("project-form").addEventListener(')
+        submit = source[start:source.index("\n});\n", start) + 5]
+        script = r"""
+const assert = require("node:assert/strict");
+const fields = {
+  "project-title": { value: "" },
+  "chat-model": { value: "example/chat" },
+  "embedding-model": { value: "example/embed" },
+  "type-id": { value: "code" },
+  "workspace-path": { value: "/projects" },
+};
+const events = {};
+const byId = (id) => id === "project-form" ? {
+  addEventListener(type, handler) { events[type] = handler; },
+} : fields[id];
+const error = { classList: { add() {} } };
+const calls = [];
+const failures = [];
+const bridge = { openProject(...args) { calls.push(args); } };
+const activity = { scrollIntoView() {} };
+const requestAnimationFrame = (callback) => callback();
+const cachedModels = new Set(["example/chat", "example/embed"]);
+const modelChoices = [];
+const installedBackends = { mlx: true };
+const activeBackend = "mlx";
+const selectedSources = [];
+const checkedFiles = new Map();
+const savedProjects = [{ name: "new-project" }];
+const profile = {};
+const showError = (message) => { failures.push(message); };
+const sourceCardProblem = () => null;
+const needsNewProjectSetup = () => false;
+const compatibleChoices = () => [];
+const collectSettings = () => ({});
+const setBusy = () => {};
+const openModels = () => {};
+let busy = false;
+"""
+        script += _function(source, "projectPath")
+        script += submit
+        script += r"""
+const run = () => events.submit({ preventDefault() {} });
+run();
+assert.equal(calls.length, 1);
+assert.equal(calls[0][2], "");
+assert.deepEqual(JSON.parse(calls[0][0]), []);
+checkedFiles.set("/external/notes", ["notes.txt"]);
+selectedSources.push("/external/notes");
+run();
+assert.equal(calls.length, 2);
+assert.equal(calls[1][2], "");
+assert.deepEqual(JSON.parse(calls[1][0]), ["/external/notes"]);
+fields["project-title"].value = "new-project";
+run();
+assert.equal(calls.length, 2);
+assert.match(failures.at(-1), /already exists/);
+fields["project-title"].value = "custom";
+run();
+assert.equal(calls[2][2], "/projects/custom");
+console.log("unnamed project delegation passed");
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("unnamed project delegation passed", result.stdout)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_folder_is_shown_and_switched_only_on_the_start_screen(self):
@@ -106,7 +174,6 @@ const showSetupConfirmations = () => {};
             "changeProjectsFolder",
             "useLegacyProjectsFolder",
             "finishProjectsFolderSwitch",
-            "emptyProjectPath",
             "projectPath",
         ):
             script += _function(source, name)
@@ -184,12 +251,8 @@ changeProjectsFolder(true);
 assert.deepEqual(calls, []);
 assert.equal(error.hidden, false);
 assert.match(error.textContent, /start screen/);
-// An empty project gets a free name inside the projects folder.
+// Only explicitly named projects have their paths built in the page.
 byId("workspace-path").value = "/Users/me/Desktop/";
-savedProjects = [{ name: "TestKiLin" }, { name: "new-project" }];
-assert.equal(emptyProjectPath(), "/Users/me/Desktop/new-project-2");
-savedProjects = [];
-assert.equal(emptyProjectPath(), "/Users/me/Desktop/new-project");
 // A name set in Settings goes in the same folder.
 assert.equal(projectPath("review"), "/Users/me/Desktop/review");
 console.log("projects folder passed");

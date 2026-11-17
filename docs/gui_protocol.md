@@ -84,8 +84,9 @@ There is no `save_answer_timeline` command or companion timing file.
 Project selection uses `type_id` in `startup`, `projects`, `saved_project`,
 `opened` and `settings.project_types` entries. The cross-layer identifier
 schema is owned by [Configuration](configuration.md#canonical-identifiers-and-schemas). The
-`open` command accepts `sources: []` for a new empty workspace only when
-`workspace` is explicit; no example paths are inferred. Despite its command
+`open` command accepts `sources: []` with an empty `workspace`: the core
+allocates an available `new-project` name. An explicit `workspace` retains
+its exact-name and collision semantics. Despite its command
 name, `open` creates a new project and never reuses an existing one. `resume`
 is the separate operation for opening saved state. On `workspace_conflict`,
 `existing_project` is true for any existing profile entry, even an invalid one.

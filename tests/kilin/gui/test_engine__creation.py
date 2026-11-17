@@ -230,6 +230,29 @@ class TestEngineCreation(unittest.TestCase):
         self.assertEqual((first.source / self.source.name).read_bytes(),
                          source_bytes)
 
+    def test_empty_default_name_is_allocated_in_the_core(self):
+        """A missing name never resumes or changes an occupied project."""
+        existing = kilin.prepare_sources_workspace(
+            [], "code", self.root / "new-project"
+        )
+        before = self.snapshot(existing.root)
+        (self.root / "new-project-2").mkdir()
+        self.engine.open_project(
+            [], "code", "", settings={"temperature": 0.4}
+        )
+        self.assertEqual(self.events[-1]["event"], "opened")
+        first = self.engine.session.project
+        self.assertEqual(first.root, self.root / "new-project-3")
+        self.assertEqual(first.profile.temperature, 0.4)
+        self.assertEqual(list(first.source.iterdir()), [])
+        self.engine.open_project([], "code", "")
+        self.assertEqual(self.events[-1]["event"], "opened")
+        self.assertEqual(
+            self.engine.session.project.root,
+            self.root / "new-project-4",
+        )
+        self.assertEqual(self.snapshot(existing.root), before)
+
     def test_no_trace_or_conversation_is_created_before_core_commit(self):
         """Late GUI state cannot make an empty destination appear occupied."""
         target = self.root / "empty"
