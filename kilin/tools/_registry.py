@@ -38,8 +38,9 @@ Module Structure
   ``TOOL_BATCH_CLASSIFY``, ``TOOL_BATCH_REVIEW``, ``TOOL_FILTER_RESULTS``,
   ``TOOL_FIND_FACT``, ``TOOL_FIND_PASSAGES``,
   ``TOOL_GENERATE_PAPER_SUMMARY``, ``TOOL_PAPER_OVERVIEW``,
-  ``TOOL_REFERENCE_CHECK``, ``TOOL_SHOW_SOURCE``, and
-  ``TOOL_SUGGEST_REFERENCE``
+  ``TOOL_PROJECT_SUMMARY``, ``TOOL_REFERENCE_CHECK``,
+  ``TOOL_SHOW_SOURCE``, ``TOOL_SUGGEST_REFERENCE``, and
+  ``TOOL_WRITING_CHECK``
 
     Canonical string values of the registered tool names.
 
@@ -96,6 +97,7 @@ from kilin.tools import (
     generate_paper_summary,
     paper_overview,
     project_inventory,
+    project_summary,
     reference_check,
     scan_and_list,
     show_source,
@@ -125,6 +127,7 @@ __all__ = [
     "TOOL_GENERATE_PAPER_SUMMARY",
     "TOOL_PAPER_OVERVIEW",
     "TOOL_PROJECT_INVENTORY",
+    "TOOL_PROJECT_SUMMARY",
     "TOOL_REFERENCE_CHECK",
     "TOOL_REGISTRY",
     "TOOL_SCAN_AND_LIST",
@@ -153,6 +156,7 @@ ToolName: TypeAlias = Literal[
     "show_source",
     "suggest_reference",
     "writing_check",
+    "project_summary",
 ]
 TOOL_PROJECT_INVENTORY: Final[ToolName] = "project_inventory"
 TOOL_SCAN_AND_LIST: Final[ToolName] = "scan_and_list"
@@ -167,6 +171,7 @@ TOOL_REFERENCE_CHECK: Final[ToolName] = "reference_check"
 TOOL_SHOW_SOURCE: Final[ToolName] = "show_source"
 TOOL_SUGGEST_REFERENCE: Final[ToolName] = "suggest_reference"
 TOOL_WRITING_CHECK: Final[ToolName] = "writing_check"
+TOOL_PROJECT_SUMMARY: Final[ToolName] = "project_summary"
 TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_PROJECT_INVENTORY,
     TOOL_SCAN_AND_LIST,
@@ -181,6 +186,7 @@ TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_SHOW_SOURCE,
     TOOL_SUGGEST_REFERENCE,
     TOOL_WRITING_CHECK,
+    TOOL_PROJECT_SUMMARY,
 )
 
 
@@ -385,6 +391,15 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         generate_paper_summary.run,
         routing=generate_paper_summary.routing,
         workspace_resources=generate_paper_summary.workspace_resources,
+    ),
+    TOOL_PROJECT_SUMMARY: Tool(
+        TOOL_PROJECT_SUMMARY,
+        "Write one report on all the documents of a project with a project "
+        "template, reading every document, and save it to outputs/.",
+        project_summary.parse_settings,
+        project_summary.run,
+        routing=project_summary.routing,
+        workspace_resources=project_summary.workspace_resources,
     ),
 }
 

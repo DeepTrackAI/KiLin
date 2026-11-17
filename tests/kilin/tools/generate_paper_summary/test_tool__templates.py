@@ -352,7 +352,10 @@ class TestListingAndChecking(_Project):
         shutil.copy(SHIPPED_TEMPLATES_DIR / "README.md", self.templates)
         answer = templates_answer(self.templates)
         self.assertIn("folder; `templates/README.md` explains", answer)
-        self.assertNotIn("Lab Overview", answer)
+        # Project report templates are listed apart.
+        self.assertNotIn("Lab Overview", answer.split("whole project")[0])
+        self.assertIn("**Report templates for the whole project**\n\n- "
+                      "**Lab Overview** (`lab_overview.md`)", answer)
         result, choose_paper = self._run("which templates do I have?")
         choose_paper.assert_not_called()
         self.assertEqual(result.answer, answer)

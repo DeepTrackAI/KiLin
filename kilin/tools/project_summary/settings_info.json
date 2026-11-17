@@ -1,0 +1,35 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "template": {
+      "title": "Project report template",
+      "summary": "Chooses the project template the report uses.",
+      "description": "A project template's file name in the project's templates folder, without .md; choose uses the one the question names, the project's only one, or asks which."
+    },
+    "document_tokens": {
+      "title": "Text read per document",
+      "summary": "Sets how much of each document is read.",
+      "description": "The approximate number of tokens read from each document: its card, its opening and the passages closest to what the template asks for. More reads more of each document and takes longer."
+    },
+    "max_documents": {
+      "title": "Most documents",
+      "summary": "Caps the number of documents one report reads.",
+      "description": "Documents beyond this number, in path order, are left out and the report says so."
+    },
+    "repair_attempts": {
+      "title": "Section repairs",
+      "summary": "Sets how often a section that misses its limits is rewritten.",
+      "description": "A section outside its word or item limits is rewritten up to this many times; the report notes any section still outside them."
+    },
+    "confirmation": {
+      "title": "Confirm large reports",
+      "summary": "Controls when the tool asks before reading many documents.",
+      "description": "With when_large, a report needing more model calls than the large-report limit shows an estimated time and offers a shorter reading or cancelling first."
+    },
+    "large_batches": {
+      "title": "Large-report limit",
+      "summary": "Sets how many model calls make a report large.",
+      "description": "A report above this number of model calls (one per document and one per section) asks for confirmation when confirmation is when_large."
+    }
+  }
+}

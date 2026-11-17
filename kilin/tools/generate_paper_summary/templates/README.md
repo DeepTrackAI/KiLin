@@ -90,6 +90,39 @@ report, written from the instruction ("**In one sentence:** ...").
 
 No other `{...}` placeholders are allowed.
 
+## Reports on the whole project
+
+A template with `scope: project` in its front matter is a report on all
+the documents of the project rather than one: KíLín reads every document
+once and writes the report from all of them ("write a project overview",
+"summarize the whole project", or the template's name). Two are shipped:
+`project_overview.md` and `literature_table.md`.
+
+Its sections can be:
+
+- written from all documents, like `## Main Themes (180-260 words)`,
+  citing the documents as `[n]`;
+- **per document**: a condition and what to write for each document that
+  meets it, listed by KíLín with how many documents match:
+
+  ```markdown
+  ## Deep-Learning Models (per document)
+
+  When: the document trains or uses a deep-learning model.
+  Do: name the architecture, the training data and the task (max 40 words).
+  ```
+
+  With `(per document, table)` and `Do: | Dataset | Size | Licence |`,
+  each matching document is a table row. A document is listed only when
+  KíLín found words in it that show it meets the condition; the others are
+  counted as unclear.
+
+Project templates use `**Documents:** {documents}` (the number of
+documents, written by code) and `{key_documents}` in a section's
+instruction (documents chosen from the project, with an item limit), not
+`{citation}` and `{references}`. Per-document sections do not count
+towards `max_words`.
+
 ## When a template cannot be used
 
 KíLín says which line breaks which rule, for example a section limit it

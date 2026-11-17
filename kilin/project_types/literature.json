@@ -291,6 +291,30 @@
         "\\b(?:templates?|reports?|briefings?|summar(?:y|ies)|protocols?|notes|write|prepare|make|generate|create|produce|draft|fill)\\b"
       ]
     },
+    "templated_project_report": {
+      "description": "Write one report on all the documents of the project with a project report template (scope: project, in templates/), reading every document, and save it to outputs/: a project overview, a literature table, or a template of the user's. Examples: \"write a project overview\", \"summarize the whole project\", \"make a literature table of all the papers\", \"wrap up everything in the collection\". When no template is named, the user chooses one. Not for an overview of one topic across the papers (report_generation), nor for one document (paper reports).",
+      "cues": [
+        "\\b(?:summar\\w*|overview|report|tables?|wrap\\s*up|synthes\\w*|review)\\b[^\\n]{0,60}?\\b(?:whole|entire|all)\\s+(?:of\\s+)?(?:the\\s+|this\\s+|my\\s+|our\\s+)?(?:project|collection|papers|documents|articles|sources)\\b",
+        "\\b(?:whole|entire)\\s+(?:project|collection)\\b[^\\n]{0,40}?\\b(?:summar\\w*|overview|report)\\b",
+        "\\bwrap\\s*up\\b[^\\n]{0,40}?\\b(?:everything|project|collection|all)\\b",
+        "\\bproject\\s+(?:report|summary|overview|wrap[\\s-]*up)\\b",
+        "\\b(?:every|each)\\s+(?:paper|document|article)\\b[^\\n]{0,60}?\\b(?:table|report|overview)\\b",
+        "\\bproject\\s+(?:report\\s+)?templates?\\b"
+      ],
+      "requires": [
+        "\\b(?:project|collection|all\\s+(?:the\\s+|of\\s+the\\s+)?(?:papers|documents|articles|sources)|every\\s+(?:paper|document|article)|everything|whole|entire|templates?|table)\\b"
+      ],
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "project_summary",
+        "template": "choose"
+      }
+    },
     "project_inventory": {
       "description": "Questions about the project's files themselves rather than their content: how many papers or files it has, which files or types are included, which could not be read ('how many papers are in this project?', 'list the PDFs in the reviews folder', 'which files have no searchable text?'). Not when files are filtered by what they are about ('how many of the files are related to X?' or 'which files use X?' read the files: topic_listing), and not for whether files mention or contain a word (mention_listing).",
       "history": {

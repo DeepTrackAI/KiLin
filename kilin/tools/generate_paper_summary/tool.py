@@ -857,6 +857,34 @@ def _ambiguous_templates(
     )
 
 
+def _project_templates(folder: Path) -> list[tuple[str, ReportTemplate]]:
+    """Return the valid project report templates in a folder.
+
+    Parameters
+    ----------
+    folder: pathlib.Path
+        The project's templates folder.
+
+    Returns
+    -------
+    list[tuple[str, ReportTemplate]]
+        Each template with ``scope: project`` and its file name, by name.
+
+    """
+
+    if not folder.is_dir():
+        return []
+    found: list[tuple[str, ReportTemplate]] = []
+    for name in template_names(folder):
+        try:
+            template = load_template(name, folder)
+        except ValueError:
+            continue
+        if template.scope != SCOPE_DOCUMENT:
+            found.append((name, template))
+    return found
+
+
 def templates_answer(folder: Path) -> str:
     """Return the answer listing the project's templates.
 
@@ -869,10 +897,11 @@ def templates_answer(folder: Path) -> str:
     -------
     str
         Each valid template's title, file name and description, then the
-        templates that break a rule with the problem, and where the format
-        is explained: the project's ``templates/README.md``, or for a
-        project created before it was installed, the guide shipped with
-        KíLín.
+        project report templates (``scope: project``, used by
+        ``project_summary``), the templates that break a rule with the
+        problem, and where the format is explained: the project's
+        ``templates/README.md``, or for a project created before it was
+        installed, the guide shipped with KíLín.
 
     """
 
@@ -880,6 +909,10 @@ def templates_answer(folder: Path) -> str:
     lines = [
         f"- **{template.title}** (`{name}.md`): {template.description}"
         for name, template, _ in found if template is not None
+    ]
+    projects = [
+        f"- **{template.title}** (`{name}.md`): {template.description}"
+        for name, template in _project_templates(folder)
     ]
     broken = [
         f"- `{name}.md` cannot be used: {error}"
@@ -890,6 +923,14 @@ def templates_answer(folder: Path) -> str:
         else "This project has no usable report template."
     )
     parts = [head, "", *lines]
+    if projects:
+        parts += [
+            "", "**Report templates for the whole project**", "",
+            *projects,
+            "",
+            "These read every document of the project (“write a "
+            "project overview”).",
+        ]
     if broken:
         parts += ["", "**Templates with problems**", "", *broken]
     guide = (

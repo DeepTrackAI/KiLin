@@ -93,8 +93,9 @@ class TestModelCallSettings(unittest.TestCase):
         off = {
             "batch_classify", "batch_review", "filter_results",
             "find_passages", "generate_paper_summary", "writing_check",
+            "project_summary",
         }
-        self.assertEqual(len(TOOL_REGISTRY), 13)
+        self.assertEqual(len(TOOL_REGISTRY), 14)
         for name, tool in TOOL_REGISTRY.items():
             with self.subTest(tool=name):
                 config = importlib.import_module(

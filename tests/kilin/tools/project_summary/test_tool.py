@@ -1,0 +1,342 @@
+"""Test the project_summary tool without a live model.
+
+Check its settings, templates and routing, the parts of the report written
+by code, and full runs on a small project with a stub model.
+
+"""
+
+# pylint: disable=C0115:missing-class-docstring
+# pylint: disable=C0116:missing-function-docstring
+# pylint: disable=C0103:invalid-name
+
+from __future__ import annotations
+
+from pathlib import Path
+import re
+import shutil
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+
+from kilin.answering import _cued_intent
+from kilin.project_type import project_type, with_project_routing
+from kilin.tools._contract import ToolRequest
+from kilin.tools._registry import TOOL_REGISTRY
+from kilin.tools.project_summary import (
+    SHIPPED_TEMPLATES_DIR,
+    TEMPLATE_CHOOSE,
+    ProjectSummarySettings,
+    choose_template,
+    parse_settings,
+    project_templates,
+    routing,
+    run,
+    workspace_resources,
+)
+from kilin.tools.project_summary._documents import ProjectDocument
+from kilin.tools.project_summary._mapping import Check, DocumentNotes
+from kilin.tools.project_summary._reduce import (
+    chosen_numbers,
+    documents_line,
+    documents_list,
+    note_groups,
+    per_document_markdown,
+)
+from kilin.tools._shared.report_templates import TemplateSection
+from tests.kilin.tools._shared._support import chunk
+
+LAB = """---
+title: Lab Overview
+description: What our papers say together.
+max_words: 200
+scope: project
+---
+
+# Headline (max 80 characters)
+
+**Documents:** {documents}
+
+## Themes (3-40 words)
+
+The themes the documents share.
+
+## Models (per document)
+
+When: the document trains a deep-learning model.
+Do: name the architecture (max 6 words).
+
+## Datasets (per document, table)
+
+When: the document uses a public dataset.
+Do: | Dataset | Size |
+
+## Start Here (1-2 items)
+
+The best first reads, chosen from {key_documents}.
+"""
+PAPERS = {
+    "a.md": "Paper A. We trained a U-Net on the public BBBC dataset of 40 "
+            "images.",
+    "b.md": "Paper B. A review of microscopy segmentation methods.",
+    "c.md": "Paper C. We trained a ResNet classifier on private data.",
+}
+
+
+def _model(system: str, prompt: str, tokens: int | None) -> str:
+    """Answer like a model, by the kind of prompt.
+
+    Parameters
+    ----------
+    system: str
+        The system prompt.
+    prompt: str
+        The user prompt.
+    tokens: int | None
+        Unused.
+
+    Returns
+    -------
+    str
+        Notes and checks for a document, a section, chosen numbers or a
+        headline.
+
+    """
+
+    if "Document [1]" in prompt:
+        return (
+            "NOTE 1: Segments nuclei with deep learning.\n"
+            "CHECK A: YES\nQUOTE A: trained a U-Net\nENTRY A: U-Net\n"
+            "CHECK B: YES\nQUOTE B: the public BBBC dataset\n"
+            "ENTRY B: BBBC | 40 images\n"
+        )
+    if "Document [2]" in prompt:
+        return (
+            "NOTE 1: Reviews segmentation methods.\n"
+            "CHECK A: NO\nQUOTE A: A review\nCHECK B: NO\nQUOTE B: x\n"
+        )
+    if "Document [3]" in prompt:
+        return (
+            "NOTE 1: Classifies cells.\n"
+            "CHECK A: YES\nQUOTE A: we trained a transformer\n"
+            "ENTRY A: Transformer\nCHECK B: NO\nQUOTE B: private data\n"
+        )
+    if "Condense" in prompt:
+        return "Deep learning for nuclei [1, 3]. Reviews [2]."
+    if "NUMBERS" in prompt:
+        return "NUMBERS: 2"
+    if "Write the headline" in prompt:
+        return "Deep learning dominates our microscopy papers."
+    return "## Themes\n\nDeep learning for nuclei and cells [1, 3], " \
+        "reviewed in [2]."
+
+
+class _Project(unittest.TestCase):
+
+    def setUp(self) -> None:
+        self.folder = TemporaryDirectory()
+        self.root = Path(self.folder.name)
+        self.templates = self.root / "templates"
+        self.templates.mkdir()
+        (self.templates / "lab_overview.md").write_text(LAB)
+        self.chunks = [
+            chunk(name[0], text, path=name) for name, text in PAPERS.items()
+        ]
+
+    def tearDown(self) -> None:
+        self.folder.cleanup()
+
+    def _run(self, question="write a lab overview of the project",
+             model=_model, confirm=None, **settings):
+        context = SimpleNamespace(
+            project_root=self.root, chunks=self.chunks, progress=Mock(),
+            done=Mock(), trace=SimpleNamespace(emit=Mock()),
+            trace_turn_id=None, ask_model=Mock(side_effect=model),
+            confirm=confirm, choose=None,
+            card=lambda path: {"title": "Study A"} if path.name == "a.md"
+            else None,
+        )
+        values = {"confirmation": "never", **settings}
+        result = run(ProjectSummarySettings(**values),
+                     ToolRequest(question, question), context)
+        return result, context
+
+
+class TestRun(_Project):
+
+    def test_report(self) -> None:
+        result, context = self._run()
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertEqual(result.summary["report"],
+                         "outputs/lab_overview_project_report.md")
+        self.assertTrue(report.startswith(
+            "# Deep learning dominates our microscopy papers\n\n"
+            "**Documents:** 3 documents, listed at the end of the report "
+            "[1–3].\n\n## Themes\n\nDeep learning for nuclei and cells "
+            "[1, 3], reviewed in [2]."
+        ))
+        self.assertIn(
+            "## Models\n\n1 of 3 documents. Unclear: [3] (the quoted words "
+            "are not in the document).\n\n- **Study A**: U-Net [1]",
+            report,
+        )
+        self.assertIn(
+            "## Datasets\n\n1 of 3 documents.\n\n| Document | Dataset | "
+            "Size |\n| --- | --- | --- |\n| Study A [1] | BBBC | 40 images |",
+            report,
+        )
+        self.assertIn("## Start Here\n\n- b.md [2]", report)
+        self.assertTrue(report.rstrip().endswith(
+            "**Documents**\n\n[1] Study A (`a.md`)  \n[2] b.md  \n[3] c.md"
+        ))
+        self.assertTrue(result.summary["valid"])
+        self.assertEqual([e["citation"] for e in result.evidence],
+                         [1, 2, 3])
+        self.assertEqual(result.evidence[0]["path"], Path("a.md"))
+        self.assertIn("*Saved to `outputs/lab_overview_project_report.md`",
+                      result.answer)
+        # Three documents, one section, one choice, one headline.
+        self.assertEqual(context.ask_model.call_count, 6)
+
+    def test_failed_document_and_groups(self) -> None:
+        def model(system, prompt, tokens):
+            if "Document [2]" in prompt:
+                raise RuntimeError("model stopped")
+            return _model(system, prompt, tokens)
+        with patch(
+            "kilin.tools.project_summary._configuration.GROUP_TOKENS", 1
+        ):
+            result, context = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertEqual(result.summary["failed"], [2])
+        self.assertIn("Not read: [2].", report)
+        self.assertIn("Not read: [2].", result.answer)
+        prompts = [c.args[1] for c in context.ask_model.call_args_list]
+        self.assertEqual(sum("Condense" in p for p in prompts), 2)
+
+    def test_cancel_and_quick(self) -> None:
+        result, context = self._run(confirm=Mock(return_value="cancel"),
+                                    confirmation="always")
+        self.assertEqual(result.answer,
+                         "The Lab Overview was not written (cancelled).")
+        context.ask_model.assert_not_called()
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual((plan.items, plan.batches), (3, 6))
+        self.assertIn("3 documents of the project, 1 with a card",
+                      plan.scope)
+        result, _ = self._run(confirm=Mock(return_value="quick"),
+                              confirmation="always")
+        self.assertEqual(result.summary["choice"], "quick")
+
+    def test_no_documents_or_templates(self) -> None:
+        self.chunks = []
+        result, _ = self._run()
+        self.assertIn("no indexed documents", result.answer)
+        (self.templates / "lab_overview.md").unlink()
+        result, _ = self._run()
+        self.assertIn("no project report template", result.answer)
+
+
+class TestTemplates(_Project):
+
+    def test_settings_and_registry(self) -> None:
+        self.assertEqual(parse_settings({}, "x"), ProjectSummarySettings())
+        for bad in ({"template": "../x"}, {"document_tokens": 10},
+                    {"unknown": 1}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                parse_settings(bad, "x")
+        self.assertIn("project_summary", TOOL_REGISTRY)
+        shipped = {r.destination for r in workspace_resources(
+            ProjectSummarySettings())}
+        self.assertEqual(shipped, {"templates/project_overview.md",
+                                   "templates/literature_table.md"})
+
+    def test_shipped_templates(self) -> None:
+        for path in SHIPPED_TEMPLATES_DIR.glob("*.md"):
+            shutil.copy(path, self.templates)
+        found = {name: template for name, template, error in
+                 project_templates(self.templates)}
+        self.assertEqual(set(found),
+                         {"lab_overview", "literature_table",
+                          "project_overview"})
+        self.assertTrue(all(found.values()))
+
+    def test_choose(self) -> None:
+        self.assertEqual(
+            choose_template("write the lab overview", self.templates,
+                            TEMPLATE_CHOOSE).name, "lab_overview",
+        )
+        self.assertEqual(
+            choose_template("summarize the project", self.templates,
+                            TEMPLATE_CHOOSE).name, "lab_overview",
+        )
+        shutil.copy(SHIPPED_TEMPLATES_DIR / "project_overview.md",
+                    self.templates)
+        choose = Mock(return_value=1)
+        self.assertEqual(
+            choose_template("summarize the project", self.templates,
+                            TEMPLATE_CHOOSE, choose).name,
+            "project_overview",
+        )
+        with self.assertRaisesRegex(ValueError, "Which project report"):
+            choose_template("summarize the project", self.templates,
+                            TEMPLATE_CHOOSE)
+
+    def test_routing(self) -> None:
+        found = routing(ProjectSummarySettings(), self.root)
+        self.assertIn("Lab Overview (lab_overview): What our papers say "
+                      "together", found.description)
+        cues = [re.compile(cue, re.I) for cue in found.cues]
+        self.assertTrue(any(c.search("write a lab overview") for c in cues))
+        for type_id in ("literature", "writing"):
+            project = with_project_routing(project_type(type_id), self.root)
+            for question, intent in (
+                ("write a lab overview of the project",
+                 "templated_project_report"),
+                ("summarize the whole project", "templated_project_report"),
+                ("make a literature table of all the papers",
+                 "templated_project_report"),
+                ("wrap up everything in the collection",
+                 "templated_project_report"),
+                ("how many papers are in this project?", None),
+            ):
+                with self.subTest(type_id=type_id, question=question):
+                    self.assertEqual(_cued_intent(project, question),
+                                     intent)
+
+
+class TestReduce(unittest.TestCase):
+
+    def test_code_written_parts(self) -> None:
+        documents = [
+            ProjectDocument(n, Path(f"{n}.md"), f"Doc {n}", (), None)
+            for n in (1, 2, 3, 4)
+        ]
+        section = TemplateSection("Models", when="x", do="y",
+                                  source="per_document")
+        notes = {
+            1: DocumentNotes(1, checks={"Models": Check("yes", entry="A")}),
+            2: DocumentNotes(2, checks={"Models": Check("no")}),
+            3: DocumentNotes(3, checks={"Models": Check(
+                "unclear", why="no answer")}),
+            4: DocumentNotes(4, failure="stopped"),
+        }
+        self.assertEqual(
+            per_document_markdown(section, documents, notes),
+            "1 of 4 documents. Unclear: [3] (no answer). Not read: [4]."
+            "\n\n- **Doc 1**: A [1]",
+        )
+        notes[1] = DocumentNotes(1, checks={"Models": Check("no")})
+        self.assertEqual(per_document_markdown(section, documents, notes),
+                         "None of the 4 documents. Unclear: [3] (no "
+                         "answer). Not read: [4].")
+        self.assertEqual(documents_line(documents[:1]),
+                         "1 document, listed at the end of the report [1].")
+        self.assertIn("[4] Doc 4 (`4.md`)", documents_list(documents))
+        self.assertEqual(chosen_numbers("I pick 4 and 2", 4, 1), [4])
+        groups = note_groups([(1, "a " * 30), (2, "b"), (3, "c")], 10)
+        self.assertEqual([[n for n, _ in g] for g in groups], [[1], [2, 3]])
+
+
+if __name__ == "__main__":
+    unittest.main()

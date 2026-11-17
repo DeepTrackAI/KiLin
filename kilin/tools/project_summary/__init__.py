@@ -1,32 +1,66 @@
-"""Write one report on all the documents of a project, from a template.
+"""Expose the registered ``project_summary`` tool.
 
-The ``project_summary`` tool reads a short excerpt of every document of a
-project, takes notes and per-document checks for a project template
-(``scope: project``), and writes the report from them. Its implementation
-is local to this package.
+It writes one report on all the documents of a project from a project
+template (``scope: project``): it reads a short excerpt of every document,
+takes notes and per-document checks, and writes the report from them. Its
+implementation and configuration are local to this package.
 
 Key Features
 ------------
 
-- **Every document**
+- **Tool execution**
 
-    A map step reads each document once, so the report is not limited to
-    the passages a search finds.
+    Parse validated settings and execute the named tool.
+
+- **Independent defaults**
+
+    Read this package's ``defaults.json`` configuration.
 
 Module Structure
 ----------------
 
-- ``_documents`` and ``_mapping``
+- ``parse_settings`` and ``run``
 
-    The project's documents and their excerpts, and each document's notes
-    and checks.
+    The registry entry points for this tool.
+
+- ``ProjectSummarySettings``, ``routing`` and ``workspace_resources``
+
+    The settings, the routing from the project's templates, and the
+    templates installed in new projects.
+
+- ``_documents``, ``_mapping`` and ``_reduce``
+
+    The project's documents and their excerpts, each document's notes and
+    checks, and the report written from them.
 
 Examples
 --------
->>> import kilin.tools.project_summary
->>> kilin.tools.project_summary.__all__
-[]
+>>> from kilin.tools.project_summary import parse_settings
+>>> callable(parse_settings)
+True
 
 """
 
-__all__: list[str] = []
+from kilin.tools.project_summary.tool import (
+    SHIPPED_TEMPLATES_DIR,
+    TEMPLATE_CHOOSE,
+    ProjectSummarySettings,
+    choose_template,
+    parse_settings,
+    project_templates,
+    routing,
+    run,
+    workspace_resources,
+)
+
+__all__ = [
+    "SHIPPED_TEMPLATES_DIR",
+    "TEMPLATE_CHOOSE",
+    "ProjectSummarySettings",
+    "choose_template",
+    "parse_settings",
+    "project_templates",
+    "routing",
+    "run",
+    "workspace_resources",
+]
