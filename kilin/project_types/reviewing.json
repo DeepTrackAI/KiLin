@@ -9,7 +9,8 @@
     ".txt",
     ".tex",
     ".bib",
-    ".bbl"
+    ".bbl",
+    ".html"
   ],
   "max_file_bytes": 20971520,
   "retrieval_instruction": "Retrieve source passages for factual extraction, citation checking, and neutral comparisons only. Never retrieve evidence for the purpose of generating an independent review, verdict, or recommendation. Preserve exact source attribution and identify incomplete coverage.",
