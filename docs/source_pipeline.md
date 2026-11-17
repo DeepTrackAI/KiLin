@@ -125,7 +125,7 @@ It does **not execute source files or notebook cells**.
 | `sources_pdf.py` | Page-oriented selectable PDF text; page/section coordinates |
 | `sources_docx.py` | Word body text in reading order; Markdown heading sections |
 | `sources_doc.py` | Old Word 97-2003 body text in reading order; no headings |
-| `sources_js.py` | JavaScript line-leading functions, classes, and direct methods; lexical masking and balanced braces prevent spurious declarations and scope crossings |
+| `sources_js.py` | JavaScript top-level functions and classes, class methods as children, comments kept with their declaration |
 | `sources_tex.py` | LaTeX front matter and sections at `\part` to `\subsubsection`; setup before `\begin{document}` left out |
 | `sources_bib.py` | BibTeX entries and macros as independently indexed units with citation keys |
 | `sources_bbl.py` | Compiled LaTeX `\bibitem` references with original line and key provenance |
@@ -147,6 +147,21 @@ information or change the stored-file size policy. The stable
 `tests/kilin/sources/extensions/fixtures/sample.docx` fixture was converted
 from `sample.doc` with LibreOffice and has explicit title/author properties;
 it complements generated tests for specific Word list styles.
+
+**HTML as text or as code.** A project reads its files as code when its
+type's `code_graph` capability is `true`, as for Code projects;
+`"auto"` and `false` read them as text. HTML is the one format read
+differently: as text, `read_source_file` keeps what a reader sees, with
+headings, lists and tables, and leaves out scripts, styles and tags, like
+a Word file; as code, `read_repository_files(..., as_code=True)` keeps the
+file as written and `extract_source_units(..., as_code=True)` uses the
+reader's `extract_code_units`. Citation line numbers refer to the text
+that was indexed, so the reference preview reads the file the same way.
+The index records `html_as_code` for projects that select `.html`, and
+cached text read as code is kept apart, so changing `code_graph` indexes
+HTML again. In the code graph, a page imports the local scripts it loads
+and calls the functions in its inline `on...` handlers; JavaScript
+functions and methods call the plain functions in their bodies.
 
 Literature profiles now allow `.bib` and `.bbl` alongside `.tex`.
 Selected bibliography files are ordinary indexed sources, not hidden
