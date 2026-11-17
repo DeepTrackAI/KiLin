@@ -326,8 +326,10 @@ conversation content and are inserted as text, never executable markup.
 
 Each memory remains a clickable line with its original conversation and
 turn label. Questions align **right** and answers align **left**, just as
-in the chat. Matching turn UUIDs share an active origin, but each question
-or answer has its own link, without a duplicate heading. Selecting a line
+in the chat. Bubbles remain narrower than the panel even for complete,
+long summaries, keeping the two sides visually distinct. Matching turn UUIDs
+share an active origin, but each question or answer has its own link,
+without a duplicate heading. Selecting a line
 opens the recorded conversation and highlights its turn. An archived or
 missing conversation yields a disabled line rather than an invented source
 citation. A branch can provide another active origin of the same turn.

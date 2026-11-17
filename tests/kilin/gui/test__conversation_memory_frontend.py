@@ -231,8 +231,9 @@ console.log("memory settings scope passed");
                       styles)
         self.assertIn('.memory-turn { display: flex; flex-direction: column;',
                       styles)
-        self.assertIn('.memory-message { display: flex; flex-wrap: wrap;',
+        self.assertIn('.memory-message { box-sizing: border-box;',
                       styles)
+        self.assertIn('flex-wrap: wrap; width: fit-content;', styles)
         self.assertIn('.memory-message-preview { flex-basis: 100%;', styles)
         self.assertIn('.memory-message-name { min-width: 0;', styles)
         self.assertIn('text-overflow: ellipsis; white-space: nowrap;',
@@ -245,6 +246,24 @@ console.log("memory settings scope passed");
         self.assertIn('data.event === "memory_summaries"', self.source)
         self.assertNotIn('.memory-turn-messages', styles)
         self.assertNotIn('.memory-turn-link', styles)
+
+    def test_memory_bubbles_retain_alignment_with_long_text(self) -> None:
+        """Constrain bubbles so full summaries do not mask their sides."""
+
+        styles = (_WEB.parent / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('width: fit-content; max-width: 85%;', styles)
+        self.assertIn(
+            '.memory-question { align-self: flex-end; margin-left: auto;',
+            styles,
+        )
+        self.assertIn(
+            '.memory-answer, .memory-other { align-self: flex-start; '
+            'margin-right: auto;',
+            styles,
+        )
+        self.assertIn('overflow-wrap: anywhere; white-space: pre-wrap;',
+                      styles)
+        self.assertIn('font: inherit; text-align: left;', styles)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_no_memory_does_not_add_an_action(self) -> None:

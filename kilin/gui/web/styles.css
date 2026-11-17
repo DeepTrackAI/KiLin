@@ -500,15 +500,15 @@ button:disabled { opacity: .62; cursor: default; }
 .memory-provenance { box-sizing: border-box; width: min(420px, 100%); max-height: min(350px, 55vh); margin: 5px 0 2px; padding: 8px 10px; overflow-y: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); color: var(--text); font-size: 12px; }
 .memory-turn { display: flex; flex-direction: column; gap: 4px; padding: 3px 0; }
 .memory-turn + .memory-turn { padding-top: 7px; }
-.memory-message { display: flex; flex-wrap: wrap; width: fit-content; max-width: 100%; min-height: 26px; padding: 5px 9px; border: 0; border-radius: 9px; font: inherit; text-align: left; line-height: 1.35; cursor: pointer; }
+.memory-message { box-sizing: border-box; display: flex; flex-wrap: wrap; width: fit-content; max-width: 85%; min-height: 26px; padding: 5px 9px; border: 0; border-radius: 9px; font: inherit; text-align: left; line-height: 1.35; cursor: pointer; }
 .memory-message-preview { flex-basis: 100%; margin-top: 3px; opacity: .85; overflow-wrap: anywhere; white-space: pre-wrap; }
 .memory-message-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .memory-message-role { flex: none; white-space: nowrap; }
 .memory-message:hover:not(:disabled) { text-decoration: underline; }
 .memory-message:focus-visible { outline: 2px solid var(--citation); outline-offset: 1px; }
 .memory-message:disabled { opacity: .65; cursor: default; }
-.memory-question { align-self: flex-end; color: var(--user-bubble-text); background: var(--user-bubble); }
-.memory-answer, .memory-other { align-self: flex-start; border: 1px solid var(--line); color: var(--text); background: var(--surface-soft); }
+.memory-question { align-self: flex-end; margin-left: auto; color: var(--user-bubble-text); background: var(--user-bubble); }
+.memory-answer, .memory-other { align-self: flex-start; margin-right: auto; border: 1px solid var(--line); color: var(--text); background: var(--surface-soft); }
 .memory-origin-highlight { outline: 2px solid var(--focus); outline-offset: 5px; }
 .answer-message:focus-visible, .turn.selected .answer-message { outline: 2px solid var(--answer-outline); outline-offset: 5px; border-radius: 2px; }
 /* Fonts with maths tables (macOS, Windows), so big operators and fractions

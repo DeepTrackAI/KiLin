@@ -423,9 +423,11 @@ does not load embeddings or rebuild source indexes. Index changes take
 effect on the next memory synchronization.
 Memory is enabled by default for new Writing, both Brainstorming types,
 and Reviewing projects, and disabled by default for Code and Literature.
-The memory icon beneath an answer opens the remembered question/answer
-labels and short, verbatim text previews. It does not certify these messages
-as sources; older saved answers display only the original labels.
+The memory icon beneath an answer opens remembered messages, with
+questions on the right and answers on the left. On expansion, the GUI reads
+question text from the saved conversation and complete available answer
+summaries from current traces; long text wraps within narrower bubbles.
+These memories do not certify source evidence.
 **Update memory index** explicitly synchronizes eligible saved discussions
 with the loaded
 embedding model; the status shows the last indexed message and embedding
