@@ -47,6 +47,10 @@ Module Structure
     Whether a section cites documents as it must, and its invalid
     citations removed.
 
+- ``support_problem``
+
+    Whether each citation's document mentions what it is cited for.
+
 - ``per_document_markdown``, ``documents_line`` and ``documents_list``
 
     The parts written by code.
@@ -82,6 +86,7 @@ __all__ = [
     "chosen_numbers",
     "citation_problem",
     "clean_citations",
+    "support_problem",
     "condense_prompt",
     "documents_line",
     "documents_list",
@@ -109,6 +114,22 @@ _SYSTEM: Final[str] = (
 # "Documents 1 and 2").
 _BRACKETS = re.compile(r"\[([^\[\]]{1,40})\]")
 _DOCUMENT_WORDS = re.compile(r"\bDocuments?\s+\d", re.IGNORECASE)
+# Words compared between a cited phrase and the cited document's notes:
+# four or more letters, compared by their first five ("genomic" and
+# "genome-wide" match), without words that say nothing of a topic.
+_TOPIC_WORD = re.compile(r"[^\W\d_]{4,}")
+_STEM: Final[int] = 5
+_PLAIN_WORDS: Final[frozenset[str]] = frozenset({
+    "about", "across", "also", "along", "among", "based", "both", "each",
+    "from", "have", "into", "more", "most", "other", "such", "than",
+    "that", "their", "them", "these", "they", "this", "those", "through",
+    "using", "used", "when", "where", "which", "while", "with", "within",
+    "document", "documents", "paper", "papers", "study", "studies",
+    "focus", "focuses", "main", "different", "differences", "several",
+})
+# A cited phrase is checked when it has this many distinctive words; it
+# is flagged when another document shares this many of them.
+_SUPPORT_WORDS_MIN: Final[int] = 2
 _NUMBERS = re.compile(r"\d+")
 # Unclear documents named in a per-document section's count line.
 _UNCLEAR_NAMED: Final[int] = 10
@@ -517,6 +538,89 @@ def clean_citations(content: str, documents: int) -> tuple[str, int]:
 
     cleaned = re.sub(r"\s*\[([^\[\]]{1,40})\]", drop, content)
     return cleaned, removed
+
+
+def _stems(text: str) -> set[str]:
+    """Return the topic words of a text, by their first letters.
+
+    Parameters
+    ----------
+    text: str
+        A phrase, or a document's title and notes.
+
+    Returns
+    -------
+    set[str]
+        The first ``_STEM`` letters, in lower case, of its words of four or
+        more letters that are not in ``_PLAIN_WORDS``.
+
+    """
+
+    return {
+        word.casefold()[:_STEM] for word in _TOPIC_WORD.findall(text)
+        if word.casefold() not in _PLAIN_WORDS
+    }
+
+
+def support_problem(content: str, texts: dict[int, str]) -> str:
+    """Return a citation whose document does not mention what it cites.
+
+    Parameters
+    ----------
+    content: str
+        A section written from the notes.
+    texts: dict[int, str]
+        Each document's title, notes and entries, by number.
+
+    Returns
+    -------
+    str
+        For the first citation whose phrase (the words since the previous
+        citation or the start of the sentence) has at least
+        ``_SUPPORT_WORDS_MIN`` distinctive words, none of them in the cited
+        document's text, while another document has at least
+        ``_SUPPORT_WORDS_MIN``: a problem naming the phrase, the citation
+        and the document that may be meant. Words in more than half the
+        documents are not distinctive. ``""`` when every citation is
+        supported or cannot be judged.
+
+    """
+
+    stems = {number: _stems(text) for number, text in texts.items()}
+    if len(stems) < 2:
+        return ""
+    common = {
+        stem for stem in set().union(*stems.values())
+        if sum(stem in found for found in stems.values()) * 2 > len(stems)
+    }
+    for sentence in re.split(r"(?<=[.!?])\s+", content):
+        start = 0
+        for match in _BRACKETS.finditer(sentence):
+            phrase = sentence[start:match.start()]
+            start = match.end()
+            cited = _cited(match.group(1), max(stems, default=0))
+            words = _stems(phrase) - common
+            if not cited or len(words) < _SUPPORT_WORDS_MIN:
+                continue
+            for number in cited:
+                if words & stems.get(number, set()):
+                    continue
+                best = max(
+                    (n for n in stems if n not in cited),
+                    key=lambda n: len(words & stems[n]),
+                    default=None,
+                )
+                if best is None or len(words & stems[best]) < (
+                    _SUPPORT_WORDS_MIN
+                ):
+                    continue
+                shown = " ".join(phrase.strip(" ,;:").split()[-8:])
+                return (
+                    f"“{shown}” cites [{number}], whose notes do not "
+                    f"mention it; it may be [{best}]. Cite the document "
+                    "each statement comes from."
+                )
+    return ""
 
 
 def per_document_markdown(

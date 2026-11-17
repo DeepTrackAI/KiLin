@@ -118,6 +118,7 @@ from kilin.tools.project_summary._reduce import (
     chosen_numbers,
     citation_problem,
     clean_citations,
+    support_problem,
     condense_prompt,
     documents_line,
     documents_list,
@@ -643,10 +644,11 @@ def _write_section(
     -------
     str
         The section's content; when the notes do not fit one call, written
-        from each group's condensed facts. A section outside its limits or
-        citing documents wrongly (``citation_problem``) is rewritten up to
-        ``repair_attempts`` times; brackets still citing no document are
-        then removed.
+        from each group's condensed facts. A section outside its limits,
+        citing documents wrongly (``citation_problem``) or citing a document
+        that does not mention what it is cited for (``support_problem``) is
+        rewritten up to ``repair_attempts`` times; brackets still citing no
+        document are then removed.
 
     """
 
@@ -670,6 +672,14 @@ def _write_section(
         *section_prompt(template, section, text, len(documents)), None
     ), section)
     cite = bool(lines) and not section.inline
+    titles = {document.number: document.title for document in documents}
+    texts = {
+        number: " ".join((
+            titles.get(number, ""), *found.notes.values(),
+            *(f"{c.entry} {' '.join(c.cells)}" for c in found.checks.values()),
+        ))
+        for number, found in notes.items() if not found.failure
+    }
 
     def problem_of(text: str) -> str:
         """Return the section's first problem, or ``""``.
@@ -682,12 +692,17 @@ def _write_section(
         Returns
         -------
         str
-            Its citation problem, else its length or form problem.
+            Its citation problem, else a citation of a document that does
+            not mention what it is cited for, else its length or form
+            problem.
 
         """
 
-        return citation_problem(text, len(documents), cite) or (
-            section_problem(section, text, _config.TEMPLATE_RULES) or ""
+        return (
+            citation_problem(text, len(documents), cite)
+            or support_problem(text, texts)
+            or section_problem(section, text, _config.TEMPLATE_RULES)
+            or ""
         )
 
     for _ in range(settings.repair_attempts):
@@ -702,7 +717,9 @@ def _write_section(
         failures.append(
             f"{section.name}: {removed} citation(s) of no document removed."
         )
-    left = citation_problem(content, len(documents), cite)
+    left = citation_problem(content, len(documents), cite) or (
+        support_problem(content, texts)
+    )
     if left:
         failures.append(f"{section.name}: {left}")
     return content

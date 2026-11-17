@@ -40,6 +40,7 @@ from kilin.tools.project_summary._reduce import (
     chosen_numbers,
     citation_problem,
     clean_citations,
+    support_problem,
     documents_line,
     documents_list,
     note_groups,
@@ -245,6 +246,23 @@ class TestRun(_Project):
         self.assertIn("names documents in the text", result.answer)
         self.assertFalse(result.summary["valid"])
 
+    def test_citation_of_the_wrong_document_is_repaired(self) -> None:
+        def model(system, prompt, tokens):
+            if "Section: Themes" in prompt:
+                return ("U-Net models segment nuclei [1], and transformers "
+                        "classify cells [2].")
+            if "has a problem" in prompt:
+                return ("U-Net models segment nuclei [1], and transformers "
+                        "classify cells [3].")
+            return _model(system, prompt, tokens)
+        result, context = self._run(model=model)
+        fix = next(c.args[1] for c in context.ask_model.call_args_list
+                   if "has a problem" in c.args[1])
+        self.assertIn("“and transformers classify cells” cites [2], whose "
+                      "notes do not mention it; it may be [3]", fix)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertIn("classify cells [3].", report)
+
     def test_cancel_and_quick(self) -> None:
         result, context = self._run(confirm=Mock(return_value="cancel"),
                                     confirmation="always")
@@ -383,6 +401,39 @@ class TestReduce(unittest.TestCase):
         self.assertEqual(
             clean_citations("A [n1], b [2] and c [7].", 5),
             ("A, b [2] and c.", 2),
+        )
+        # A real report's Overview: [4] is BRAPH 2, the genomics is [5].
+        texts = {
+            1: "BRAPH: A graph theory software for the analysis of brain "
+               "connectivity; freeware MATLAB, network measures",
+            2: "Computational memory capacity predicts aging; reservoir "
+               "computing on brain connectivity, Cam-CAN",
+            3: "Deep-Learning Investigation of Vibrational Raman Spectra "
+               "for Plant-Stress Analysis; variational autoencoder",
+            4: "BRAPH 2 framework for network analyses in neurosciences; "
+               "Genesis compiler, distributions, brain connectivity",
+            5: "Genomic results for psychiatric disorders and brain cell "
+               "types; genome-wide association studies, schizophrenia",
+        }
+        overview = (
+            "The table covers graph theory software for brain connectivity "
+            "[1], computational memory capacity in aging [2], deep learning "
+            "for plant stress analysis [3], and genomic analysis of "
+            "psychiatric disorders [4]."
+        )
+        self.assertIn(
+            "“and genomic analysis of psychiatric disorders” cites [4], "
+            "whose notes do not mention it; it may be [5]",
+            support_problem(overview, texts),
+        )
+        self.assertEqual(
+            support_problem(overview.replace("[4]", "[5]"), texts), ""
+        )
+        # Too few distinctive words to judge, or no better document.
+        self.assertEqual(support_problem("As shown [4].", texts), "")
+        self.assertEqual(
+            support_problem("Quantum chromodynamics lattices [4].", texts),
+            "",
         )
         groups = note_groups([(1, "a " * 30), (2, "b"), (3, "c")], 10)
         self.assertEqual([[n for n, _ in g] for g in groups], [[1], [2, 3]])

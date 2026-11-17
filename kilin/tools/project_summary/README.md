@@ -98,7 +98,14 @@ document whose call fails is reported as not read; the others go on.
   the documents lack unless the notes show it. Code then checks each
   section: every bracket must cite existing documents (`[n1]` or `[7]` of
   five does not), documents must not be named in the text ("Document 4"),
-  and a section written from notes must cite at least one document. A
+  and a section written from notes must cite at least one document. Each
+  citation must also be supported: when the words it is cited for (since
+  the previous citation) share no distinctive word with the cited
+  document's title, notes and entries, while another document shares at
+  least two, the section is sent back saying which document it may be
+  ("“genomic analysis of psychiatric disorders” cites [4] … it may be
+  [5]"); words found in more than half the documents are not
+  distinctive, and code never changes a citation itself. A
   section with such a problem, or outside its limits, is rewritten up to
   `REPAIR_ATTEMPTS` times; brackets still citing no document are then
   removed, and what remains wrong is listed under the report.
