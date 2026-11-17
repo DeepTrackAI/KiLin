@@ -48,6 +48,31 @@ class TestCitationIdentifierValidation(unittest.TestCase):
             (3, 0),
         )
 
+    def test_worded_citations_become_numbers(self) -> None:
+        """Write "[source 3]" as "[3]" so the answer's links work."""
+        for text, expected in (
+            ("Called here [source 3].", "Called here [3]."),
+            ("See [Source 3] and [sources 3, 6].", "See [3] and [3, 6]."),
+            ("Both [sources 1 and 2].", "Both [1, 2]."),
+            ("Kept [2] and [1, 3].", "Kept [2] and [1, 3]."),
+            ("No number [source].", "No number [source]."),
+            ("A list [a, b] stays.", "A list [a, b] stays."),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(rag._numbered_citations(text), expected)
+
+    def test_saved_answer_has_numbered_citations(self) -> None:
+        """The saved answer, which clients link, has plain numbers."""
+        session = _session()
+        session.chat_session.reply.return_value = "It is called [source 1]."
+        session.chat_session.last_finish_reason = "stop"
+        with _answer_patches(session, _intent()):
+            session.ask("Who calls f?", use_router=False)
+        self.assertEqual(session.turns[-1].answer, "It is called [1].")
+        self.assertNotIn(
+            "invalid_citations", session.turns[-1].parameters
+        )
+
     def test_citations_inside_thinking_are_not_answer_citations(
         self,
     ) -> None:

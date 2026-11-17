@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch, sentinel
 from kilin import rag
+from kilin.chunking import Chunk
 from kilin.conversation_format import (
     CONVERSATION_SESSION_KEY,
     new_conversation_session,
@@ -465,6 +466,37 @@ class TestRAGLifecycle(unittest.TestCase):
                 self.assertIs(session._reads_as_code(), as_code)
                 self.assertIs(
                     session._index_metadata()["html_as_code"], as_code
+                )
+
+    def test_projects_reading_js_or_r_record_code_path_languages(
+        self,
+    ) -> None:
+        """Only projects with JS or R passages re-index for their paths."""
+        session = _session()
+        for extensions, recorded in (
+            ((".pdf", ".md"), False),
+            ((".py", ".m"), False),
+            ((".py", ".js"), True),
+            ((".r",), True),
+        ):
+            with self.subTest(extensions=extensions):
+                session.project.profile.extensions = extensions
+                self.assertIs(
+                    "code_path_languages" in session._index_metadata(),
+                    recorded,
+                )
+
+    def test_js_and_r_passages_are_searched_with_their_path(self) -> None:
+        for kind, path in (("js_function", "web/app.js"),
+                           ("r_function", "r/calc.R")):
+            with self.subTest(kind=kind):
+                chunk = Chunk(
+                    identifier="c1", path=Path(path), text="body",
+                    start_line=1, end_line=2, kind=kind, symbol="f",
+                    section=None,
+                )
+                self.assertTrue(
+                    rag._retrieval_text(chunk, {}).startswith(path)
                 )
 
 
