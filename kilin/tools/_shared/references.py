@@ -151,7 +151,8 @@ _LONE_NUMBER: Final[re.Pattern[str]] = re.compile(
 _RIGHT_COLUMN_SHARE: Final[float] = 0.25
 # Running heads and footers: "PLOS ONE | https://...", "12 / 25".
 _FURNITURE: Final[re.Pattern[str]] = re.compile(
-    r"\|\s*https?://|\b\d+\s*/\s*\d+\s*$|^\s*\d+\s+of\s+\d+(?!\d)"
+    r"\|\s*https?://|(?<![\w./])\d+\s*/\s*\d+\s*$"
+    r"|^\s*\d+\s+of\s+\d+(?!\d)"
 )
 # Headings after the reference list, where it ends: alone on the line, or
 # followed by text ("Acknowledgements This work ..."). Not "Methods", which
@@ -645,7 +646,8 @@ def numbered_reference_entries(
         ("12. ...", "[12] ...") and no number stands alone, a new entry
         starts at each number; otherwise (as two-column PDFs print them)
         also after a line that ends an entry (a year, volume and pages, a
-        PMID, or a DOI), unless the next line is a DOI or PMID, and at a
+        PMID, or a DOI), unless the next line is a DOI or PMID (a URL or
+        DOI broken over lines is joined without a space), and at a
         line that starts like an author-year entry ("Smith, J. A., ...
         (2020)", "Smith JA, Lee B, ...", "Hunter JD. 2007.") once the entry
         before has its year; in a list that prints no numbers and has at
@@ -753,7 +755,7 @@ def numbered_reference_entries(
         if isinstance(item, int):
             kept.append(item)
             continue
-        joined = re.sub(r"-\s+(?=[a-z])", "", " ".join(item[1]))
+        joined = re.sub(r"-\s+(?=[a-z])", "", _lines_joined(item[1]))
         joined = " ".join(joined.split())
         if (
             len(joined.split()) >= layout.entry_min_words
@@ -792,6 +794,32 @@ def numbered_reference_entries(
             for position, entry in enumerate(cleaned, start=1)
         ]
     return cleaned
+
+
+def _lines_joined(lines: Sequence[str]) -> str:
+    """Return an entry's lines as one text.
+
+    Parameters
+    ----------
+    lines: Sequence[str]
+        The entry's lines, in order.
+
+    Returns
+    -------
+    str
+        The lines joined by spaces, except after a line that ends inside
+        a URL or DOI ("https://doi." / "org/10.1101/...", "10.1038/" /
+        "s41467-...", "j.neuron." / "2019.04.034"), which the next line
+        continues without one.
+
+    """
+
+    text = ""
+    for line in lines:
+        if text and not _BROKEN_URL.search(text):
+            text += " "
+        text += line.strip()
+    return text
 
 
 def _accents_joined(line: str) -> str:

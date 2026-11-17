@@ -255,6 +255,35 @@ class TestReferenceEntries(unittest.TestCase):
         self.assertTrue(entries[3].text.endswith("p. 87–90."))
         self.assertIn("Genome-wide atlas", entries[4].text)
 
+    def test_dois_broken_over_lines(self) -> None:
+        # A DOI broken over lines is joined without a space, and a line
+        # ending in a DOI ("10.1101/447995") is not a "12 / 25" footer.
+        text = (
+            "References\n"
+            "Bates AS, Costa M. 2020. The Natverse. eLife 9:e53350. DOI:\n"
+            "https://doi.org/10.\n"
+            "7554/eLife.53350, PMID: 32286229\n"
+            "Jin M, Weber SJ. 2019. SMART. bioRxiv. DOI: https://doi.org/\n"
+            "10.1101/727529\n"
+            "Kunst M, Baier H. 2019. An atlas. Neuron 103:21–38. DOI:\n"
+            "https://doi.org/10.1016/j.neuron.\n"
+            "2019.04.034, PMID: 31147152\n"
+            "Shamash P, Steinmetz N. 2018. A tool for electrode tracks.\n"
+            "bioRxiv. DOI: https://doi.org/10.1101/447995\n"
+            "12 / 25\n"
+        )
+        entries = reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual(len(entries), 4)
+        for entry, doi in zip(entries, (
+            "https://doi.org/10.7554/eLife.53350,",
+            "https://doi.org/10.1101/727529",
+            "https://doi.org/10.1016/j.neuron.2019.04.034,",
+            "https://doi.org/10.1101/447995",
+        )):
+            with self.subTest(doi=doi):
+                self.assertIn(doi, entry)
+        self.assertNotIn("12 / 25", entries[-1])
+
     def test_explicit_short_references_use_opt_in_filter(self) -> None:
         text = (
             "References\n"
@@ -307,7 +336,8 @@ class TestReferenceEntries(unittest.TestCase):
                 (8, "Baggio", True),
             ],
         )
-        self.assertIn("2013. 07.003 PMID", entries[0].text)
+        # The DOI broken over lines is joined without a space.
+        self.assertIn("j.neuro.2013.07.003 PMID", entries[0].text)
 
     def test_numbers_inside_an_entry_start_no_entry(self) -> None:
         # A page range wrapped after its dash ("919–\n927.") looks like an
