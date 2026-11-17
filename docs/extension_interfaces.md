@@ -134,7 +134,11 @@ for explicit import exceptions and the limits of these checks.
 relative_path)` to load non-UTF-8-backed content (as the PDF and Word
 `.doc`/`.docx` readers do). An extractor implements
 `extract_source_units(...)` using the signature
-expected by the dispatcher. Returned records must use consistent relative
+expected by the dispatcher. A format that can be read either as text or as
+code, such as HTML, also implements `extract_code_units(source_file)`:
+when the project reads files as code (`as_code=True`), its
+`read_source_file` is skipped, the file is kept as written, and
+`extract_code_units` splits it. Returned records must use consistent relative
 paths, exact text, inclusive source-coordinate ranges and valid symbol,
 section and cell fields. Reading a file does not execute its code.
 
