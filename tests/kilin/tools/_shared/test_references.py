@@ -197,6 +197,25 @@ class TestReferenceEntries(unittest.TestCase):
         self.assertEqual(len(entries), 3)
         self.assertTrue(entries[1].startswith("Liu Y"))
 
+    def test_author_year_entries_start_at_their_head(self) -> None:
+        # APA entries end with volume and pages, which end no entry; the
+        # next "Surname, I. ... (year)" line starts one, but not a wrapped
+        # author list, before the entry has its year.
+        text = (
+            "References\n"
+            "Lee, B., Wu, C., Ode, D., Gray, E., Brown, F., Black, G.,\n"
+            "White, H., & Green, I. (2019). Networks. Nature, 521,\n"
+            "436–444.\n"
+            "Smith, J. A., & Lee, B. (2020a). Graphs of brains in\n"
+            "health and disease. Brain, 12, 3–4.\n"
+            "van den Heuvel, M. P. (2011). Rich clubs. J Neurosci, 31.\n"
+        )
+        entries = reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual(len(entries), 3)
+        self.assertTrue(entries[0].endswith("Nature, 521, 436–444."))
+        self.assertTrue(entries[1].startswith("Smith, J. A., & Lee"))
+        self.assertTrue(entries[2].startswith("van den Heuvel"))
+
     def test_explicit_short_references_use_opt_in_filter(self) -> None:
         text = (
             "References\n"

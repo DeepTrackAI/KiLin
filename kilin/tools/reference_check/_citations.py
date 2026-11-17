@@ -1,9 +1,9 @@
-"""Find a paper's numbered in-text citations and their citing sentences.
+"""Find a paper's in-text citations and their citing sentences.
 
 Private to ``reference_check``. The checker needs, for each cited
 reference, the sentence that cites it. This module finds numbered
 citation markers in the paper's body (the passages before its reference
-list) and maps each to reference numbers. Two styles are supported:
+list) and maps each to reference numbers. These styles are supported:
 
 1. **Brackets**: ``[3]``, ``[3,4]``, ``[1–4]``, ``[2, 5–7]``. Brackets are
    unambiguous, so only numbers outside 1–``max_range`` are rejected.
@@ -22,10 +22,17 @@ list) and maps each to reference numbers. Two styles are supported:
 3. **Written out** in any style: ``Ref. 50``, ``refs. 12,13``, ``refs 8,19``.
    These need no confirmation.
 
-Author-year citations ("Smith et al., 2020") are not recognised; a paper
-using them has style ``none``. Numbering is not assumed to follow first
-appearance: journals print figure legends that cite Methods references
-early.
+4. **Author-year** (``(Smith et al., 2020; Lee 2019a)``, ``Smith and Lee
+   (2020)``), for a list that prints no numbers: each cited work is
+   resolved to the entry with its first author and year
+   (``kilin.tools._shared.author_year``), whose inferred number it cites.
+   The style is used when more of these markers resolve than numbered
+   markers are found. Works matching several entries are ambiguous and
+   cite none; works matching none are reported when the form leaves no
+   doubt ("et al.", two authors, or beside a resolved work).
+
+Numbering is not assumed to follow first appearance: journals print
+figure legends that cite Methods references early.
 
 Each reference number is the entry's position in the reference list, so
 the caller must check that the list was split correctly: numbers cited
@@ -49,7 +56,8 @@ Key Features
 
 - **Diagnostics**
 
-    Reference numbers never cited, and numbers cited beyond the list.
+    Reference numbers never cited, numbers cited beyond the list, and
+    author-year citations that are ambiguous or not in the list.
 
 Module Structure
 ----------------
@@ -89,10 +97,12 @@ import statistics
 from typing import Final
 
 from kilin.chunking import Chunk
+from kilin.tools._shared.author_year import entry_keys, find_markers, resolve
 from kilin.tools._shared.sentences import Sentence, split_sentences
 
 __all__ = [
     "LINE_START",
+    "STYLE_AUTHOR_YEAR",
     "STYLE_BRACKETS",
     "STYLE_NONE",
     "STYLE_PARENTHESES",
@@ -111,6 +121,7 @@ STYLE_BRACKETS: Final[str] = "brackets"
 STYLE_PARENTHESES: Final[str] = "parentheses"
 STYLE_SUPERSCRIPT: Final[str] = "superscript"
 STYLE_WRITTEN: Final[str] = "written"
+STYLE_AUTHOR_YEAR: Final[str] = "author_year"
 STYLE_NONE: Final[str] = "none"
 
 # A list of numbers and ranges: "3", "3,4", "1–4", "2, 5–7".
@@ -279,7 +290,8 @@ class Citation:
     numbers: tuple[int, ...]
         The cited reference numbers, in the marker's order.
     marker: str
-        The marker's numbers as printed ("2, 5–7").
+        The marker's numbers as printed ("2, 5–7"), or an author-year
+        marker as printed ("(Smith et al., 2020)").
     sentence: Sentence
         The sentence it appears in.
     start: int
@@ -296,6 +308,19 @@ class Citation:
     start: int = 0
     end: int = 0
 
+    @property
+    def author_year(self) -> bool:
+        """Whether the marker cites by author and year.
+
+        Returns
+        -------
+        bool
+            True for "(Smith et al., 2020)", False for numbered markers.
+
+        """
+
+        return bool(self.marker) and not self.marker[0].isdigit()
+
 
 @dataclass(frozen=True, slots=True)
 class CitationScan:
@@ -305,7 +330,7 @@ class CitationScan:
     ----------
     style: str
         ``brackets``, ``parentheses``, ``superscript``, ``written``,
-        or ``none``.
+        ``author_year`` or ``none``.
     citations: tuple[Citation, ...]
         In reading order.
     uncited: tuple[int, ...]
@@ -314,6 +339,12 @@ class CitationScan:
         Cited numbers larger than the entry count: usually entries merged
         when the list was split, so later numbers may point to the wrong
         entry.
+    ambiguous: tuple[tuple[str, tuple[int, ...]], ...]
+        Author-year works matching several entries ("Smith, 2020" with two
+        Smith 2020 entries and no suffix), with those entries' numbers,
+        each once.
+    unresolved: tuple[str, ...]
+        Author-year works matching no entry, each once.
 
     """
 
@@ -321,6 +352,8 @@ class CitationScan:
     citations: tuple[Citation, ...]
     uncited: tuple[int, ...]
     beyond_list: tuple[int, ...]
+    ambiguous: tuple[tuple[str, tuple[int, ...]], ...] = ()
+    unresolved: tuple[str, ...] = ()
 
 
 def cited_numbers(marker: str, max_range: int) -> tuple[int, ...] | None:
@@ -453,8 +486,9 @@ def find_citations(
     entry_count: int,
     superscripts: Superscripts | None,
     rules: CitationRules,
+    entries: Sequence[tuple[int, str]] = (),
 ) -> CitationScan:
-    """Find every numbered citation in a paper's body.
+    """Find every citation in a paper's body.
 
     Parameters
     ----------
@@ -467,12 +501,19 @@ def find_citations(
         is not a PDF, so superscripts cannot be confirmed.
     rules: CitationRules
         The caller's thresholds.
+    entries: Sequence[tuple[int, str]], optional
+        The reference list's numbers and texts, given when the list prints
+        no numbers, so author-year citations can be resolved. Defaults to
+        none.
 
     Returns
     -------
     CitationScan
-        Bracketed (or, when they are more, parenthesized) markers when
-        there are at least ``rules.bracket_markers_min`` of them, or any
+        Author-year citations (style ``author_year``) when ``entries`` are
+        given and more author-year markers resolve than bracketed or
+        parenthesized markers are found; otherwise bracketed (or, when
+        they are more, parenthesized) markers when there are at least
+        ``rules.bracket_markers_min`` of them, or any
         when there are no superscripts to look for; otherwise
         font-confirmed superscripts; otherwise written-out citations
         ("Ref. 50") with style ``written``; otherwise style ``none``.
@@ -487,6 +528,10 @@ def find_citations(
         for s in sentences
         for match in _PARENTHESIS.finditer(s.text)
     )
+    if entries:
+        scan = _author_year(sentences, entries)
+        if len(scan.citations) > max(brackets, parentheses):
+            return scan
     superscript_found = (
         _superscripts(sentences, superscripts, rules) if superscripts else []
     )
@@ -586,6 +631,69 @@ def find_citations(
             if number not in cited
         ),
         beyond_list=tuple(sorted(n for n in cited if n > entry_count)),
+    )
+
+
+def _author_year(
+    sentences: Sequence[Sentence], entries: Sequence[tuple[int, str]]
+) -> CitationScan:
+    """Find the author-year citations of a paper with an unnumbered list.
+
+    Parameters
+    ----------
+    sentences: Sequence[Sentence]
+        The paper's body, in sentences.
+    entries: Sequence[tuple[int, str]]
+        The reference list's numbers and texts.
+
+    Returns
+    -------
+    CitationScan
+        Style ``author_year``: one citation per marker with at least one
+        work resolved to a single entry, citing those entries. Ambiguous
+        works, and works resolved to no entry that are surely citations
+        ("et al.", two authors, or in a marker with a resolved work), are
+        listed; entries only an ambiguous work may cite are not counted
+        as uncited.
+
+    """
+
+    keys = entry_keys(entries)
+    citations: list[Citation] = []
+    ambiguous: dict[str, tuple[int, ...]] = {}
+    unresolved: dict[str, None] = {}
+    for sentence in sentences:
+        for marker in find_markers(sentence.text):
+            numbers: list[int] = []
+            missing: list[str] = []
+            for work in marker.works:
+                found = resolve(work, keys)
+                if len(found) == 1:
+                    numbers.append(found[0])
+                elif found:
+                    ambiguous.setdefault(work.cited_as, found)
+                elif work.authors > 1:
+                    unresolved[work.cited_as] = None
+                else:
+                    missing.append(work.cited_as)
+            if numbers:
+                unresolved.update(dict.fromkeys(missing))
+                citations.append(Citation(
+                    tuple(dict.fromkeys(numbers)), marker.text, sentence,
+                    marker.start, marker.end,
+                ))
+    cited = {number for citation in citations for number in citation.numbers}
+    maybe = {number for found in ambiguous.values() for number in found}
+    return CitationScan(
+        style=STYLE_AUTHOR_YEAR,
+        citations=tuple(citations),
+        uncited=tuple(
+            number for number, _ in entries
+            if number not in cited and number not in maybe
+        ),
+        beyond_list=(),
+        ambiguous=tuple(ambiguous.items()),
+        unresolved=tuple(unresolved),
     )
 
 

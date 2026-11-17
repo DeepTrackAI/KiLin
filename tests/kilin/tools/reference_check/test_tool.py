@@ -53,6 +53,25 @@ network analyses in neurosciences. bioRxiv (2025).
 436–444 (2015).
 5. Never, C. A reference the text does not cite at all. Cell 1, 2 (2020).
 """
+# The same paper in an author-year style, with an alphabetical list.
+AUTHOR_YEAR_PAPER = """Introduction
+Brain networks can be analysed with graph theory (Sporns 2005). Software
+such as BRAPH implements these measures (Mijalkov et al., 2017; Chang et
+al., 2025). Deep learning helps too (LeCun et al., 2015).
+Methods
+We followed the protocol of Mijalkov et al. (2017). Others disagree (Gray
+and Doe 2019).
+References
+Chang, Y.-W., Tiunn, I., & Zufiria, B. (2025). BRAPH 2: a flexible
+framework for network analyses in neurosciences. bioRxiv, 1, 2.
+LeCun, Y., Bengio, Y., & Hinton, G. (2015). Deep learning. Nature, 521,
+436–444.
+Mijalkov, M., Kakaei, E., & Pereira, J. B. (2017). BRAPH: A graph theory
+software for the analysis of brain connectivity. PLoS ONE, 12, e0178798.
+Never, C. (2020). A reference the text does not cite at all. Cell, 1, 2.
+Sporns, O. (2005). The human connectome: a structural description. PLoS
+Comput. Biol., 1, e42.
+"""
 BRAPH = """BRAPH: A graph theory software for the analysis of brain
 connectivity
 Mite Mijalkov, Ehsan Kakaei, Joana B. Pereira
@@ -681,6 +700,38 @@ class TestReferenceCheckRun(unittest.TestCase):
         self.assertEqual(result.summary["citation_style"], "written")
         self.assertEqual(result.summary["uncited"], [5])
         self.assertIn("written-out citations", result.answer)
+
+    def test_author_year_citations(self) -> None:
+        self.chunks[0] = chunk("p1", AUTHOR_YEAR_PAPER, path="paper.md")
+        result, context = self._run(
+            (Path("paper.md"), "named", False), max_listed=5
+        )
+        summary = result.summary
+        self.assertEqual(summary["references"], 5)
+        self.assertEqual(summary["numbers_printed"], 0)
+        self.assertEqual(summary["citation_style"], "author_year")
+        self.assertEqual(summary["uncited"], [4])
+        self.assertEqual(summary["unresolved"], ["Gray and Doe, 2019"])
+        self.assertIn("author-year citations in the text", result.answer)
+        self.assertIn("Never cited in the text: 4", result.answer)
+        self.assertIn(
+            "Cited but not in the reference list: Gray and Doe, 2019",
+            result.answer,
+        )
+        # The model sees the citation as printed, with its numbers.
+        prompt = next(
+            call.args[1] for call in context.ask_model.call_args_list
+            if "citing reference [3]" in call.args[1]
+        )
+        self.assertIn(
+            "(Mijalkov et al., 2017; Chang et al., 2025) [3,1]", prompt
+        )
+        report = (self.root / summary["report"]).read_text(encoding="utf-8")
+        section = report[report.index("### 3."):report.index("### 4.")]
+        self.assertIn("**Mijalkov et al. (2017)**", section)
+        self.assertIn(
+            "**(Mijalkov et al., 2017; Chang et al., 2025)**", section
+        )
 
     def test_quoted_passages_are_evidence(self) -> None:
         result, _ = self._run(

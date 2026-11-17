@@ -180,6 +180,17 @@ _NUMBER_STEP_MAX: Final[int] = 3
 _BROKEN_URL: Final[re.Pattern[str]] = re.compile(
     r"(?:https?://|doi\.\s*org/|\b10\.\d{4,9}/)\S*[./_-]\s*$"
 )
+# The start of an author-year entry: "Smith, J. A., ... (2020)", "Smith,
+# J. and Lee, B. (2020a)"; in an unnumbered list it starts a new entry once
+# the entry before has its year.
+_AUTHOR_YEAR_HEAD: Final[re.Pattern[str]] = re.compile(
+    r"^(?:(?i:van|von|der|den|de|del|di|da|du|la|le)\s+)*"
+    r"[^\W\d_a-zß-ÿ][\w'’\-]*(?:\s+[^\W\d_a-zß-ÿ][\w'’\-]*)?,\s+"
+    r"[A-Z][a-z]?\.[^()]{0,200}\((?:19|20)\d\d[a-z]?\)"
+)
+_YEAR_IN_PARENTHESES: Final[re.Pattern[str]] = re.compile(
+    r"\((?:19|20)\d\d[a-z]?\)"
+)
 # A line that always continues the entry before it (its DOI or PMID).
 _CONTINUATION: Final[re.Pattern[str]] = re.compile(
     r"^\s*(?:https?://|doi\b|pmid\b|pmcid\b)", re.I
@@ -608,7 +619,9 @@ def numbered_reference_entries(
         ("12. ...", "[12] ...") and no number stands alone, a new entry
         starts at each number; otherwise (as two-column PDFs print them)
         also after a line that ends an entry (a year, volume and pages, a
-        PMID, or a DOI), unless the next line is a DOI or PMID. A number
+        PMID, or a DOI), unless the next line is a DOI or PMID, and at a
+        line that starts like an author-year entry ("Smith, J. A., ...
+        (2020)") once the entry before has its year in parentheses. A number
         that does not follow the previous entry's (more than
         ``_NUMBER_STEP_MAX`` ahead, or back) starts no entry: it is part
         of the entry ("…919–\\n927. https://doi…"); a list that starts
@@ -681,6 +694,9 @@ def numbered_reference_entries(
         entries = [item for item in sequence if isinstance(item, tuple)]
         if not entries or match or (
             not by_number and complete and not _CONTINUATION.match(text)
+        ) or (
+            not by_number and _AUTHOR_YEAR_HEAD.match(text)
+            and _YEAR_IN_PARENTHESES.search(" ".join(entries[-1][1]))
         ):
             number = int(match.group(1) or match.group(2)) if match else None
             if number is not None:
