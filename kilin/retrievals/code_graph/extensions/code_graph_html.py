@@ -23,6 +23,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``CALLS_INTO``
+
+    Lets plain handler calls reach JavaScript functions.
+
 - ``extract_code_relations``
 
     Return the scripts one HTML page loads and the functions it calls.
@@ -54,13 +58,23 @@ from kilin.retrievals.code_graph.code_graph import (
 from kilin.sources.sources import SourceFile
 
 __all__ = [
+    "CALLS_INTO",
     "extract_code_relations",
 ]
+
+# Inline handlers call JavaScript functions by their plain name.
+CALLS_INTO: Final[dict[str, str]] = {"": ".js"}
+
+_SCRIPT: Final[re.Pattern[str]] = re.compile(
+    r"<script\b[^>]*\bsrc\s*=\s*[\"']([^\"']+)[\"']",
+    re.IGNORECASE,
+)
 
 # Recognize only the leading direct call in an inline event handler.
 _HANDLER_CALL: Final[re.Pattern[str]] = re.compile(
     r"^\s*(?:return\s+)?([A-Za-z_$][\w$]*)\s*\("
 )
+
 # External script references are not local repository paths.
 _EXTERNAL: Final[re.Pattern[str]] = re.compile(r"^(?:[a-z][\w+.-]*:|//)", re.I)
 _INERT: Final[frozenset[str]] = frozenset({"template", "noscript"})

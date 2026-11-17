@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from kilin.retrievals.code_graph import code_graph as cg
 from kilin.retrievals.code_graph.extensions import code_graph_m as matlab
 from kilin.retrievals.code_graph.extensions import code_graph_py as py
+from kilin.sources import extract_source_units
 from tests.kilin.retrievals._support import source_file, source_unit
 
 
@@ -322,6 +323,107 @@ class TestRemainingGraphBranches(unittest.TestCase):
         )
         self.assertFalse(any(r.relation == "inherits" for r in relations))
 
+
+
+class TestCodeGraphLanguages(unittest.TestCase):
+    """Match calls within a language, and across one only when declared."""
+
+    @staticmethod
+    def _calls(files):
+        graph = cg.build_code_graph(files, extract_source_units(files))
+        return {
+            (relation.source, relation.target)
+            for relation in graph.relations
+            if relation.relation == "calls"
+        }
+
+    def test_plain_call_stays_in_its_language(self) -> None:
+        calls = self._calls(
+            [
+                source_file("lib/stats.py", "def max(values):\n    pass\n"),
+                source_file("run.m", "function run(x)\ny = max(x);\nend\n"),
+            ]
+        )
+        self.assertIn(("run.run", "max"), calls)
+        self.assertNotIn(("run.run", "lib.stats.max"), calls)
+
+    def test_matlab_py_prefix_links_to_python(self) -> None:
+        calls = self._calls(
+            [
+                source_file("lib/stats.py", "def smooth(x):\n    pass\n"),
+                source_file(
+                    "run.m",
+                    "function run(x)\n"
+                    "y = py.lib.stats.smooth(x);\n"
+                    "z = py.numpy.sum(x);\n"
+                    "end\n",
+                ),
+            ]
+        )
+        self.assertIn(("run.run", "lib.stats.smooth"), calls)
+        # A Python package outside the repository stays as written.
+        self.assertIn(("run.run", "py.numpy.sum"), calls)
+
+    def test_html_handler_reaches_javascript(self) -> None:
+        files = [
+            source_file("app.js", "function save() {\n  return 1;\n}\n"),
+            source_file(
+                "index.html", '<button onclick="save()">Save</button>\n'
+            ),
+        ]
+        units = extract_source_units(files, as_code=True)
+        graph = cg.build_code_graph(files, units)
+        self.assertIn(
+            cg.CodeRelation("index", "calls", "app.save"), graph.relations
+        )
+
+    def test_notebook_and_python_share_names(self) -> None:
+        self.assertEqual(cg._language(Path("a.ipynb")), ".py")
+        self.assertEqual(cg._language(Path("A.R")), ".r")
+
+    def test_file_named_after_its_function_means_the_function(self) -> None:
+        calls = self._calls(
+            [
+                source_file(
+                    "lib/helper.m", "function y = helper(x)\ny = x;\nend\n"
+                ),
+                source_file(
+                    "lib/main.m", "function main()\nhelper(1);\nend\n"
+                ),
+            ]
+        )
+        self.assertIn(("lib.main.main", "lib.helper.helper"), calls)
+
+    def test_resolution_never_changes_the_known_names(self) -> None:
+        known = {".py": {"f": {"a.f"}}, ".m": {"f": {"b.f"}}}
+        names = cg._reachable_names(known, ".m", {"py": ".py"})
+        names["f"].add("changed")
+        self.assertEqual(known[".m"]["f"], {"b.f"})
+        self.assertEqual(cg._resolve_name("py.a.f", names), "a.f")
+        self.assertEqual(cg._resolve_name("f", names), "f")
+
+
+class TestMatlabCommentsAndStrings(unittest.TestCase):
+    """Comments and strings never look like calls."""
+
+    def test_comments_and_strings_are_skipped(self) -> None:
+        text = (
+            "function out = run(x)\n"
+            "% RUN(X) calls helper(x) in this comment\n"
+            "%{\nblock(1)\n%}\n"
+            "msg = 'quoted(1)';\n"
+            'other = "double(2)";\n'
+            "y = x';\n"
+            "out = helper(y); % trailing(3)\n"
+            "end\n"
+        )
+        relations = matlab.extract_code_relations(
+            source_file("run.m", text), {}
+        )
+        self.assertEqual(
+            {relation.target for relation in relations},
+            {"helper"},
+        )
 
 
 class TestGraphDeterminismRegression(unittest.TestCase):
