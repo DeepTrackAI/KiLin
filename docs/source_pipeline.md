@@ -125,28 +125,12 @@ It does **not execute source files or notebook cells**.
 | `sources_pdf.py` | Page-oriented selectable PDF text; page/section coordinates |
 | `sources_docx.py` | Word body text in reading order; Markdown heading sections |
 | `sources_doc.py` | Old Word 97-2003 body text in reading order; no headings |
-| `sources_html.py` | HTML page text with heading sections; as code, source markup split at main HTML elements |
-| `sources_js.py` | JavaScript line-leading functions, classes, and direct methods; lexical masking and balanced braces prevent spurious declarations and scope crossings |
-| `sources_r.py` | R top-level functions, classes, and S4 methods, with attached comment blocks and class-method children |
+| `sources_html.py` | HTML page text with Markdown heading sections; as code, the file as written split at `<head>`, `<body>`, `<section>`, `<script>` and other main parts, short parts joined to the one before |
+| `sources_js.py` | JavaScript top-level functions and classes, class methods as children, comments kept with their declaration |
 | `sources_tex.py` | LaTeX front matter and sections at `\part` to `\subsubsection`; setup before `\begin{document}` left out |
 | `sources_bib.py` | BibTeX entries and macros as independently indexed units with citation keys |
 | `sources_bbl.py` | Compiled LaTeX `\bibitem` references with original line and key provenance |
 | `sources_txt.py` | Nonblank paragraph text units |
-
-JavaScript extraction uses lexical masking within `sources_js.py` to keep
-comments, strings, template literals, and likely regex literals out of
-structural matching. It preserves source offsets and balances braces to
-separate declarations from unrelated statements. This is a conservative
-heuristic, not an ECMAScript parser: inline/mixed-line declarations,
-dynamic code, and executable template interpolations are not fully
-analyzed. Unrecognized text remains searchable as source context.
-
-R extraction similarly preserves the original source text and line
-provenance. Top-level `r_function`, `r_class`, and `r_method` units include
-their associated comments. A comment-only line between a function's
-parameter list and its opening brace does not terminate the function.
-Other statements remain in `r_script` units. R readers use structural
-heuristics rather than executing R or building a complete syntax tree.
 
 Word title and author properties are read separately for literature
 search headers and the paper-summary tool. The property reader handles OLE
@@ -167,13 +151,10 @@ file as written and `extract_source_units(..., as_code=True)` uses the
 reader's `extract_code_units`. Citation line numbers refer to the text
 that was indexed, so the reference preview reads the file the same way.
 The index records `html_as_code` for projects that select `.html`, and
-HTML cached as code has a separate identity from HTML cached as page text;
-other file types keep their existing cache identities. In a Code project,
-a page imports its local scripts and follows leading direct calls from
-inline `on...` handlers. The graph reader ignores HTML comments, inert
-templates, and JavaScript string contents. HTML read as page text does not
-contribute code-graph relationships, even when it contains examples of
-markup. JavaScript functions and methods link their plain calls.
+cached text read as code is kept apart, so changing `code_graph` indexes
+HTML again. In the code graph, a page imports the local scripts it loads
+and calls the functions in its inline `on...` handlers; JavaScript
+functions and methods call the plain functions in their bodies.
 
 Literature profiles now allow `.bib` and `.bbl` alongside `.tex`.
 Selected bibliography files are ordinary indexed sources, not hidden

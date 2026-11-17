@@ -75,7 +75,6 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/code_graph/extensions/code_graph_js.py`](../kilin/retrievals/code_graph/extensions/code_graph_js.py) | Extract lightweight JavaScript relationships using textual patterns. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/code_graph/extensions/code_graph_m.py`](../kilin/retrievals/code_graph/extensions/code_graph_m.py) | Extract lightweight MATLAB relationships using textual patterns. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/code_graph/extensions/code_graph_py.py`](../kilin/retrievals/code_graph/extensions/code_graph_py.py) | Extract heuristic relationships from Python syntax trees. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
-| [`kilin/retrievals/code_graph/extensions/code_graph_r.py`](../kilin/retrievals/code_graph/extensions/code_graph_r.py) | Extract lightweight R relationships using textual patterns. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/evidence_budget.py`](../kilin/retrievals/evidence_budget.py) | Apply deterministic passage, source, and evidence-token budgets. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/test_evidence_budget.py) |
 | [`kilin/retrievals/document_reading.py`](../kilin/retrievals/document_reading.py) | Read one whole document or function as evidence. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/model_identity.py`](../kilin/retrievals/model_identity.py) | Identify the embedding model that produced a retrieval index. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
@@ -117,7 +116,6 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/sources/extensions/sources_md.py`](../kilin/sources/extensions/sources_md.py) | Partition Markdown text at ATX-style heading lines. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_pdf.py`](../kilin/sources/extensions/sources_pdf.py) | Extract selectable PDF text and expose page-scoped source units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_py.py`](../kilin/sources/extensions/sources_py.py) | Partition Python source using syntax-tree declaration boundaries. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
-| [`kilin/sources/extensions/sources_r.py`](../kilin/sources/extensions/sources_r.py) | Partition R text at its top-level functions and classes. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_tex.py`](../kilin/sources/extensions/sources_tex.py) | Partition LaTeX document text at sectioning commands. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_txt.py`](../kilin/sources/extensions/sources_txt.py) | Split plain-text sources into nonblank paragraph units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/sources.py`](../kilin/sources/sources.py) | Read selected repository files and extract provenance-bearing text units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
@@ -215,13 +213,13 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Model management | 8 |
 | Per-tool README | 50 |
 | Project workspaces | 6 |
-| Retrieval pipeline | 32 |
-| Source pipeline | 21 |
+| Retrieval pipeline | 31 |
+| Source pipeline | 20 |
 | Tool extension contracts | 25 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 179.**
+**Total production Python modules: 177.**
 
 ## Non-Python resources and UI assets
 
