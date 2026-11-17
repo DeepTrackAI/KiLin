@@ -125,6 +125,7 @@ It does **not execute source files or notebook cells**.
 | `sources_pdf.py` | Page-oriented selectable PDF text; page/section coordinates |
 | `sources_docx.py` | Word body text in reading order; Markdown heading sections |
 | `sources_doc.py` | Old Word 97-2003 body text in reading order; no headings |
+| `sources_js.py` | JavaScript top-level functions and classes, class methods as children, comments kept with their declaration |
 | `sources_tex.py` | LaTeX front matter and sections at `\part` to `\subsubsection`; setup before `\begin{document}` left out |
 | `sources_bib.py` | BibTeX entries and macros as independently indexed units with citation keys |
 | `sources_bbl.py` | Compiled LaTeX `\bibitem` references with original line and key provenance |

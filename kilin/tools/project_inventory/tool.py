@@ -107,8 +107,10 @@ _TYPE_WORDS: Final[dict[str, tuple[str, ...]]] = {
     "notebooks": (".ipynb",),
     "python": (".py",),
     "matlab": (".m",),
-    "script": (".py", ".m"),
-    "scripts": (".py", ".m"),
+    "script": (".py", ".m", ".js"),
+    "scripts": (".py", ".m", ".js"),
+    "javascript": (".js",),
+    "js": (".js",),
 }
 # How the answer names each suffix.
 _TYPE_NAMES: Final[dict[str, str]] = {
@@ -123,6 +125,7 @@ _TYPE_NAMES: Final[dict[str, str]] = {
     ".ipynb": "notebook",
     ".py": "Python",
     ".m": "MATLAB",
+    ".js": "JavaScript",
 }
 # Questions about files that could not be read list only those files.
 _UNREADABLE_WORDS: Final[re.Pattern[str]] = re.compile(
