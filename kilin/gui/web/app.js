@@ -152,6 +152,10 @@ let activeConversationId = "";
 // Last conversation registry, and the empty chat whose first question is
 // being answered; that chat is listed before it has saved turns.
 let lastConversationData = null;
+// A memory popover reads current trace summaries each time it opens.
+// Responses are matched to their own request; they are never persisted.
+let memorySummarySequence = 0;
+const memorySummaryPending = new Map();
 let askingConversation = null;
 let pendingTurn = null;
 // A stopped answer's partial text, shown again after the engine restarts.
@@ -3440,6 +3444,7 @@ function saveAnswerNumbers(event) {
       || answerSettingsSave.pending?.settings
       || confirmedAnswerSettings();
     byId("temperature").value = last.temperature;
+    byId("effort-temperature").value = last.temperature;
     byId("max-new-tokens").value = last.max_new_tokens ?? "";
     return;
   }
@@ -3447,6 +3452,7 @@ function saveAnswerNumbers(event) {
     temperature, max_new_tokens: maxNewTokens,
     thinking: byId("thinking").checked,
   });
+  byId("effort-temperature").value = byId("temperature").value;
 }
 
 /**
@@ -4366,7 +4372,7 @@ function setBusy(value, message = "") {
   const answering = value && ready && activity.classList.contains("answer-progress");
   byId("question-form").classList.toggle("composer-disabled", value && !answering);
   byId("question-form").setAttribute("aria-busy", String(value));
-  for (const id of ["attach-button", "attach-files", "attach-folder", "effort-button", "effort-model-range", "effort-depth-range"]) {
+  for (const id of ["attach-button", "attach-files", "attach-folder", "effort-button", "effort-model-range", "effort-depth-range", "effort-temperature"]) {
     byId(id).disabled = value || !ready;
   }
   // The next question can be typed while an answer is generated; sending
@@ -4841,6 +4847,53 @@ function openMemoryOrigin(origin) {
 }
 
 /**
+ * Request current trace summaries for the visible memory popover.
+ *
+ * @param entries Remembered-message identities and their preview elements.
+ */
+function requestMemorySummaries(entries) {
+  if (!bridge || !openProjectPath || !entries.length) return;
+  const requestId = ++memorySummarySequence;
+  for (const entry of entries) {
+    entry.preview.hidden = true;
+    entry.preview.textContent = "";
+    entry.preview.dataset.requestId = String(requestId);
+  }
+  memorySummaryPending.set(requestId, {project: openProjectPath, entries});
+  // Bound pending UI state if the backend becomes unavailable.
+  if (memorySummaryPending.size > 64) {
+    memorySummaryPending.delete(memorySummaryPending.keys().next().value);
+  }
+  bridge.requestMemorySummaries(openProjectPath, JSON.stringify({
+    request_id: requestId,
+    references: entries.map((item) => ({
+      turn_uuid: item.turnUuid, role: item.role, origins: item.origins,
+    })),
+  }));
+}
+
+/**
+ * Update previews only from the matching project and latest trace read.
+ *
+ * @param data Correlated memory_summaries reply from the engine.
+ */
+function receiveMemorySummaries(data) {
+  const pending = memorySummaryPending.get(data.request_id);
+  if (!pending) return;
+  memorySummaryPending.delete(data.request_id);
+  if (data.project !== openProjectPath || data.project !== pending.project
+      || data.error || !Array.isArray(data.summaries)) return;
+  for (const entry of pending.entries) {
+    if (entry.preview.dataset.requestId !== String(data.request_id)) continue;
+    const found = data.summaries.find((item) =>
+      item.turn_uuid === entry.turnUuid && item.role === entry.role);
+    const text = typeof found?.text === "string" ? found.text : "";
+    entry.preview.textContent = text;
+    entry.preview.hidden = !text;
+  }
+}
+
+/**
  * Add a compact, expandable memory reference control to the answer actions.
  * Memory origins remain separate from documentary source citations.
  * @param row Completed answer's action row.
@@ -4859,6 +4912,7 @@ function appendMemoryProvenance(row, turn) {
   panel.setAttribute("aria-label", "Earlier conversation memory (not source evidence)");
   // Group by durable turn identity so both roles use an active origin.
   const groups = new Map();
+  const summaries = [];
   for (const [index, reference] of references.entries()) {
     const origins = Array.isArray(reference.origins) ? reference.origins : [];
     const origin = origins.find((item) => lastConversationData?.conversations
@@ -4872,7 +4926,11 @@ function appendMemoryProvenance(row, turn) {
     if (!group.origin && origin) group.origin = origin;
     const role = reference.role === "user" ? "Question"
       : reference.role === "assistant" ? "Answer" : "Message";
-    group.messages.push({role});
+    group.messages.push({
+      role, turnUuid: reference.turn_uuid,
+      origins: origins.filter((item) => lastConversationData?.conversations
+        ?.some((entry) => entry.conversation_id === item.conversation_id)),
+    });
   }
   for (const group of groups.values()) {
     const origin = group.origin;
@@ -4896,6 +4954,20 @@ function appendMemoryProvenance(row, turn) {
       roleLabel.className = "memory-message-role";
       roleLabel.textContent = suffix;
       link.append(nameLabel, roleLabel);
+      if (origin && (message.role === "Question"
+          || message.role === "Answer")
+          && typeof message.turnUuid === "string") {
+        const preview = document.createElement("span");
+        preview.className = "memory-message-preview";
+        preview.hidden = true;
+        link.append(preview);
+        summaries.push({
+          turnUuid: message.turnUuid,
+          role: message.role === "Question" ? "user" : "assistant",
+          origins: message.origins,
+          preview,
+        });
+      }
       link.title = origin
         ? `Open ${name}${suffix}; not source evidence.`
         : "Conversation unavailable; not source evidence.";
@@ -4934,6 +5006,7 @@ function appendMemoryProvenance(row, turn) {
   toggle.addEventListener("click", (event) => {
     event.stopPropagation();
     setExpanded(wrapper.hidden);
+    if (!wrapper.hidden) requestMemorySummaries(summaries);
   });
   row.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || wrapper.hidden) return;
@@ -6320,6 +6393,8 @@ function renderEffortPicker() {
   // The effort is named by the model level; search depth is a count.
   byId("effort-level-name").textContent = levels[selectedModelLevel].name;
   showThinkingSwitch(levels[selectedModelLevel].model);
+  byId("effort-temperature").value = byId("temperature").value;
+  byId("effort-temperature").disabled = busy;
   for (const [kind, index] of [["model", selectedModelLevel], ["depth", selectedDepthStep]]) {
     byId(`effort-${kind}-detail`).textContent = kind === "model"
       ? levels[index].model.split("/").pop()
@@ -7565,6 +7640,8 @@ function onEvent(raw) {
     receiveFeedbackSave(data);
   } else if (data.event === "memory_messages") {
     receiveMemoryMessages(data);
+  } else if (data.event === "memory_summaries") {
+    receiveMemorySummaries(data);
   } else if (data.event === "memory_exclusion") {
     receiveMemoryExclusion(data);
   } else if (data.event === "memory_status") {
@@ -8406,6 +8483,12 @@ for (const input of document.querySelectorAll('input[name="effort-thinking"]')) 
     byId("thinking").dispatchEvent(new Event("change"));
   });
 }
+byId("effort-temperature").addEventListener("change", () => {
+  // The Answers field performs the existing validation and project save.
+  byId("temperature").value = byId("effort-temperature").value;
+  byId("temperature").dispatchEvent(new Event("change"));
+  byId("effort-temperature").value = byId("temperature").value;
+});
 byId("thinking").addEventListener("change", () => {
   // Both Thinking controls share the Answers setting and its save queue.
   // On the start screen the selected value belongs to the next project.

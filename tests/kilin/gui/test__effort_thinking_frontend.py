@@ -1,4 +1,4 @@
-"""Exercise the Thinking switch under the effort name in the composer.
+"""Exercise Thinking and Temperature under the composer's effort name.
 
 "Lagom ›" opens an On/Off switch that is the same setting as "Enable model
 thinking, if supported" in Settings → Answers. Run the production
@@ -62,6 +62,103 @@ class TestEffortThinkingFrontend(unittest.TestCase):
         self.assertIn("saveAnswerNumbers();", changed)
         self.assertIn("renderEffortPicker();", changed)
         self.assertIn('request_id: request.id', source)
+
+    def test_temperature_is_shown_next_to_thinking(self):
+        """Share the Answers temperature rather than create a new setting."""
+
+        page = (_WEB / "index.html").read_text(encoding="utf-8")
+        start = page.index('<div id="effort-thinking"')
+        menu = page[start:page.index('<div class="effort-section">', start)]
+        self.assertIn(
+            'for="effort-temperature"><span>Temperature</span>', menu
+        )
+        self.assertIn('<span>Thinking</span>', menu)
+        styles = (_WEB / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('.effort-heading span { color: var(--muted);', styles)
+        self.assertIn('id="effort-temperature" type="number"', menu)
+        self.assertIn('min="0" step="0.1"', menu)
+        # The menu is inside the question form; numeric validation must not
+        # block a question while the user edits this separate setting.
+        self.assertIn('form="effort-settings"', menu)
+        self.assertNotIn('id="effort-settings"', page)
+        source = (_WEB / "app.js").read_text(encoding="utf-8")
+        self.assertIn(
+            'byId("effort-temperature").value = byId("temperature").value;',
+            _function(source, "renderEffortPicker"),
+        )
+        self.assertIn(
+            'byId("temperature").dispatchEvent(new Event("change"));',
+            source,
+        )
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
+    def test_temperature_uses_existing_validation_and_save_queue(self):
+        """Send temperature changes through the confirmed Answers pipeline."""
+
+        source = (_WEB / "app.js").read_text(encoding="utf-8")
+        begin = source.index(
+            'byId("effort-temperature").addEventListener("change"'
+        )
+        handler = source[begin:source.index("\n});\n", begin) + 4]
+        script = r"""
+const assert = require("node:assert/strict");
+const fields = {};
+const byId = (id) => (fields[id] ||= {
+  _value: "", checked: false, textContent: "",
+  set value(raw) {this._value = String(raw);},
+  get value() {return this._value;},
+  classList: {add: () => {}, remove: () => {}},
+});
+let busy = false, ready = true, openProjectPath = "/project";
+let savedAnswerNumbers = {temperature: 0.2, max_new_tokens: 1024};
+let savedAnswerThinking = false;
+let answerSettingsSave = {nextId: 0, pending: null,
+  queued: null, uncertain: false};
+const calls = [];
+const bridge = {saveAnswerSettings: (raw) => calls.push(JSON.parse(raw))};
+const updateSendButton = () => {};
+const keepNewProjectValue = () => {};
+const renderEffortPicker = () => {};
+byId("temperature").value = "0.2";
+byId("max-new-tokens").value = "1024";
+byId("thinking").checked = false;
+byId("temperature").dispatchEvent = () => saveAnswerNumbers();
+let changeHandler = null;
+byId("effort-temperature").addEventListener = (event, cb) => {
+  assert.equal(event, "change");
+  changeHandler = cb;
+};
+"""
+        for name in (
+            "confirmedAnswerSettings", "sameAnswerSettings",
+            "queueAnswerSettings", "saveAnswerNumbers",
+        ):
+            script += _function(source, name)
+        script += handler + r"""
+byId("effort-temperature").value = "0.7";
+changeHandler();
+assert.equal(byId("temperature").value, "0.7");
+assert.equal(calls.length, 1);
+assert.deepEqual(calls[0].settings, {
+  temperature: 0.7, thinking: false, max_new_tokens: 1024,
+});
+// Invalid edits revert both controls to the latest pending value.
+byId("effort-temperature").value = "-1";
+changeHandler();
+assert.equal(byId("temperature").value, "0.7");
+assert.equal(byId("effort-temperature").value, "0.7");
+assert.equal(calls.length, 1);
+// Edits made while busy also revert without starting another save.
+busy = true;
+byId("effort-temperature").value = "0.9";
+changeHandler();
+assert.equal(byId("effort-temperature").value, "0.7");
+assert.equal(calls.length, 1);
+console.log("effort temperature confirmed save passed");
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("confirmed save passed", result.stdout)
 
     def test_settings_describes_a_template_request(self):
         """Do not imply that the model's reasoning was verified."""

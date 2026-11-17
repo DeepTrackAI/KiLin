@@ -208,7 +208,9 @@ resynchronization. Source files do not automatically become conversation
 memories, and memory does not grant permission to read sources outside the
 project. Derived records and vectors are stored in the project-owned
 `indexes/conversation_memory.json`; authoritative user feedback remains in
-`memory/feedback.json`. Both contain potentially confidential information.
+`memory/feedback.json`. Both contain potentially confidential information. Completed answers with
+conversation-memory references also persist short excerpts of retrieved
+messages in their trace checkpoints; these must be kept private as well.
 Deleting a memory origin from the active index is **not secure erasure** of
 archived conversations, trace snapshots, backups, or previous index copies.
 

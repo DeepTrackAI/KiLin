@@ -422,8 +422,12 @@ indexing policies. The inventory is read-only until a confirmed action and
 does not load embeddings or rebuild source indexes. Index changes take
 effect on the next memory synchronization.
 Memory is enabled by default for new Writing, both Brainstorming types,
-and Reviewing projects, and disabled by default for Code and Literature. **Update memory
-index** explicitly synchronizes eligible saved discussions with the loaded
+and Reviewing projects, and disabled by default for Code and Literature.
+The memory icon beneath an answer opens the remembered question/answer
+labels and short, verbatim text previews. It does not certify these messages
+as sources; older saved answers display only the original labels.
+**Update memory index** explicitly synchronizes eligible saved discussions
+with the loaded
 embedding model; the status shows the last indexed message and embedding
 counts. This action does **not** rebuild source indexes. Saving memory policy
 alone likewise does not trigger ordinary source reindexing. Intent panels
@@ -458,7 +462,10 @@ separate section of five steps, each the number of passages retrieved for
 an answer (1-200; default 5, 8, 10, 15, 20). The composer's effort picker
 shows the effort name once at the top and has two sliders: Model chooses
 the level whose model answers, and Search depth chooses the step, so a
-small model can be paired with a deep search or the reverse. The middle
+small model can be paired with a deep search or the reverse. Expanding the
+effort name shows Thinking On/Off and Temperature, with matching label
+styles and the same project-wide Answers settings and save confirmation.
+The middle
 level's model is also the project's chat model. Cached
 models are classified as language or embedding models by preset, by an
 "embed" name or sentence-transformers configuration, then by architecture.

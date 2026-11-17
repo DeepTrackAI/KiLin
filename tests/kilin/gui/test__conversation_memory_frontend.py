@@ -231,12 +231,18 @@ console.log("memory settings scope passed");
                       styles)
         self.assertIn('.memory-turn { display: flex; flex-direction: column;',
                       styles)
-        self.assertIn('.memory-message { display: flex; width: fit-content;',
+        self.assertIn('.memory-message { display: flex; flex-wrap: wrap;',
                       styles)
+        self.assertIn('.memory-message-preview { flex-basis: 100%;', styles)
         self.assertIn('.memory-message-name { min-width: 0;', styles)
         self.assertIn('text-overflow: ellipsis; white-space: nowrap;',
                       styles)
         self.assertIn('.memory-message-role { flex: none;', styles)
+        self.assertIn('.memory-question { align-self: flex-end;', styles)
+        self.assertIn('.memory-answer, .memory-other { align-self:', styles)
+        self.assertIn('flex-start;', styles)
+        self.assertIn('white-space: pre-wrap;', styles)
+        self.assertIn('data.event === "memory_summaries"', self.source)
         self.assertNotIn('.memory-turn-messages', styles)
         self.assertNotIn('.memory-turn-link', styles)
 
@@ -272,7 +278,7 @@ const assert = require("node:assert/strict");
 const elements = [];
 const document = {createElement: (kind) => {
   const element = {kind, children: [], disabled: false, textContent: "",
-    listeners: {}, attributes: {}, hidden: false,
+    listeners: {}, attributes: {}, hidden: false, dataset: {},
     append(...items) {this.children.push(...items);},
     prepend(...items) {this.children.unshift(...items);},
     setAttribute(name, value) {this.attributes[name] = value;},
@@ -295,23 +301,36 @@ row.classList = {
 };
 let navigation = null;
 const openMemoryOrigin = (origin) => {navigation = origin;};
+let openProjectPath = "/workspace", memorySummarySequence = 0;
+const memorySummaryPending = new Map();
+const calls = [];
+const bridge = {requestMemorySummaries: (project, json) => {
+  calls.push({project, ...JSON.parse(json)});
+}};
+const firstUuid = "00000000000040008000000000000001";
+const secondUuid = "00000000000040008000000000000002";
+const thirdUuid = "00000000000040008000000000000003";
 """
-        script += extract_function(self.source, "appendMemoryProvenance")
+        for name in ("requestMemorySummaries", "receiveMemorySummaries",
+                     "appendMemoryProvenance"):
+            script += extract_function(self.source, name)
         script += r"""
 appendMemoryProvenance(row, {
   conversation_turn_uuid: "a".repeat(32),
   parameters: {memory_references: [
-  {label: "M1", turn_uuid: "first", role: "user", origins: [
+  {label: "M1", turn_uuid: firstUuid, role: "user",
+    preview: "Old saved question excerpt must not be used", origins: [
     {conversation_id: "archived", turn_number: 2},
     {conversation_id: "branch", turn_number: 2},
   ]},
-  {label: "M2", turn_uuid: "first", role: "assistant", origins: [
+  {label: "M2", turn_uuid: firstUuid, role: "assistant",
+    preview: "Old saved answer excerpt must not be used", origins: [
     {conversation_id: "branch", turn_number: 2},
   ]},
-  {label: "M3", turn_uuid: "second", role: "user", origins: [
+  {label: "M3", turn_uuid: secondUuid, role: "user", origins: [
     {conversation_id: "different", turn_number: 1},
   ]},
-  {label: "M4", turn_uuid: "third", role: "assistant", origins: [
+  {label: "M4", turn_uuid: thirdUuid, role: "assistant", origins: [
     {conversation_id: "missing", turn_number: 5},
   ]},
 ]}});
@@ -331,9 +350,14 @@ assert.equal(stopped, 1);
 assert.equal(wrapper.hidden, false);
 assert.equal(toggle.attributes["aria-expanded"], "true");
 assert.equal(rowClasses.has("memory-expanded"), true);
+assert.equal(calls.length, 1);
+assert.equal(calls[0].project, "/workspace");
+assert.equal(calls[0].references.length, 3);
+assert.deepEqual(calls[0].references[0].origins,
+  [{conversation_id: "branch", turn_number: 2}]);
 const groups = panel.children;
-const label = (button) => button.children.map((child) => child.textContent)
-  .join("");
+const label = (button) => button.children.slice(0, 2)
+  .map((child) => child.textContent).join("");
 assert.equal(groups.length, 3);
 const firstMessages = groups[0].children;
 assert.equal(firstMessages.length, 2);
@@ -342,13 +366,25 @@ assert.equal(label(firstMessages[0]),
   "Brainstorming branch · Turn 2 — Question");
 assert.equal(firstMessages[0].children[0].className, "memory-message-name");
 assert.equal(firstMessages[0].children[1].className, "memory-message-role");
+assert.equal(firstMessages[0].children[2].className, "memory-message-preview");
+assert.equal(firstMessages[0].children[2].textContent, "");
+assert.equal(firstMessages[0].children[2].hidden, true);
 assert.equal(firstMessages[0].className,
   "memory-message memory-question");
 assert.equal(label(firstMessages[1]),
   "Brainstorming branch · Turn 2 — Answer");
 assert.equal(firstMessages[1].className,
   "memory-message memory-answer");
+// Retrieval is dynamic and untruncated; no saved excerpt is displayed.
+const full = "<script>Untrusted remembered text</script> " + "X".repeat(800);
+receiveMemorySummaries({project: "/foreign",
+  request_id: calls[0].request_id,
+  summaries: [{turn_uuid: firstUuid, role: "assistant", text: full}]});
+assert.equal(firstMessages[1].children[2].hidden, true);
+// An unrelated project's reply must be ignored, even when IDs collide.
+// The next expansion requests the authoritative current trace again.
 assert.equal(groups[1].children.length, 1);
+assert.equal(groups[1].children[0].children.length, 3);
 assert.equal(label(groups[1].children[0]),
   "Other discussion · Turn 1 — Question");
 assert.equal(groups[2].children.length, 1);
@@ -374,8 +410,38 @@ assert.equal(toggle.attributes["aria-expanded"], "false");
 assert.equal(toggle.focused, true);
 toggle.listeners.click({stopPropagation() {stopped++;}});
 assert.equal(wrapper.hidden, false);
+assert.equal(calls.length, 2);
+// The older answer summary must not overtake the newest request.
+receiveMemorySummaries({project: "/workspace",
+  request_id: calls[0].request_id,
+  summaries: [{turn_uuid: firstUuid, role: "assistant", text: "stale"}]});
+assert.equal(firstMessages[1].children[2].hidden, true);
+receiveMemorySummaries({project: "/workspace",
+  request_id: calls[1].request_id,
+  summaries: [
+    {turn_uuid: firstUuid, role: "user",
+      text: "What did we decide about the design?"},
+    {turn_uuid: firstUuid, role: "assistant", text: full},
+    {turn_uuid: secondUuid, role: "user", text: "Second question"},
+  ]});
+assert.equal(firstMessages[0].children[2].textContent,
+  "What did we decide about the design?");
+assert.equal(firstMessages[1].children[2].textContent, full);
+assert.equal(firstMessages[1].children[2].innerHTML, undefined);
+assert.equal(firstMessages[1].children[2].hidden, false);
+assert.equal(groups[1].children[0].children[2].textContent,
+  "Second question");
 toggle.listeners.click({stopPropagation() {stopped++;}});
 assert.equal(wrapper.hidden, true);
+toggle.listeners.click({stopPropagation() {stopped++;}});
+assert.equal(calls.length, 3);
+receiveMemorySummaries({project: "/workspace",
+  request_id: calls[2].request_id,
+  summaries: [{turn_uuid: firstUuid, role: "assistant",
+    text: "Updated summary from the trace."}]});
+assert.equal(firstMessages[1].children[2].textContent,
+  "Updated summary from the trace.");
+assert.equal(firstMessages[0].children[2].hidden, true);
 console.log("grouped memory provenance passed");
 """
         result = run_node(script)
@@ -391,7 +457,7 @@ const assert = require("node:assert/strict");
 const elements = [];
 const document = {createElement: (kind) => {
   const element = {kind, children: [], disabled: false, textContent: "",
-    listeners: {}, attributes: {}, hidden: false,
+    listeners: {}, attributes: {}, hidden: false, dataset: {},
     append(...items) {this.children.push(...items);},
     prepend(...items) {this.children.unshift(...items);},
     setAttribute(name, value) {this.attributes[name] = value;},

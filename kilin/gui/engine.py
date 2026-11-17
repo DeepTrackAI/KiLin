@@ -166,7 +166,10 @@ from kilin.project_files import (
 )
 from kilin.conversation_format import conversation_state
 from kilin.conversation_memory.feedback import FeedbackStore
-from kilin.conversation_memory.inspection import inspect_memory_messages
+from kilin.conversation_memory.inspection import (
+    inspect_memory_messages,
+    read_memory_summaries,
+)
 from kilin.conversation_memory.persistence import (
     memory_index_path,
     read_memory_index,
@@ -405,6 +408,8 @@ class ChatEngine:
         Update one saved question or answer with revision checking.
     memory_messages(project, offset=0)
         Inspect saved messages and their current memory eligibility.
+    memory_summaries(project, request)
+        Read the latest saved trace summaries for remembered messages.
     set_memory_exclusion(request)
         Exclude or restore one memory without changing its rating.
     memory_status(project)
@@ -2561,6 +2566,40 @@ class ChatEngine:
                 "memory_messages", project=project, offset=offset,
                 error=str(error),
             )
+
+    def memory_summaries(self, project: str, request: object) -> None:
+        """Return current summaries from registered conversation traces.
+
+        Parameters
+        ----------
+        project: str
+            Active workspace identity supplied by the frontend.
+        request: object
+            Request identifier and bounded list of remembered message origins.
+
+        Notes
+        -----
+        Read-only: no indexing, model inference, or saved preview metadata.
+        The request identifier lets the frontend ignore stale replies.
+
+        """
+
+        identity = request if isinstance(request, dict) else {}
+        request_id = identity.get("request_id")
+        response = {"project": project, "request_id": request_id}
+        try:
+            if (set(identity) != {"request_id", "references"}
+                    or type(request_id) is not int or request_id < 1):
+                raise ValueError("Invalid memory summaries request.")
+            self._memory_project(project)
+            if self.conversation_store is None:
+                raise RuntimeError("Open a conversation first.")
+            summaries = read_memory_summaries(
+                self.conversation_store, identity["references"]
+            )
+            self._send("memory_summaries", **response, summaries=summaries)
+        except (OSError, ValueError, TypeError, RuntimeError) as error:
+            self._send("memory_summaries", **response, error=str(error))
 
     def set_memory_exclusion(self, request: object) -> None:
         """Change explicit exclusion with project and revision guards.
@@ -5213,6 +5252,10 @@ def main() -> None:
                     elif action == "memory_messages":
                         engine.memory_messages(
                             command.get("project"), command.get("offset", 0)
+                        )
+                    elif action == "memory_summaries":
+                        engine.memory_summaries(
+                            command.get("project"), command.get("request")
                         )
                     elif action == "set_memory_exclusion":
                         engine.set_memory_exclusion(command.get("request"))
