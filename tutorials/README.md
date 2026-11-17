@@ -88,7 +88,7 @@ Tutorials 150 and 180 use literature PDFs:
   contents remain part of the full supplementary materials, not mandatory
   dependencies of the tutorial series.
 - When a paper is absent from that corpus, Tutorials 150 and 180 use the
-  small PDFs provided in `tests/fixtures/`. They tell you which file was
+  small PDFs provided in `tests/fixtures/pdfs/`. They tell you which file was
   selected. If neither location exists, the notebook raises an informative
   `FileNotFoundError` instead of silently choosing unrelated documents.
 

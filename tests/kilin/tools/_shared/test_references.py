@@ -38,7 +38,7 @@ LAYOUT = ReferenceLayout(
     entry_min_words=5,
 )
 
-PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
+PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures" / "pdfs"
 
 NUMBERED = """Introduction
 Some text cites earlier work [1].

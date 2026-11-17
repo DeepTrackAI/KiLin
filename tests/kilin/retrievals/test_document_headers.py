@@ -23,7 +23,7 @@ from kilin.retrievals import document_headers as document_search
 from kilin.retrievals.document_headers import DocumentInfo
 from tests.kilin import _rag_support as fixtures
 
-FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
+FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "pdfs"
 
 
 def _page(identifier: str, text: str, page: int, start: int = 1,

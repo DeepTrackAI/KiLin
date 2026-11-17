@@ -24,7 +24,7 @@ from kilin.sources.sources import (
 )
 from tests.kilin.sources._support import fixture_path
 
-PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
+PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures" / "pdfs"
 
 try:
     from kilin.sources.extensions import sources_pdf
