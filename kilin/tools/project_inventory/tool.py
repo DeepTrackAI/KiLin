@@ -111,6 +111,9 @@ _TYPE_WORDS: Final[dict[str, tuple[str, ...]]] = {
     "scripts": (".py", ".m", ".js"),
     "javascript": (".js",),
     "js": (".js",),
+    "html": (".html",),
+    "webpage": (".html",),
+    "webpages": (".html",),
 }
 # How the answer names each suffix.
 _TYPE_NAMES: Final[dict[str, str]] = {
@@ -126,6 +129,7 @@ _TYPE_NAMES: Final[dict[str, str]] = {
     ".py": "Python",
     ".m": "MATLAB",
     ".js": "JavaScript",
+    ".html": "HTML",
 }
 # Questions about files that could not be read list only those files.
 _UNREADABLE_WORDS: Final[re.Pattern[str]] = re.compile(
