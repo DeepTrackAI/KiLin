@@ -130,6 +130,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/_registry.py`](../kilin/tools/_registry.py) | Register KíLín's tools and resolve an intent's tool. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/__init__.py`](../kilin/tools/_shared/__init__.py) | Private services shared by registered KíLín tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/author_year.py`](../kilin/tools/_shared/author_year.py) | Find author-year citations and resolve them to reference-list entries. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/test_author_year.py) |
+| [`kilin/tools/_shared/report_templates.py`](../kilin/tools/_shared/report_templates.py) | Read Markdown report templates and check reports against them. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/citations.py`](../kilin/tools/_shared/citations.py) | Validate bounded passage citations for document tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/test_citations.py) |
 | [`kilin/tools/_shared/claims.py`](../kilin/tools/_shared/claims.py) | Judge whether a cited work supports the sentence that cites it. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/_rating.py`](../kilin/tools/_shared/_rating.py) | Rate citation suitability from checked evidence, not search rank. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/) |
@@ -168,7 +169,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/generate_paper_summary/__init__.py`](../kilin/tools/generate_paper_summary/__init__.py) | Produce a validated paper summary using project-owned templates. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/generate_paper_summary/_configuration.py`](../kilin/tools/generate_paper_summary/_configuration.py) | Validate the paper-summary tool's packaged configuration defaults. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/generate_paper_summary/_report_format.py`](../kilin/tools/generate_paper_summary/_report_format.py) | Format report Markdown into safe HTML for print rendering. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
-| [`kilin/tools/generate_paper_summary/_report_template.py`](../kilin/tools/generate_paper_summary/_report_template.py) | Read Markdown report templates and check reports against them. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/generate_paper_summary/_report_template.py`](../kilin/tools/generate_paper_summary/_report_template.py) | Read report templates and check reports with this tool's limits. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/generate_paper_summary/tool.py`](../kilin/tools/generate_paper_summary/tool.py) | Tool ``generate_paper_summary``: turn one paper into a templated report. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/paper_overview/__init__.py`](../kilin/tools/paper_overview/__init__.py) | Expose the registered ``paper_overview`` tool. | [Per-tool README](../kilin/tools/paper_overview/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/paper_overview/_configuration.py`](../kilin/tools/paper_overview/_configuration.py) | Validate the defaults owned by the paper_overview tool. | [Per-tool README](../kilin/tools/paper_overview/README.md) | [Tool tests](../tests/kilin/tools/) |
@@ -220,11 +221,11 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Project workspaces | 6 |
 | Retrieval pipeline | 32 |
 | Source pipeline | 23 |
-| Tool extension contracts | 26 |
+| Tool extension contracts | 27 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 182.**
+**Total production Python modules: 183.**
 
 ## Non-Python resources and UI assets
 

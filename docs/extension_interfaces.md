@@ -331,7 +331,10 @@ citation range is 100 passages.
 
 
 The report-generation package has an additional `_report_template.py` and
-`_report_format.py` to validate Markdown templates and report formatting.
+`_report_format.py` to validate Markdown templates and report formatting;
+the template format, parser and report checks themselves are shared in
+`kilin/tools/_shared/report_templates.py`, which each report tool calls with
+its own limits (`TemplateRules`).
 The GUI offers PDF rendering through its optional `_report_pdf.py`; core
 tools should still function without Qt (Markdown output remains available).
 
