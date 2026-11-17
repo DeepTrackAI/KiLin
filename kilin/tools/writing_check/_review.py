@@ -16,7 +16,8 @@ what the model needs to judge it:
 The model answers with blocks of ORIGINAL, SUGGESTION and REASON. Every
 finding is checked before it is kept: the original words must be in the
 paragraph, and the suggestion must keep its numbers, negations,
-citation placeholders, and the glossary's acronyms and terms. A finding
+citation placeholders and author-year citations ("(Smith et al., 2020)"),
+and the glossary's acronyms and terms. A finding
 that fails is dropped, not reported, so invented errors do not reach the
 user.
 
@@ -79,6 +80,7 @@ import re
 from typing import Final
 
 from kilin._model_completion import IncompleteModelResponse, strip_thinking
+from kilin.tools._shared.author_year import find_markers
 from kilin.tools.writing_check._checks import (
     LEVEL_GRAMMAR,
     LEVEL_STYLE,
@@ -404,7 +406,8 @@ def paragraph_prompt(
         f"{task} Check only the paragraph between the triple quotes. "
         "Keep the authors' acronyms, terms and spelling, field "
         "terminology and names in the software, numbers, and the "
-        "placeholders [cite], [author], [year] and (ref).\n\nFor each "
+        "placeholders [cite], [author], [year] and (ref), and citations "
+        "such as (Smith et al., 2020).\n\nFor each "
         "change, write exactly:\n"
         "ORIGINAL: <the shortest exact words from the paragraph that "
         "need the change, a few words, not the whole sentence>\n"
@@ -642,10 +645,10 @@ def rejection(
         ``""`` when the change can be kept; otherwise the first reason it
         cannot: the words are not in the paragraph (``locate``), nothing
         changes, or the suggestion changes numbers, negations, citation
-        placeholders, a hedge or modal verb ("virtually", "would"), a
-        defined acronym or a preferred term, or brings back a form the
-        document does not use. The suggestion is compared with the
-        paragraph's own words.
+        placeholders or author-year citations, a hedge or modal verb
+        ("virtually", "would"), a defined acronym or a preferred term, or
+        brings back a form the document does not use. The suggestion is
+        compared with the paragraph's own words.
 
     """
 
@@ -656,6 +659,31 @@ def rejection(
     if " ".join(suggestion.split()) == original:
         return "nothing changes"
     return meaning_change(original, suggestion, glossary)
+
+
+def _cited_works(text: str) -> Counter[tuple[str, str, int, str, str]]:
+    """Return the works the author-year citations of a text cite.
+
+    Parameters
+    ----------
+    text: str
+        Words of a paragraph, or a suggestion.
+
+    Returns
+    -------
+    Counter[tuple[str, str, int, str, str]]
+        Each cited work's first and second author, author count, year and
+        suffix, counted; so "(Smith et al., 2020)" and "Smith et al.
+        (2020)" cite the same work, and a changed name or a dropped
+        citation differ.
+
+    """
+
+    return Counter(
+        (work.first, work.second, work.authors, work.year, work.suffix)
+        for marker in find_markers(text)
+        for work in marker.works
+    )
 
 
 def meaning_change(original: str, changed: str, glossary: Glossary) -> str:
@@ -675,12 +703,16 @@ def meaning_change(original: str, changed: str, glossary: Glossary) -> str:
     str
         ``""`` when the conservative screen detects no high-risk change,
         not proof of semantic equivalence. Otherwise the first issue:
-        numbers, citations, moved negations, changed subject identifiers,
+        numbers, citations (placeholders, or the works author-year
+        citations cite), moved negations, changed subject identifiers,
         claim-sensitive terms, hedges, acronyms or preferred terminology.
 
     """
 
     suggestion = changed
+    # Citations first: a dropped "(Smith 2020)" also drops a number.
+    if _cited_works(original) != _cited_works(suggestion):
+        return "it changes citations"
     for pattern, what in (
         (_NUMBER, "numbers"), (_PLACEHOLDER, "citations"),
     ):
