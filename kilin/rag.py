@@ -2270,8 +2270,8 @@ class RAGSession:
                 )
                 if memory_hits:
                     # Navigational provenance is not documentary Evidence.
-                    # Store origins with this answer so the GUI can revisit
-                    # them without reading traces or reconstructing a search.
+                    # Store only navigational identities with the answer.
+                    # The GUI reads current summaries from origin traces.
                     effective["memory_references"] = [
                         {
                             "label": f"M{number}",
@@ -2543,7 +2543,17 @@ class RAGSession:
             trace.emit(
                 "conversation.turn.representation",
                 component="rag",
-                data=representation,
+                # The routing representation stays bounded. Only the trace
+                # retains the full existing model-written summary, which the
+                # GUI can read on demand without storing another copy with
+                # a memory reference or making an additional model call.
+                data={
+                    **representation,
+                    "summary": (
+                        summary if summary is not None
+                        else representation["summary"]
+                    ),
+                },
                 turn_id=turn_id,
             )
             try:

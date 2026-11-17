@@ -23,6 +23,10 @@ Module Structure
 
     Read and page project-owned messages for a headless API or GUI.
 
+- ``read_memory_summaries``
+
+    Fetch current full answer summaries from registered conversation traces.
+
 Examples
 --------
 >>> from kilin.conversation_memory.inspection import inspect_memory_messages
@@ -36,13 +40,22 @@ import json
 from pathlib import Path
 
 from kilin.answering import strip_thinking
-from kilin.conversation_format import conversation_state
+from kilin.conversation_format import (
+    CONVERSATION_SESSION_KEY,
+    conversation_state,
+)
 from kilin.conversation_memory.feedback import FeedbackStore
 from kilin.conversation_memory.index import _eligible, _manifest
-from kilin.conversation_memory.models import require_saved_turn_ids
+from kilin.conversation_memory.models import (
+    require_saved_turn_ids,
+    require_turn_uuid,
+)
+from kilin.conversations import ConversationStore
 from kilin.project_type import ProjectType
 
-__all__ = ["MemoryMessagePage", "inspect_memory_messages"]
+__all__ = [
+    "MemoryMessagePage", "inspect_memory_messages", "read_memory_summaries",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,3 +198,164 @@ def inspect_memory_messages(
         feedback.revision, len(ordered),
         tuple(ordered[offset:offset + limit]),
     )
+
+
+def _trace_answer_summary(
+    payload: dict[str, object], number: int
+) -> str | None:
+    """Read the current, potentially edited summary from a trace turn.
+
+    Parameters
+    ----------
+    payload: dict[str, object]
+        Entire conversation trace, including grouped diagnostic operations.
+    number: int
+        One-based position of the requested saved turn.
+
+    Returns
+    -------
+    str | None
+        The complete trace summary (including a deliberately emptied one),
+        or None if the operation is absent (for example, on a branch).
+
+    """
+
+    sessions = payload.get("sessions", {})
+    if not isinstance(sessions, dict):
+        return None
+    session = sessions.get(CONVERSATION_SESSION_KEY, {})
+    if not isinstance(session, dict):
+        return None
+    turns = session.get("turns", {})
+    if not isinstance(turns, dict):
+        return None
+    trace_turn = turns.get(f"turn_{number:04d}", {})
+    if not isinstance(trace_turn, dict):
+        return None
+    stages = trace_turn.get("stages", {})
+    if not isinstance(stages, dict):
+        return None
+    question = stages.get("01_question", {})
+    if not isinstance(question, dict):
+        return None
+    operations = question.get("operations", {})
+    if not isinstance(operations, dict):
+        return None
+    for key, operation in reversed(list(operations.items())):
+        if not key.endswith("_conversation_turn_representation"):
+            continue
+        details = operation.get("details", {}) if isinstance(
+            operation, dict
+        ) else {}
+        if isinstance(details, dict) and isinstance(
+            details.get("summary"), str
+        ):
+            return details["summary"]
+    return None
+
+
+def read_memory_summaries(
+    store: ConversationStore, references: object,
+) -> list[dict[str, str]]:
+    """Read current memory labels directly from active conversation traces.
+
+    Parameters
+    ----------
+    store: ConversationStore
+        Store whose already registered conversations constrain trace access.
+    references: object
+        Bounded list of turn UUIDs, message roles, and active origin IDs with
+        one-based turn numbers. Origins are checked against saved UUIDs.
+
+    Returns
+    -------
+    list[dict[str, str]]
+        One entry per accessible message, with ``turn_uuid``, ``role`` and
+        untruncated ``text``. Question text comes from the checkpoint;
+        answer summaries prefer the trace's representation operation.
+
+    Raises
+    ------
+    ValueError
+        If the request has an unsupported structure or message identity.
+
+    Notes
+    -----
+    A trace is read on every invocation, without embedding or model calls.
+    Inherited branch checkpoints can lack the original diagnostic operation;
+    the saved compact representation then provides a legacy fallback.
+    No summary is written to message provenance or another cache.
+
+    """
+
+    if not isinstance(references, list) or len(references) > 100:
+        raise ValueError("Invalid memory summary request.")
+    available = {item.conversation_id for item in store.conversations()}
+    snapshots: dict[str, dict[str, object] | None] = {}
+    results: list[dict[str, str]] = []
+    for reference in references:
+        if not isinstance(reference, dict) or set(reference) != {
+            "turn_uuid", "role", "origins",
+        }:
+            raise ValueError("Invalid memory summary reference.")
+        identifier = require_turn_uuid(reference["turn_uuid"])
+        role = reference["role"]
+        origins = reference["origins"]
+        if (role not in ("user", "assistant")
+                or not isinstance(origins, list) or len(origins) > 20):
+            raise ValueError("Invalid memory summary reference.")
+        fallback = ""
+        current: str | None = None
+        for origin in origins:
+            if not isinstance(origin, dict) or set(origin) != {
+                "conversation_id", "turn_number",
+            }:
+                raise ValueError("Invalid memory summary origin.")
+            name = origin["conversation_id"]
+            number = origin["turn_number"]
+            if (not isinstance(name, str) or not name
+                    or type(number) is not int or number < 1):
+                raise ValueError("Invalid memory summary origin.")
+            if name not in available:
+                continue
+            if name not in snapshots:
+                path = store.state_path(name)
+                if path.is_symlink() or not path.is_file():
+                    snapshots[name] = None
+                else:
+                    snapshots[name] = json.loads(
+                        path.read_text(encoding="utf-8")
+                    )
+            payload = snapshots[name]
+            if not isinstance(payload, dict):
+                continue
+            state = conversation_state(payload)
+            turns = state.get("turns", [])
+            ids = require_saved_turn_ids(turns)
+            if number > len(ids) or ids[number - 1] != identifier:
+                continue
+            turn = turns[number - 1]
+            if role == "user":
+                question = turn.get("question")
+                if isinstance(question, str):
+                    current = question
+                    break
+            else:
+                current = _trace_answer_summary(payload, number)
+                if current is not None:
+                    break
+                params = turn.get("parameters", {})
+                representation = (
+                    params.get("representation", {})
+                    if isinstance(params, dict) else {}
+                )
+                if isinstance(representation, dict):
+                    value = representation.get("summary")
+                    if isinstance(value, str) and value:
+                        fallback = value
+        text = fallback if current is None else current
+        if text:
+            results.append({
+                "turn_uuid": identifier, "role": role, "text": text,
+            })
+    return results

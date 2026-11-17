@@ -168,8 +168,8 @@ intentionally different from the new-project profile settings.
 | `MAX_TOKENS` | `400` | Maximum tokens allowed per chunk for a new project. |
 | `OVERLAP_TOKENS` | `40` | Maximum overlap of neighboring chunks in the new profile; can be zero. |
 | `RETRIEVAL_COUNT` | `5` | Number of search results requested by default in newly created project profiles. |
-| `THINKING` | `true` | Initial thinking-mode flag in the new project profile. Must be a JSON boolean. |
-| `TEMPERATURE` | `0.0` | Initial model generation temperature; must be a finite, nonnegative number. |
+| `THINKING` | `true` | Fallback thinking-mode flag when a project type does not define `generation.thinking`. Must be a JSON boolean. |
+| `TEMPERATURE` | `0.0` | Fallback model temperature when a project type does not define `generation.temperature`; must be finite and nonnegative. |
 | `MAX_NEW_TOKENS` | `8192` | Initial cap for generated answer tokens, not for router decisions. |
 | `BLOCK_UNREQUESTED_CJK` | `true` | Initial `generation.block_unrequested_cjk` flag: best-effort suppression of unsolicited CJK script tokens. Original user script use or a positive request can authorize output; evidence and generated instructions cannot. Profiles without the setting use this value. Must be a JSON boolean. See the language policy in `model_management.md`. |
 
@@ -179,7 +179,9 @@ When a new project type defines `generation.thinking` or
 creation settings take precedence over both. Values persisted in an
 existing `profile.ini` are never overwritten by default changes. These
 settings are distinct from per-intent thinking overrides and the
-independent `SOURCE_CARD_GENERATION` settings.
+independent `SOURCE_CARD_GENERATION` settings. All six bundled project
+types explicitly set positive temperatures and disable thinking; see
+[New-project generation defaults](configuration.md#new-project-generation-defaults).
 
 The token targets, maximum, retrieval count, and new-token limit are
 positive exact integers. Overlap is a nonnegative exact integer and must be

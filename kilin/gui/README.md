@@ -204,13 +204,14 @@ resumed without downloading new models; creating and answering in new
 projects still requires the configured models. Changing the type selected
 for a new project does not filter or hide existing resumable projects.
 Repeated creation from the same sources allocates independent numbered
-folders. An explicitly selected occupied destination is
-never reused: the interface offers to resume an existing project separately,
-without importing pending sources or applying new-project settings, or lets
-you choose another destination. The current session stays open on conflicts.
-A saved workspace can be reopened through Resume without adding
-sources. New projects may start without sources: they get a free
-`new-project` folder in the workspace folder. Their managed `sources/`
+folders. An explicitly named occupied destination is never reused: the
+interface offers to resume an existing project separately, without importing
+pending sources or applying new-project settings, or lets you choose another
+destination. The current session stays open on conflicts. A saved workspace
+can be reopened through Resume without adding sources. New projects may start
+without sources: the core allocates `new-project`, `new-project-2`, and so on,
+skipping any existing folder, including folders absent from the saved-project
+list. Their managed `sources/`
 folder is initially empty, and sources can be added later. No development example is selected
 automatically. A workspace is a directory organization convention, not an
 execution sandbox or a boundary for hostile inputs.
@@ -421,8 +422,16 @@ indexing policies. The inventory is read-only until a confirmed action and
 does not load embeddings or rebuild source indexes. Index changes take
 effect on the next memory synchronization.
 Memory is enabled by default for new Writing, both Brainstorming types,
-and Reviewing projects, and disabled by default for Code and Literature. **Update memory
-index** explicitly synchronizes eligible saved discussions with the loaded
+and Reviewing projects, and disabled by default for Code and Literature.
+The memory icon beneath an answer opens remembered messages, with
+questions on the right and answers on the left. On expansion, the GUI reads
+question text from the saved conversation (displaying at most 160
+characters, including an ellipsis if shortened) and complete available
+answer summaries from current traces; long text wraps within narrower
+bubbles.
+These memories do not certify source evidence.
+**Update memory index** explicitly synchronizes eligible saved discussions
+with the loaded
 embedding model; the status shows the last indexed message and embedding
 counts. This action does **not** rebuild source indexes. Saving memory policy
 alone likewise does not trigger ordinary source reindexing. Intent panels
@@ -457,7 +466,10 @@ separate section of five steps, each the number of passages retrieved for
 an answer (1-200; default 5, 8, 10, 15, 20). The composer's effort picker
 shows the effort name once at the top and has two sliders: Model chooses
 the level whose model answers, and Search depth chooses the step, so a
-small model can be paired with a deep search or the reverse. The middle
+small model can be paired with a deep search or the reverse. Expanding the
+effort name shows Thinking On/Off and Temperature, with matching label
+styles and the same project-wide Answers settings and save confirmation.
+The middle
 level's model is also the project's chat model. Cached
 models are classified as language or embedding models by preset, by an
 "embed" name or sentence-transformers configuration, then by architecture.
@@ -519,12 +531,16 @@ copied into the user-preferences file. Before reinstalling an earlier KíLín
 version with edited installed defaults, manually preserve those edits.
 KíLín does not automatically migrate edits to installed package resources.
 
-**Generation defaults** for new projects remain core-owned in
-`kilin/kilin_defaults.json` (`PROJECT_PROFILE`): `thinking=true`,
-`temperature=0.0`, and `max_new_tokens=8192`. All interfaces use these
-new-project generation defaults. Existing projects retain the settings in
-their own `profile.ini`, including an explicit 256-token limit. A saved
-project profile takes precedence over global defaults and user preferences.
+**Generation defaults** for new projects are core-owned. Each bundled
+project type defines a nonzero `temperature` and `thinking=false` in its
+`kilin/project_types/<type_id>.json` file. See the
+[project-type defaults](../../docs/configuration.md#new-project-generation-defaults)
+for the six temperatures. The generic `PROJECT_PROFILE` fallback in
+`kilin/kilin_defaults.json` remains `thinking=true`, `temperature=0.0`,
+and `max_new_tokens=8192` for types that omit these fields. Existing
+projects retain the settings in their own `profile.ini`, including an
+explicit 256-token limit. A saved project profile takes precedence over
+all creation defaults and user preferences.
 
 With no project open, settings edits update the user preferences. With a
 project open, the Settings switch chooses **This project** (the default) or

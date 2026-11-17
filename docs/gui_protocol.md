@@ -84,8 +84,9 @@ There is no `save_answer_timeline` command or companion timing file.
 Project selection uses `type_id` in `startup`, `projects`, `saved_project`,
 `opened` and `settings.project_types` entries. The cross-layer identifier
 schema is owned by [Configuration](configuration.md#canonical-identifiers-and-schemas). The
-`open` command accepts `sources: []` for a new empty workspace only when
-`workspace` is explicit; no example paths are inferred. Despite its command
+`open` command accepts `sources: []` with an empty `workspace`: the core
+allocates an available `new-project` name. An explicit `workspace` retains
+its exact-name and collision semantics. Despite its command
 name, `open` creates a new project and never reuses an existing one. `resume`
 is the separate operation for opening saved state. On `workspace_conflict`,
 `existing_project` is true for any existing profile entry, even an invalid one.
@@ -145,6 +146,7 @@ paths and source paths remain subject to downstream core validation.
 | `conversation_feedback` | `project` | Read the active project's feedback revision and per-message ratings without changing its conversation files |
 | `save_message_feedback` | `request` | Write one saved-message selection/reaction with project, conversation ID, turn UUID, role, expected revision and positive request ID |
 | `memory_messages` | `project`, `offset` (optional, 0-based) | Inspect a page of active saved messages and current memory eligibility without an embedding call |
+| `memory_summaries` | `project`, `request` (`request_id`, `references`) | Read current untruncated summaries from referenced active conversation traces, without embeddings or model calls |
 | `set_memory_exclusion` | `request` | Exclude/restore one persisted message with project, turn, role, feedback revision and request ID checks |
 | `memory_status` | `project` | Read current project policy and last saved derived memory-index counts without a model call |
 | `sync_memory_index` | `project` | Synchronize independent conversation memory and emit progress/result; do not rebuild primary-source indexes |
@@ -210,6 +212,19 @@ conversation checkpoints and feedback without embedding or modifying them.
 It includes unindexed/excluded messages and deduplicates inherited branch
 turns. Errors carry `project`, `offset`, and `error`.
 
+`memory_summaries(project, request)` accepts a positive `request_id` and up
+to 100 references, each containing an existing turn UUID4, `role` (`user` or
+`assistant`), and up to 20 origins (`conversation_id`, one-based
+`turn_number`). Origins are validated against active registered conversation
+traces and the saved turn UUID. On success `memory_summaries` returns
+`project`, `request_id`, and available `{turn_uuid, role, text}` entries;
+on failure it returns `error`. Questions use the saved question text; answers
+prefer the complete, editable summary in the trace representation event,
+falling back to the compact routing representation for older/branched turns.
+The page refreshes on every popover expansion, ignores late/wrong-project
+replies, and inserts summaries as plain text. No preview is added to the
+saved answer, no summary is recomputed, and the operation is read-only.
+
 `set_memory_exclusion(request)` accepts exactly `project`, `conversation_id`,
 `turn_uuid`, `role`, boolean `excluded`, SHA-256 `revision`, and positive
 `request_id`. `memory_exclusion` returns matching identifiers and the new
@@ -231,16 +246,15 @@ commands never call ordinary source indexing or modify source citations.
 
 Completed `answered`, `opened` and `conversation_opened` turn objects may
 contain `parameters.memory_references`: ordered labels `M1`, `M2`, etc.,
-retrieved turn UUID/role and active conversation/one-based turn origins.
-The GUI uses these only for navigation to earlier discussions. References
-with the same turn UUID are grouped into one conversation link while each
-message label and role (Question or Answer) remains visible. This is display
-grouping, not retrieval deduplication; UUIDs, roles, and origins remain
-unchanged in the saved turn. The metadata contains no retrieved memory text
-and must not be interpreted as the numbered, independently validated
-documentary `evidence` list.
-Links to archived origins are disabled. The source-reference preview
-contract is unchanged.
+retrieved turn UUID/role, and active conversation/one-based turn origins.
+These are navigational identities only, not stored message previews. Older
+records containing a `preview` field remain readable, but that field is
+ignored. Each retrieved question or answer has its own clickable line;
+questions align right and answers left. On expansion the page requests
+current text using `memory_summaries`, rather than copying it into the
+answer. This text is not the numbered, independently validated documentary
+`evidence` list. Links to archived origins are disabled. The source-
+reference preview contract is unchanged.
 
 `opened.behavior_presentation` contains the project's effective welcome
 prompts and suggestions. The editable intent and project behavior settings
@@ -436,7 +450,7 @@ can accompany an event.
 | Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether a saved folder is unavailable, `legacy`: previous installed-app root with candidate profiles, or empty); `projects_folder_cancelled` (native Browse dialog dismissed); `projects_folder_failed` (`message`: unable to save or old folder no longer exists) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `source_cards_applied` (validated settings and card counts), `source_cards_regenerated` (card counts); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `project_behavior` (validated project editor, defaults, revision, and correlated saved or error status); `settings_info` (validated core/tool descriptive catalog), `settings_info_failed` (metadata diagnostic only); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
-| Conversation memory | `conversation_feedback` (project, revision, entries or error); `message_feedback` (request ID, turn UUID/role, revision/entries or error); `memory_messages` (paged authoritative inventory); `memory_exclusion` (correlated exclusion update or error); `memory_status` (last indexed counts, enabled, stale feedback); `memory_sync_started`, `memory_synced`, `memory_sync_failed` (project, embedded count or error status) |
+| Conversation memory | `conversation_feedback` (project, revision, entries or error); `message_feedback` (request ID, turn UUID/role, revision/entries or error); `memory_messages` (paged authoritative inventory); `memory_summaries` (request-correlated trace text or error); `memory_exclusion` (correlated exclusion update or error); `memory_status` (last indexed counts, enabled, stale feedback); `memory_sync_started`, `memory_synced`, `memory_sync_failed` (project, embedded count or error status) |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_activity` (`index`, `phase`, `label`, `started_ms`); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |

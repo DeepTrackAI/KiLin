@@ -107,12 +107,13 @@ source basenames that would alias managed state, such as `logs`, `indexes`,
 `profile.ini`, or the creation marker. Import such folders with the cumulative
 `sources/` API instead; their basenames are safe beneath that managed root.
 
-For automatic multi-source naming, omit `workspace_directory` and supply
-`workspace_root`. The core derives a base name from the first source's safe
-stem and eight-character path hash, then tries `-2`, `-3`, and subsequent
-free names. Every existing entry is occupied, including empty folders and
-symbolic links. Single-source mirrors use `project_<source-name>` and the
-same numbered-sibling allocation. The final name is reserved exclusively;
+For automatic workspace naming, omit `workspace_directory` and supply
+`workspace_root`. With sources, the core derives a base name from the first
+source's safe stem and eight-character path hash. Without sources, it uses
+`new-project`. In either case, it then tries `-2`, `-3`, and subsequent free
+names. Every existing entry is occupied, including empty folders and symbolic
+links. Single-source mirrors use `project_<source-name>` and the same
+numbered-sibling allocation. The final name is reserved exclusively;
 `default_workspace_path()` merely suggests the base and is not a reservation.
 
 ```python
@@ -129,13 +130,18 @@ second = kilin.prepare_sources_workspace(
 assert first.root != second.root
 ```
 
-Empty managed projects require an explicit destination and contain no
-placeholder sources or dummy indexes:
+Empty managed projects may use automatic naming or an explicit destination.
+Both contain no placeholder sources or dummy indexes:
 
 ```python
 project = kilin.prepare_sources_workspace(
-    [], kilin.PROJECT_TYPE_IDS[0], "/path/to/new_workspace"
+    [], kilin.PROJECT_TYPE_IDS[0],
+    workspace_root="/path/to/projects",
 )
+# For an explicitly chosen name, use the third positional argument instead:
+# project = kilin.prepare_sources_workspace(
+#     [], kilin.PROJECT_TYPE_IDS[0], "/path/to/new_workspace"
+# )
 project = kilin.add_project_sources(
     project.root, ["/path/to/notes.txt"]
 )

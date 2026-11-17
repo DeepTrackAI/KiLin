@@ -166,7 +166,10 @@ from kilin.project_files import (
 )
 from kilin.conversation_format import conversation_state
 from kilin.conversation_memory.feedback import FeedbackStore
-from kilin.conversation_memory.inspection import inspect_memory_messages
+from kilin.conversation_memory.inspection import (
+    inspect_memory_messages,
+    read_memory_summaries,
+)
 from kilin.conversation_memory.persistence import (
     memory_index_path,
     read_memory_index,
@@ -405,6 +408,8 @@ class ChatEngine:
         Update one saved question or answer with revision checking.
     memory_messages(project, offset=0)
         Inspect saved messages and their current memory eligibility.
+    memory_summaries(project, request)
+        Read the latest saved trace summaries for remembered messages.
     set_memory_exclusion(request)
         Exclude or restore one memory without changing its rating.
     memory_status(project)
@@ -1915,7 +1920,8 @@ class ChatEngine:
         """Create and activate a new, independently owned workspace.
 
         Creation is exclusive and cannot resume an existing project. Empty
-        source lists require an explicit nonexistent or empty destination.
+        source lists without a destination allocate a free ``new-project``
+        name beneath the configured projects folder.
 
         Parameters
         ----------
@@ -1924,8 +1930,8 @@ class ChatEngine:
         type_id: str
             Registered project-type identifier.
         workspace: str
-            Workspace folder; required without sources. With sources, a blank
-            value derives a name beneath the configured workspace parent.
+            Explicit workspace folder, or blank to allocate a name beneath
+            the configured projects folder, including for empty projects.
         selected_files: dict[str, list[str]] | None, optional
             Checked file paths within each source folder. Defaults to ``None``.
         settings: dict[str, object] | None, optional
@@ -1977,10 +1983,6 @@ class ChatEngine:
                     backend: validate_effort_levels(levels)
                     for backend, levels in created_levels.items()
                 }
-            if not sources and not workspace.strip():
-                raise ValueError(
-                    "Choose a workspace folder for a project without sources."
-                )
             if selected_files is not None:
                 # Resolve path aliases before matching checked files.
                 selected_files = {
@@ -2564,6 +2566,40 @@ class ChatEngine:
                 "memory_messages", project=project, offset=offset,
                 error=str(error),
             )
+
+    def memory_summaries(self, project: str, request: object) -> None:
+        """Return current summaries from registered conversation traces.
+
+        Parameters
+        ----------
+        project: str
+            Active workspace identity supplied by the frontend.
+        request: object
+            Request identifier and bounded list of remembered message origins.
+
+        Notes
+        -----
+        Read-only: no indexing, model inference, or saved preview metadata.
+        The request identifier lets the frontend ignore stale replies.
+
+        """
+
+        identity = request if isinstance(request, dict) else {}
+        request_id = identity.get("request_id")
+        response = {"project": project, "request_id": request_id}
+        try:
+            if (set(identity) != {"request_id", "references"}
+                    or type(request_id) is not int or request_id < 1):
+                raise ValueError("Invalid memory summaries request.")
+            self._memory_project(project)
+            if self.conversation_store is None:
+                raise RuntimeError("Open a conversation first.")
+            summaries = read_memory_summaries(
+                self.conversation_store, identity["references"]
+            )
+            self._send("memory_summaries", **response, summaries=summaries)
+        except (OSError, ValueError, TypeError, RuntimeError) as error:
+            self._send("memory_summaries", **response, error=str(error))
 
     def set_memory_exclusion(self, request: object) -> None:
         """Change explicit exclusion with project and revision guards.
@@ -4940,19 +4976,20 @@ def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:
         Parent directory for default managed workspaces; it is not an execution
         sandbox.
     chosen: str
-        Explicit workspace path string, or an empty string to derive one from
-        the first source.
+        Explicit workspace path string, or an empty string to derive one
+        from the first source or use ``new-project`` for an empty project.
 
     Returns
     -------
     pathlib.Path
-        Resolved explicit destination, or a deterministic source-name/path-hash
-        destination beneath sandbox.
+        Resolved explicit destination, or a deterministic default name
+        beneath sandbox.
 
     Notes
     -----
-    Deriving a default uses the core naming helper and first supplied source.
-    Creation may select a numbered sibling. Preview does not reserve a path.
+    Deriving a default uses the core naming helper, including for empty
+    projects. Creation may select a numbered sibling. Preview does not
+    reserve a path.
 
     """
 
@@ -5215,6 +5252,10 @@ def main() -> None:
                     elif action == "memory_messages":
                         engine.memory_messages(
                             command.get("project"), command.get("offset", 0)
+                        )
+                    elif action == "memory_summaries":
+                        engine.memory_summaries(
+                            command.get("project"), command.get("request")
                         )
                     elif action == "set_memory_exclusion":
                         engine.set_memory_exclusion(command.get("request"))

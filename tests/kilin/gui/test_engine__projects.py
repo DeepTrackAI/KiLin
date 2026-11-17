@@ -480,18 +480,21 @@ class TestEngineProjectRecovery(unittest.TestCase):
 class TestEngineEmptyProjects(unittest.TestCase):
     """Create empty workspaces through the normal GUI-to-core boundary."""
 
-    def test_empty_creation_requires_location_and_imports_later(self):
-        """Never substitute demo paths; keep source-free projects usable."""
+    def test_empty_creation_allocates_name_and_imports_later(self):
+        """Allocate a default without demo paths; allow explicit paths."""
 
         with TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             events = []
             engine = ChatEngine(root, events.append)
             try:
-                engine.open_project([], "code", "")
-                self.assertEqual(events[-1]["event"], "error")
-                self.assertEqual(list(root.iterdir()), [])
                 with patch("kilin.gui.engine.RAGSession", FakeSession):
+                    engine.open_project([], "code", "")
+                    self.assertEqual(events[-1]["event"], "opened")
+                    default = engine.session.project
+                    self.assertEqual(default.root, root / "new-project")
+                    self.assertEqual(list(default.source.iterdir()), [])
+                    self.assertEqual(list(default.indexes.iterdir()), [])
                     engine.open_project([], "code", str(root / "empty"))
                     self.assertEqual(events[-1]["event"], "opened")
                     self.assertEqual(events[-1]["type_id"], "code")

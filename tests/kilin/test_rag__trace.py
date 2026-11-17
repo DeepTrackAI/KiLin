@@ -166,6 +166,32 @@ class TestRAGTraceIntegration(unittest.TestCase):
         self.assertIn("05_generation", turn["stages"])
         self.assertEqual(self._payload()["progress_checkpoint_count"], 0)
 
+    def test_trace_keeps_full_model_summary_not_router_truncation(self):
+        """Keep full generated text only in the diagnostic operation."""
+
+        self._bind_trace()
+        full = "The model reported " + "several key findings " * 20
+        with patch.object(rag, "summarize_answer", return_value=full):
+            # Force the ordinary summary path while using offline doubles.
+            with _answer_patches(self.session, _intent()) as mocks:
+                mocks.save.side_effect = lambda **options: (
+                    rag.RAGSession._save_conversation(self.session, **options)
+                )
+                self.session.ask("Explain the findings", use_router=True)
+        saved = self._conversation()["resume_state"]["turns"][0]
+        self.assertEqual(len(saved["parameters"]["representation"][
+            "summary"
+        ]), 200)
+        operations = self._conversation()["turns"]["turn_0001"]["stages"][
+            "01_question"
+        ]["operations"]
+        representation = next(
+            value for key, value in operations.items()
+            if key.endswith("_conversation_turn_representation")
+        )
+        self.assertEqual(representation["details"]["summary"], full)
+        self.assertNotIn("memory_references", saved["parameters"])
+
     def test_answer_without_retrieval_is_traced_and_saved(self) -> None:
         """Record explicit no-retrieval decisions and a valid checkpoint."""
         self._bind_trace()

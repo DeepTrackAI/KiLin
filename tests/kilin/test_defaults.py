@@ -11,6 +11,7 @@ They verify cached reads, defensive section copies, and strict type checks.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import inspect
 import json
 from pathlib import Path
@@ -270,9 +271,21 @@ class TestCoreDefaultIntegration(unittest.TestCase):
         """Keep package settings separate from saved profile overrides."""
 
         from kilin import project
+        from kilin.project_type import project_type
 
         settings = defaults.load_defaults_section("PROJECT_PROFILE")
-        profile = project.default_project_profile("code")
+        # Check the generic fallback independently of the code type's
+        # explicit generation settings.
+        definition = replace(
+            project_type("code"),
+            generation_thinking=None,
+            generation_temperature=None,
+        )
+        with patch(
+            "kilin.project.load_project_types",
+            return_value={"code": definition},
+        ):
+            profile = project.default_project_profile("code")
         self.assertEqual(profile.allow_download, settings["ALLOW_DOWNLOAD"])
         self.assertEqual(profile.target_tokens, settings["TARGET_TOKENS"])
         self.assertEqual(profile.max_tokens, settings["MAX_TOKENS"])

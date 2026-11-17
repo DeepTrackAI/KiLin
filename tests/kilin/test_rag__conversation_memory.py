@@ -100,8 +100,32 @@ class TestRAGConversationMemory(unittest.TestCase):
         self.assertTrue(all(item["origins"] == [{
             "conversation_id": self.earlier_id, "turn_number": 1,
         }] for item in references))
-        self.assertNotIn("foldon modules", str(references))
+        self.assertTrue(all(
+            set(item) == {"label", "turn_uuid", "role", "origins"}
+            for item in references
+        ))
         self.assertEqual(stored.evidence, ())
+
+    def test_references_do_not_copy_source_message_text(self):
+        """Retain navigational metadata without persisting previews."""
+
+        self.assertFalse(hasattr(rag, "_memory_reference_preview"))
+        FeedbackStore(self.root).update(
+            self.earlier_id, self.earlier_uuid,
+            "assistant", saved=True, reaction="liked",
+        )
+        with patch.object(
+            self.session, "_behavior_config", return_value=self.config
+        ), _answer_patches(
+            self.session, self.intent, RouteDecision("writing", True)
+        ):
+            self.session.ask("Recall our foldon terminology")
+        for item in self.session.turns[-1].parameters[
+            "memory_references"
+        ]:
+            self.assertNotIn("preview", item)
+            self.assertNotIn("summary", item)
+            self.assertEqual(item["turn_uuid"], self.earlier_uuid)
 
     def test_memory_retrieval_timeline_and_trace_provenance(self):
         """Expose counts and timing without recording remembered text."""

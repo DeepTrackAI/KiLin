@@ -190,10 +190,14 @@ parameters. `turn_representation()` constructs a compact summary used when
 routing later questions: the question, cited sources and a one-sentence
 answer summary. When the router is used, `summarize_answer()` asks the
 router model for that sentence once, before the turn is saved, and the
-representation records the model under `summary_model`. The answer's
-first sentence is kept for one-sentence answers, small talk, incomplete
-answers, unrouted turns, and when the summary call fails. Saved summaries
-are reused, never regenerated. `refers_back()` identifies follow-up phrasing;
+representation records the model under `summary_model`. Its summary is
+bounded to 200 characters for the router; the existing
+`conversation.turn.representation` diagnostic trace operation also retains
+the complete generated sentence for the GUI, without changing router inputs.
+The answer's first sentence is kept for one-sentence answers, small talk,
+incomplete answers, unrouted turns, and when the summary call fails. Saved
+routing summaries are reused, never regenerated. `refers_back()` identifies
+follow-up phrasing;
 `search_text()` incorporates earlier user wording according to the verified
 decision. `select_history()` applies the intent's policy:
 
@@ -254,11 +258,14 @@ synchronizes eligible saved messages and performs independent memory
 retrieval before direct model generation. The previous conversation text
 appears under a dedicated `CONVERSATION MEMORY` heading, never within
 numbered source `Evidence`. A system-level provenance rule distinguishes
-historical assistant assertions from current documentary evidence. Search
-hits have separate relevance, preference weights and an independent token
-budget. Completed turns retain only the resulting navigation identities
-under `parameters.memory_references` (memory labels, UUID/role, and active
-conversation/one-based turn origins); source `Evidence` remains separate.
+historical assistant assertions from current documentary evidence. Search hits have separate relevance, preference weights and an independent token
+budget. Completed turns retain only navigational identities in
+`parameters.memory_references`, not copies of remembered text or summaries.
+The GUI requests the current question or answer summary from the origin
+conversation trace when the memory note is expanded. The trace operation
+retains the complete router-generated answer summary independently of the
+bounded, saved routing representation. Neither memory notes nor generated
+summaries are independent source `Evidence`.
 When no memory hits are supplied, the original answer prompt is
 unchanged **for ordinary requests**. For explicit conversation-history
 questions (such as *"Did we discuss optical tweezers?"*), the core selects a

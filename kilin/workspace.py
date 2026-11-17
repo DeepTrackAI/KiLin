@@ -292,7 +292,8 @@ def default_workspace_path(
     Parameters
     ----------
     source_paths: Sequence[str | pathlib.Path]
-        Nonempty list or tuple of sources. The first source supplies the name.
+        Sources whose first entry supplies the name. An empty collection
+        uses ``new-project`` as the preferred name.
     workspace_root: str | pathlib.Path
         Parent directory for automatically allocated workspaces.
 
@@ -305,7 +306,7 @@ def default_workspace_path(
     Raises
     ------
     ValueError
-        If sources or the parent directory are missing.
+        If the parent directory is missing.
 
     Notes
     -----
@@ -314,15 +315,17 @@ def default_workspace_path(
 
     """
 
-    if not isinstance(source_paths, (list, tuple)) or not source_paths:
-        raise ValueError("Choose a workspace folder for an empty project.")
+    if not isinstance(source_paths, (list, tuple)):
+        raise ValueError("Sources must be a list or tuple.")
     if not str(workspace_root).strip():
         raise ValueError("Choose a workspace parent folder.")
+    parent = Path(workspace_root).expanduser().resolve()
+    if not source_paths:
+        return parent / "new-project"
     source = Path(source_paths[0]).expanduser().resolve()
     name = re.sub(r"[^A-Za-z0-9._-]+", "-", source.stem).strip("-._")
     name = name or "project"
     digest = sha256(str(source).encode("utf-8")).hexdigest()[:8]
-    parent = Path(workspace_root).expanduser().resolve()
     return parent / f"{name}-{digest}"
 
 
@@ -342,16 +345,17 @@ def prepare_sources_workspace(
     ----------
     source_paths: Sequence[str | pathlib.Path]
         List or tuple of files or folders to copy. An empty collection creates
-        a source-free project and requires an explicit workspace_directory.
+        a source-free project, named ``new-project`` when allocated.
     type_id: ProjectTypeId
         Registered project type.
     workspace_directory: str | pathlib.Path | None, optional
         Explicit nonexistent or empty destination. Defaults to None, requiring
-        workspace_root and at least one source for automatic name allocation.
+        workspace_root for automatic name allocation.
     workspace_root: str | pathlib.Path | None, optional
-        Parent for a default destination derived from the first source. On
-        collision, append -2, -3, and so on, including for existing empty
-        folders. Cannot be combined with workspace_directory. Defaults to None.
+        Parent for a default destination: the first source determines its
+        name, or ``new-project`` when no sources are supplied. On collision,
+        append -2, -3, and so on, even for existing empty folders. Cannot
+        be combined with workspace_directory. Defaults to None.
     selected_files: Mapping[str, Sequence[str]] | None, optional
         Exact per-source selections. Defaults to None, using scan selections.
     settings: dict[str, object] | None, optional

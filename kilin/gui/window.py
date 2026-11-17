@@ -288,6 +288,8 @@ class ChatBridge(QObject):
         Forward a validated feedback write to the backend engine.
     requestMemoryMessages(project, offset)
         Inspect saved messages and their current memory status.
+    requestMemorySummaries(project, request_json)
+        Request current remembered summaries from conversation traces.
     setMemoryExclusion(request_json)
         Exclude or restore one message without changing its rating.
     requestMemoryStatus(project)
@@ -1139,6 +1141,26 @@ class ChatBridge(QObject):
         self.commandRequested.emit({
             "action": "memory_messages", "project": project,
             "offset": offset,
+        })
+
+    @Slot(str, str)
+    def requestMemorySummaries(
+        self, project: str, request_json: str
+    ) -> None:
+        """Request current remembered summaries from conversation traces.
+
+        Parameters
+        ----------
+        project: str
+            Currently displayed project identity.
+        request_json: str
+            Correlated remembered-message origin references.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "memory_summaries", "project": project,
+            "request": json.loads(request_json),
         })
 
     @Slot(str)

@@ -21,6 +21,7 @@ from unittest.mock import Mock, patch
 import kilin
 from kilin.atomic_writes import atomic_create_text
 from kilin._project_creation import claim_workspace
+from kilin.project import default_project_profile
 
 
 class TestExclusiveProjectCreation(unittest.TestCase):
@@ -161,9 +162,50 @@ class TestExclusiveProjectCreation(unittest.TestCase):
         self.assertEqual(second.root.name, first.root.name + "-2")
         self.assertEqual(third.root.name, first.root.name + "-3")
         self.assertEqual(self.snapshot(first.root), before)
-        self.assertEqual(first.profile.temperature, 0.0)
+        self.assertEqual(
+            first.profile.temperature,
+            default_project_profile("code").temperature,
+        )
+        self.assertIs(first.profile.thinking, False)
         self.assertEqual(second.profile.temperature, 0.7)
         self.assertEqual(third.profile.type_id, "literature")
+        self.assertEqual(
+            third.profile.temperature,
+            default_project_profile("literature").temperature,
+        )
+        self.assertIs(third.profile.thinking, False)
+
+    def test_empty_default_skips_occupied_names_and_keeps_saved_projects(self):
+        """Use core allocation for empty projects, not a project list."""
+        parent = self.root / "projects"
+        existing = kilin.prepare_sources_workspace(
+            [], "code", parent / "new-project"
+        )
+        (existing.root / "notes.txt").write_text(
+            "original project", encoding="utf-8"
+        )
+        occupied = parent / "new-project-2"
+        occupied.mkdir()
+        before = self.snapshot(existing.root)
+        first = kilin.prepare_sources_workspace(
+            [], "literature", workspace_root=parent,
+            settings={"temperature": 0.6},
+        )
+        second = kilin.prepare_sources_workspace(
+            [], "literature", workspace_root=parent
+        )
+        self.assertEqual(first.root, parent / "new-project-3")
+        self.assertEqual(second.root, parent / "new-project-4")
+        self.assertEqual(list(first.source.iterdir()), [])
+        self.assertEqual(first.profile.temperature, 0.6)
+        self.assertEqual(self.snapshot(existing.root), before)
+        self.assertEqual(list(occupied.iterdir()), [])
+        self.assertEqual(
+            kilin.default_workspace_path([], parent),
+            parent / "new-project",
+        )
+        with self.assertRaises(ValueError):
+            kilin.prepare_sources_workspace([], "code")
 
     def test_default_skips_empty_files_links_and_partial_directories(self):
         """Any occupied default name belongs to its current owner."""

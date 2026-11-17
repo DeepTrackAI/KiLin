@@ -309,22 +309,37 @@ embed new messages, but does not rebuild document/source indexes. The
 project revisions still protect all editor writes against stale updates.
 
 When an answer retrieves earlier conversation memory, the completed turn
-persists navigational ``parameters.memory_references`` metadata: labels,
-source turn UUIDs and active conversation/one-based-turn origins. No memory
-text is copied into this metadata. The answer's action row shows a
-small memory icon and the number of retrieved messages, alongside Save,
-Like, and Dislike. The reference details are collapsed by default; clicking
-the icon expands a compact list below the action row. Each memory is a
-single clickable line, such as ``Brainstorming · Turn 2 — Question`` or
-``Brainstorming · Turn 2 — Answer``, aligned to the same sides as chat
-messages. They remain **separate from scientific source citations**. Matching
-turn UUIDs share an active origin, but each retrieved question or answer has
-its own link without a duplicate heading or secondary label. Selecting a
-line opens the recorded conversation and highlights its turn. An archived or
+persists only navigational ``parameters.memory_references`` metadata:
+labels, source turn UUIDs and active conversation/one-based-turn origins.
+It does not persist copied previews or summaries. The answer's action row
+shows a small memory icon and the number of retrieved messages, alongside
+Save, Like, and Dislike. Clicking the icon expands a compact list. The GUI
+requests current summaries from registered origin conversation traces on
+every expansion, without indexing or model calls. Answer notes display the
+**complete** model-generated summary from the trace's
+``conversation.turn.representation`` operation, not the bounded routing
+summary in saved parameters. For older traces and inherited branch turns
+without that operation, the existing compact saved representation is a
+fallback; text already truncated by a prior version cannot be recovered.
+Question notes display at most 160 characters of the original saved
+question, including an ellipsis when shortened. This limit applies only
+to the displayed note, not the trace read or saved question. Both are
+private conversation content and are inserted as text, never executable
+markup.
+
+Each memory remains a clickable line with its original conversation and
+turn label. Questions align **right** and answers align **left**, just as
+in the chat. Bubbles remain narrower than the panel even for complete,
+long summaries, keeping the two sides visually distinct. Matching turn UUIDs
+share an active origin, but each question or answer has its own link,
+without a duplicate heading. Selecting a line
+opens the recorded conversation and highlights its turn. An archived or
 missing conversation yields a disabled line rather than an invented source
-citation. A branch can provide another active origin of the same
-turn. Existing source citation numbering and evidence previews are
-unchanged. This metadata is derived context, not a scientific assertion.
+citation. A branch can provide another active origin of the same turn.
+The GUI rejects late responses from other projects or older summary reads,
+so opening a note again reflects subsequent edits to its trace summary.
+These notes remain **separate from scientific source citations**. Existing
+source citation numbering and evidence previews are unchanged.
 
 Enabled direct-answer memory retrieval is a dedicated core-timed activity:
 `memory_retrieving` begins before index synchronization and search, and

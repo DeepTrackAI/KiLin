@@ -78,6 +78,38 @@ class TestEngineMemoryManagement(unittest.TestCase):
         self.engine.memory_messages(self.project_id, offset=1)
         self.assertEqual(len(self.events[-1]["messages"]), 1)
 
+    def test_memory_summaries_read_current_trace_without_saving(self):
+        """Correlate one read-only summary request to the active project."""
+
+        self.engine.conversation_store = self.store
+        request = {
+            "request_id": 41,
+            "references": [{
+                "turn_uuid": self.turn.conversation_turn_uuid,
+                "role": "user",
+                "origins": [{
+                    "conversation_id": self.conversation.conversation_id,
+                    "turn_number": 1,
+                }],
+            }],
+        }
+        self.engine.memory_summaries(self.project_id, request)
+        result = self.events[-1]
+        self.assertEqual(result["event"], "memory_summaries")
+        self.assertEqual(result["request_id"], 41)
+        self.assertEqual(result["summaries"][0]["text"], self.turn.question)
+        self.assertEqual(self.store.state_path(
+            self.conversation
+        ).read_bytes(), self.checkpoint)
+        self.session.sync_conversation_memory.assert_not_called()
+        for project, changed in (
+            (str(self.root / "foreign"), request),
+            (self.project_id, {**request, "request_id": 0}),
+            (self.project_id, {**request, "references": "invalid"}),
+        ):
+            self.engine.memory_summaries(project, changed)
+            self.assertIn("error", self.events[-1])
+
     def test_exclude_preserves_reactions_and_checkpoint(self):
         self.feedback.update(
             self.conversation.conversation_id,
