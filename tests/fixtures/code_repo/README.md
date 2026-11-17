@@ -8,6 +8,8 @@ answer is easy to check:
   `PyChildClass` extends `PyBaseClass`, and its `py_method_C` calls
   `py_function_A`.
 - `matlab/m_function_A.m` calls `m_function_B` in `matlab/m_function_B.m`.
+- `matlab/m_function_C.m` calls the Python `py_function_A` (through
+  `py.calculator_py.py_function_A`) and `m_function_A`.
 - `js/calculator_js.js`: `js_function_A` calls `js_function_B`;
   `JsChildClass` extends `JsBaseClass`, and its `js_method_C` calls
   `js_function_A`; `js_function_D` uses `JsChildClass`.

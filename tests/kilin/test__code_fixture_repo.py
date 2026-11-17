@@ -3,7 +3,8 @@
 ``tests/fixtures/code_repo`` holds one small file per supported code
 language. These tests run it through the same steps a Code project uses,
 without models: scanning with the Code type's file types, reading,
-splitting into units and passages, and building the code graph. As in a
+splitting into units and passages, and building the code graph, whose
+links can cross languages (MATLAB calling Python). As in a
 Code project, whose ``code_graph`` is ``true``, HTML is read as code. Each
 language's own reader is tested in detail by its unit tests; this file
 checks that they work together on one repository.
@@ -139,15 +140,41 @@ class TestCodeFixtureRepository(unittest.TestCase):
             with self.subTest(relation=expected):
                 self.assertIn(expected, self.relations)
 
-    def test_matlab_function_calls_its_helper(self) -> None:
-        targets = {
-            relation.target
+    def test_matlab_calls_its_helper_and_python(self) -> None:
+        m = "matlab"
+        for expected in (
+            CodeRelation(
+                f"{m}.m_function_A.m_function_A",
+                "calls",
+                f"{m}.m_function_B.m_function_B",
+            ),
+            CodeRelation(
+                f"{m}.m_function_C.m_function_C",
+                "calls",
+                "python.calculator_py.py_function_A",
+            ),
+            CodeRelation(
+                f"{m}.m_function_C.m_function_C",
+                "calls",
+                f"{m}.m_function_A.m_function_A",
+            ),
+        ):
+            with self.subTest(relation=expected):
+                self.assertIn(expected, self.relations)
+
+    def test_comments_and_builtins_do_not_link_across_files(self) -> None:
+        sources = {
+            relation.source
             for relation in self.relations
-            if relation.source == "matlab.m_function_A.m_function_A"
-            and relation.relation == "calls"
+            if relation.relation == "calls"
+            and relation.target.endswith("py_function_A")
         }
-        self.assertTrue(
-            any(target.endswith("m_function_B") for target in targets)
+        self.assertEqual(
+            sources,
+            {
+                "python.calculator_py.PyChildClass.py_method_C",
+                "matlab.m_function_C.m_function_C",
+            },
         )
 
     def test_javascript_calls_through_objects_are_not_links(self) -> None:
