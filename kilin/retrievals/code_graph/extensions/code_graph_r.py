@@ -55,6 +55,7 @@ from kilin.retrievals.code_graph.code_graph import (
     _module_name,
     _resolve_name,
 )
+from kilin.sources import source_kinds as kinds
 from kilin.sources.extensions import sources_r
 from kilin.sources.sources import SourceFile, SourceUnit
 
@@ -77,8 +78,7 @@ _LIBRARY: Final[re.Pattern[str]] = re.compile(
     r"\s*(?=[,)])"
 )
 _SOURCE: Final[re.Pattern[str]] = re.compile(
-    r"(?<![\w.$@:])source\s*\(\s*([\"'])([^\"']+\.[Rr])\1"
-    r"\s*(?=[,)])"
+    r"(?<![\w.$@:])source\s*\(\s*([\"'])([^\"']+\.[Rr])\1" r"\s*(?=[,)])"
 )
 # Statements and loaders followed by "(", which are not calls.
 _KEYWORDS: Final[frozenset[str]] = frozenset(
@@ -208,7 +208,7 @@ def extract_code_relations(
         unit, around = pending.pop()
         # Graph names: module.function, module.Class, module.Class.method.
         owner = around if unit.symbol is None else f"{module}.{unit.symbol}"
-        if unit.kind == "r_class":
+        if unit.kind == kinds.R_CLASS:
             unit_code, unit_uncommented = _source_masks(unit.text)
             base = next(
                 (

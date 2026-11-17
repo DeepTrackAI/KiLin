@@ -341,6 +341,35 @@ class TestContextExpansionPlanning(unittest.TestCase):
                 )
                 self.assertEqual(result.functions, ("m.Client.reply",))
 
+    def test_every_language_names_functions_and_methods(self) -> None:
+        """JS, R and MATLAB methods are callables like Python ones.
+
+        """
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("web.app.js_save", "js_function", Path("a.js")),
+                CodeEntity("web.app.Store.flush", "js_method", Path("a.js")),
+                CodeEntity("r.calc.r_total", "r_function", Path("c.R")),
+                CodeEntity("m.Shape.area", "matlab_method", Path("Shape.m")),
+                CodeEntity("m.Shape.Shape", "matlab_constructor",
+                           Path("Shape.m")),
+            ),
+            relations=(),
+        )
+        for question, expected in (
+            ("Which functions call js_save?", ("web.app.js_save",)),
+            ("What does r_total return?", ("r.calc.r_total",)),
+            ("Explain Store.flush.", ("web.app.Store.flush",)),
+            ("Explain the area method.", ("m.Shape.area",)),
+            # A method's plain name alone is an ordinary word.
+            ("How is the area computed?", ()),
+        ):
+            with self.subTest(question=question):
+                result = context_expansion.plan_context_expansion(
+                    question, graph
+                )
+                self.assertEqual(result.functions, expected)
+
     def test_code_like_names_match_without_markers(self) -> None:
         """Underscores, digits, and inner capitals identify code names.
 

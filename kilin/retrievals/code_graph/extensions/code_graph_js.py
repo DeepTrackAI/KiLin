@@ -45,6 +45,7 @@ from kilin.retrievals.code_graph.code_graph import (
     _module_name,
     _resolve_name,
 )
+from kilin.sources import source_kinds as kinds
 from kilin.sources.extensions import sources_js
 from kilin.sources.sources import SourceFile, SourceUnit
 
@@ -146,9 +147,9 @@ def extract_code_relations(
 
     relations: set[CodeRelation] = set()
     module = _module_name(source_file.path)
-    masked_lines = sources_js._mask_non_code(
-        source_file.text
-    ).splitlines(keepends=True)
+    masked_lines = sources_js._mask_non_code(source_file.text).splitlines(
+        keepends=True
+    )
     # Each unit with the graph name of the code around it: a class line
     # or field belongs to its class, other code between declarations to
     # the file.
@@ -159,8 +160,8 @@ def extract_code_relations(
         unit, around = pending.pop()
         # Graph names: module.function, module.Class, module.Class.method.
         owner = around if unit.symbol is None else f"{module}.{unit.symbol}"
-        text = "".join(masked_lines[unit.start_line - 1:unit.end_line])
-        if unit.kind == "js_class":
+        text = "".join(masked_lines[unit.start_line - 1 : unit.end_line])
+        if unit.kind == kinds.JS_CLASS:
             base = _EXTENDS.search(text)
             if base is not None:
                 relations.add(

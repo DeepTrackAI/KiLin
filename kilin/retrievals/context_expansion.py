@@ -95,6 +95,7 @@ from kilin.defaults import (
 )
 from kilin.retrievals.code_graph import CodeEntity, CodeGraph
 from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
+from kilin.sources import source_kinds as kinds
 
 __all__ = [
     "ContextExpansionPlan",
@@ -107,15 +108,8 @@ __all__ = [
 ]
 
 
-_FUNCTION_KINDS = {
-    "matlab_function",
-    "python_function",
-    "python_method",
-    "js_function",
-    "js_method",
-    "r_function",
-    "r_method",
-}
+# Functions, methods and constructors of every built-in code language.
+_FUNCTION_KINDS = kinds.CALLABLE_KINDS
 
 # Relationship phrases influence deterministic graph-context expansion.
 _RETRIEVAL_DEFAULTS = load_defaults_section("RETRIEVAL")
@@ -186,10 +180,7 @@ SOURCE_SEARCH_RESULTS = require_default_nonnegative_int(
 _SOURCE_SEARCH_OTHERS = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_OTHERS", "RETRIEVAL"
 )
-_MODULE_CONTEXT_KINDS = {
-    "python_module_context", "matlab_file_context", "js_module_context",
-    "r_script",
-}
+_MODULE_CONTEXT_KINDS = kinds.MODULE_CONTEXT_KINDS
 # Dotted code references in prose ("lexical_terms", "kilin.lexical_search").
 _CODE_REFERENCE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_]\w*)*")
 # Words that ask about documentation rather than how the code works.
@@ -199,7 +190,7 @@ _DOCUMENTATION_WORDS = require_default_lowercase_words(
 # Chunk kinds of prose and notebooks: Markdown files, notebook cells
 # (tutorial examples rather than the implementation), plain text, and PDFs.
 _DOCUMENTATION_KIND_PREFIXES = ("markdown_", "notebook_", "text_", "pdf_")
-_CLASS_KINDS = {"matlab_class", "python_class", "js_class", "r_class"}
+_CLASS_KINDS = kinds.CLASS_KINDS
 _WORD = re.compile(r"[A-Za-z0-9]+")
 # Words used in plain prose that introduce a code name ("the reply method").
 _CODE_NOUNS = ("function", "method", "class")
@@ -378,7 +369,9 @@ def plan_context_expansion(
         tests_allowed,
     )
     planned = (
-        set(functions) | set(related_functions) | set(class_methods)
+        set(functions)
+        | set(related_functions)
+        | set(class_methods)
         | set(described)
     )
     tested = _tested_functions(
@@ -401,7 +394,10 @@ def plan_context_expansion(
         dict.fromkeys(
             name
             for name in (
-                *related_functions, *class_methods, *described, *bridged
+                *related_functions,
+                *class_methods,
+                *described,
+                *bridged,
             )
             if name not in functions
         )
@@ -557,9 +553,7 @@ def expand_retrieval_context(
         for function in plan.related_functions:
             if function in asked:
                 continue
-            related_chunks = _chunks_for_functions(
-                chunks, graph, (function,)
-            )
+            related_chunks = _chunks_for_functions(chunks, graph, (function,))
             _append_unique(
                 related,
                 related_seen,
@@ -677,7 +671,7 @@ def _explicit_functions(
             module = ".".join(entity.path.with_suffix("").parts)
             prefix = f"{module}."
             if entity.name.startswith(prefix):
-                symbol = entity.name[len(prefix):]
+                symbol = entity.name[len(prefix) :]
                 if "." in symbol:
                     names = (symbol, entity.name)
                     if any(
@@ -686,7 +680,8 @@ def _explicit_functions(
                             rf"{re.escape(name.casefold())}"
                             r"(?![A-Za-z0-9_.])",
                             normalized,
-                        ) is not None
+                        )
+                        is not None
                         for name in names
                     ):
                         matches.add(entity.name)
@@ -695,7 +690,7 @@ def _explicit_functions(
         # A plain word names a function only when it is unambiguous: one
         # top-level function, not a method, and longer than two letters.
         plain_word_ok = (
-            entity.kind not in {"python_method", "js_method", "r_method"}
+            entity.kind not in kinds.METHOD_KINDS
             and leaf_counts[leaf] == 1
             and len(leaf) > 2
         )
@@ -1398,9 +1393,9 @@ def _class_methods(
             for entity in graph.entities
             if entity.kind in _FUNCTION_KINDS
             and entity.name.startswith(prefix)
-            and "." not in entity.name[len(prefix):]
+            and "." not in entity.name[len(prefix) :]
             and not (
-                entity.name[len(prefix):].startswith("__")
+                entity.name[len(prefix) :].startswith("__")
                 and entity.name.endswith("__")
             )
         )
@@ -1774,10 +1769,15 @@ def _documented_functions(
             if not _looks_like_code(leaf):
                 continue
             options = by_leaf.get(leaf, [])
-            qualified = [
-                name for name in options
-                if name == reference or name.endswith(f".{reference}")
-            ] if "." in reference else options
+            qualified = (
+                [
+                    name
+                    for name in options
+                    if name == reference or name.endswith(f".{reference}")
+                ]
+                if "." in reference
+                else options
+            )
             candidates = qualified or options
             if len(candidates) != 1 or candidates[0] in exclude:
                 continue
