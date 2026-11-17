@@ -111,6 +111,7 @@ _TYPE_WORDS: Final[dict[str, tuple[str, ...]]] = {
     "scripts": (".py", ".m", ".js", ".r"),
     "javascript": (".js",),
     "js": (".js",),
+    "json": (".json",),
     "html": (".html",),
     "webpage": (".html",),
     "webpages": (".html",),
@@ -129,6 +130,7 @@ _TYPE_NAMES: Final[dict[str, str]] = {
     ".py": "Python",
     ".m": "MATLAB",
     ".js": "JavaScript",
+    ".json": "JSON",
     ".html": "HTML",
     ".r": "R",
 }
