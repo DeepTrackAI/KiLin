@@ -123,9 +123,9 @@
     "paper_overview": {
       "description": "A short summary or overview of one paper, in the chat ('give me a short summary of the Smith paper', 'what is the Lee paper about?', 'summarize another paper', 'a quick summary of one of the papers'). Asks which paper when none is named. Not for a named report format (research_briefing, popular_science_summary, technical_summary, or experimental_protocol), whether or not the user asks to save a file, and not for what several papers say about a topic (question_answering).",
       "cues": [
-        "^(?!.*\\b(?:briefing|report|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b).*\\b(?:an?\\s+)?(?:short\\s+|brief\\s+|quick\\s+)?overview\\s+of\\b",
-        "^(?!.*\\b(?:briefing|report|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b)(?!.*\\b(?:its|their|main|contributions|limitations|results|methods|findings)\\b)\\s*(?:now\\s+)?summari[sz]e\\s+(?:the|this|that|[\\w-]+\\.pdf)\\b",
-        "^(?!.*\\b(?:briefing|report|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b)\\s*(?:now\\s+)?tell\\s+me\\s+about\\s+(?:the|this|that)\\s+[\\w\\s-]+?\\s(?:paper|article|study)[.?!]?\\s*$"
+        "^(?!.*\\b(?:briefing|report|templates?|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b).*\\b(?:an?\\s+)?(?:short\\s+|brief\\s+|quick\\s+)?overview\\s+of\\b",
+        "^(?!.*\\b(?:briefing|report|templates?|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b)(?!.*\\b(?:its|their|main|contributions|limitations|results|methods|findings)\\b)\\s*(?:now\\s+)?summari[sz]e\\s+(?:the|this|that|[\\w-]+\\.pdf)\\b",
+        "^(?!.*\\b(?:briefing|report|templates?|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b)\\s*(?:now\\s+)?tell\\s+me\\s+about\\s+(?:the|this|that)\\s+[\\w\\s-]+?\\s(?:paper|article|study)[.?!]?\\s*$"
       ],
       "history": {
         "policy": "relevant"
@@ -263,6 +263,33 @@
         "confirmation": "when_large",
         "large_batches": 3
       }
+    },
+    "templated_report": {
+      "description": "Write a report on one document with one of the project's report templates (Markdown files in templates/), named by its title or file name, and save it to outputs/; also list the project's templates or check one. Examples: \"write a journal club summary of smith20\", \"fill the lab notes template for patil25\", \"which templates do I have?\", \"check my journal_club template\". When no template is named, the user chooses one. Not for a short informal summary (paper_overview).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "generate_paper_summary",
+        "template": "choose",
+        "part_tokens": 6000,
+        "repair_attempts": 3,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      },
+      "cues": [
+        "\\b(?:using|with|from|in|into|per)\\s+(?:the\\s+|my\\s+|our\\s+|this\\s+|a\\s+)?[\\w\\s-]{0,40}?\\btemplate\\b",
+        "\\btemplate\\b[\\s\\S]{0,40}?\\b(?:for|of|on)\\b",
+        "\\b(?:list|which|what|show|available)\\b[^\\n]{0,40}\\btemplates\\b|\\btemplates\\b[^\\n]{0,40}\\b(?:do\\s+(?:i|we)\\s+have|available)\\b",
+        "\\b(?:check|validate|test|verify)\\b[^\\n]{0,40}\\btemplate\\b"
+      ],
+      "requires": [
+        "\\b(?:templates?|reports?|briefings?|summar(?:y|ies)|protocols?|notes|write|prepare|make|generate|create|produce|draft|fill)\\b"
+      ]
     },
     "project_inventory": {
       "description": "Questions about the project's files themselves rather than their content: how many papers or files it has, which files or types are included, which could not be read ('how many papers are in this project?', 'list the PDFs in the reviews folder', 'which files have no searchable text?'). Not when files are filtered by what they are about ('how many of the files are related to X?' or 'which files use X?' read the files: topic_listing), and not for whether files mention or contain a word (mention_listing).",

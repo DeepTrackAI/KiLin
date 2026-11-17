@@ -102,7 +102,12 @@ from kilin.tools import (
     suggest_reference,
     writing_check,
 )
-from kilin.tools._contract import ToolContext, ToolRequest, ToolResult
+from kilin.tools._contract import (
+    ToolContext,
+    ToolRequest,
+    ToolResult,
+    ToolRouting,
+)
 from kilin.tools._defaults import load_tool_defaults
 from kilin.tools._model_calls import (
     ModelCallSettings,
@@ -201,6 +206,12 @@ class Tool:
         questions: True for those questions, which then relate to an
         earlier turn like ``follows_up``. They are not ruled out for
         naming a file.
+    routing: Callable[[object, Path, tuple[object, ...]], ToolRouting | None]
+        Optional ``routing(settings, project_root, others)``: cues and a
+        router description from the project's own files, added to the
+        intent before routing (``with_project_routing``); ``others`` are
+        the settings of the project type's other intents using the same
+        tool, whose cases the routing can leave to them.
     model_calls: ModelCallSettings
         Tool-owned policy for internal answering-model calls.
     workspace_resources: Callable | None
@@ -214,6 +225,10 @@ class Tool:
     run: Callable[[object, ToolRequest, ToolContext], ToolResult]
     follows_up: bool = False
     follows_up_when: Callable[[str], bool] | None = None
+    routing: (
+        Callable[[object, Path, tuple[object, ...]], ToolRouting | None]
+        | None
+    ) = None
     workspace_resources: (
         Callable[[object], tuple[WorkspaceResource, ...]] | None
     ) = None
@@ -368,6 +383,7 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         "and save the Markdown to outputs/.",
         generate_paper_summary.parse_settings,
         generate_paper_summary.run,
+        routing=generate_paper_summary.routing,
         workspace_resources=generate_paper_summary.workspace_resources,
     ),
 }

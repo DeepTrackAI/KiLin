@@ -226,6 +226,12 @@ ruled out for naming a file. The router is then asked once more with
 the ruled-out intents left out of the list; when that call fails or still
 names one of them, the default intent is used.
 
+Before routing, tools with a `routing` callback add cues and descriptions
+built from the project's own files (`with_project_routing`):
+`templated_report` is cued by the names of the report templates in the
+project's `templates/`, so a template added there is routed to without
+editing the project type.
+
 Disliked-answer exclusion is controlled by the saved project setting
 `history.exclude_disliked_answers` and is enabled by default for every
 project type, independently of long-term memory indexing. At the start of

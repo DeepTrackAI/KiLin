@@ -221,8 +221,13 @@ card representation, indexing and persistence. See
 The [standard tool layout](tool_packages.md#standard-tool-layout) specifies
 the package, configuration and resource files. `tools/_registry.py` pairs a
 canonical `TOOL_*` identifier with its parser, runner, optional `follows_up`
-or `follows_up_when` behavior and optional `workspace_resources` callback. Project-type JSON can
-select an existing entry, not load another implementation by string.
+or `follows_up_when` behavior, optional `routing` callback and optional
+`workspace_resources` callback. `routing(settings, project_root, others)`
+returns a `ToolRouting` (cues and router description) built from the
+project's own files, which `with_project_routing` adds to the intent before
+each question is routed (`generate_paper_summary` describes the project's
+report templates this way). Project-type JSON can select an existing entry,
+not load another implementation by string.
 
 Implement an extension in this order:
 

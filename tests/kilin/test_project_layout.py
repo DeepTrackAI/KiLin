@@ -124,10 +124,11 @@ class TestProjectLayout(unittest.TestCase):
         self.assertEqual(plan_project_layout("code").resources, ())
 
     def test_literature_installs_exactly_its_four_templates(self) -> None:
-        """Install just the tool templates selected by literature intents."""
+        """Install the literature templates and the guide to the format."""
 
         root = self._project("literature")
         expected = (
+            "README.md",
             "experimental_protocol.md",
             "popular_science_summary.md",
             "research_briefing.md",
@@ -137,7 +138,7 @@ class TestProjectLayout(unittest.TestCase):
             sorted(path.name for path in (root / "templates").iterdir())
         )
         self.assertEqual(actual, expected)
-        self.assertEqual(len(plan_project_layout("literature").resources), 4)
+        self.assertEqual(len(plan_project_layout("literature").resources), 5)
         for name in expected:
             self.assertEqual(
                 (root / "templates" / name).read_bytes(),
@@ -197,7 +198,7 @@ class TestProjectLayout(unittest.TestCase):
         self.assertTrue((project.root / "sources/paper.md").is_file())
         self.assertTrue((project.root / "outputs").is_dir())
         self.assertEqual(
-            len(list((project.root / "templates").glob("*.md"))), 4
+            len(list((project.root / "templates").glob("*.md"))), 5
         )
 
     def test_mirrored_workspace_installs_selected_templates(self) -> None:
@@ -211,7 +212,7 @@ class TestProjectLayout(unittest.TestCase):
         self.assertTrue((workspace.root / "outputs").is_dir())
         self.assertTrue((workspace.root / "templates").is_dir())
         self.assertEqual(
-            len(list((workspace.root / "templates").glob("*.md"))), 4
+            len(list((workspace.root / "templates").glob("*.md"))), 5
         )
         # Repeated synchronization cannot replace an edited template.
         modified = workspace.root / "templates/research_briefing.md"

@@ -198,11 +198,14 @@ With the current bundled project types:
 | Type | `templates/` contents after new project creation |
 | --- | --- |
 | `code` | Empty directory, ready for user templates |
-| `literature` | `research_briefing.md`, `popular_science_summary.md`, `technical_summary.md`, `experimental_protocol.md` |
+| `literature` | `research_briefing.md`, `popular_science_summary.md`, `technical_summary.md`, `experimental_protocol.md`, `README.md` |
+| `writing` | The same four templates and `README.md` |
 
-These four files are selected because the corresponding literature intents
-configure `generate_paper_summary` with those template identifiers, not
-because the project initializer hard-codes their names.
+These files are selected because the literature intents configure
+`generate_paper_summary` with those template identifiers, and because the
+`templated_report` intent (`template: "choose"`, in both types) uses any
+template and installs every bundled one with `README.md`, the guide to the
+format; the project initializer does not hard-code their names.
 
 ## Existing projects and user ownership
 

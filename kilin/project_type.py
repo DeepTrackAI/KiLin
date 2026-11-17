@@ -155,6 +155,11 @@ Module Structure
 
     Look up one packaged project type by its ID.
 
+- ``with_project_routing``
+
+    Add the routing that tools derive from one project's own files (its
+    report templates) to a project type, before a question is routed.
+
 Private helpers read and validate single fields; they are not part of the
 public API.
 
@@ -170,7 +175,7 @@ True
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 import json
 from math import isfinite
@@ -188,7 +193,7 @@ from kilin.retrievals.evidence_budget import (
 )
 from kilin.repository import normalize_extensions
 from kilin.tools._contract import reject_unknown
-from kilin.tools._registry import ToolUse, parse_tool
+from kilin.tools._registry import TOOL_REGISTRY, ToolUse, parse_tool
 
 __all__ = [
     "CODE_GRAPH_AUTO",
@@ -223,6 +228,7 @@ __all__ = [
     "RetrievalStrategy",
     "load_project_types",
     "project_type",
+    "with_project_routing",
 ]
 
 ProjectTypeId: TypeAlias = str
@@ -1303,3 +1309,60 @@ def project_type(type_id: ProjectTypeId) -> ProjectType:
         )
 
     return types[type_id]
+
+
+def with_project_routing(config: ProjectType, root: Path) -> ProjectType:
+    """Return a project type with the routing its tools derive per project.
+
+    A registered tool with ``routing`` (``generate_paper_summary``, from
+    the project's ``templates/``) adds cues and a router description to
+    its intent, so a template file added to the project is routed to
+    without editing the project type.
+
+    Parameters
+    ----------
+    config: ProjectType
+        The project's effective type.
+    root: pathlib.Path
+        The project's workspace.
+
+    Returns
+    -------
+    ProjectType
+        ``config`` itself when no tool adds routing; otherwise a copy whose
+        intents carry the added cues (compiled case-insensitively, after
+        their own) and description. A tool that fails to read the project
+        adds nothing.
+
+    """
+
+    intents: dict[str, Intent] = {}
+    changed = False
+    for intent_id, intent in config.intents.items():
+        tool = TOOL_REGISTRY[intent.tool.name] if intent.tool else None
+        routing = None
+        if tool is not None and tool.routing is not None:
+            others = tuple(
+                other.tool.settings
+                for other_id, other in config.intents.items()
+                if other_id != intent_id and other.tool is not None
+                and other.tool.name == intent.tool.name
+            )
+            try:
+                routing = tool.routing(intent.tool.settings, root, others)
+            except (OSError, ValueError):
+                routing = None
+        if routing is None or not (routing.cues or routing.description):
+            intents[intent_id] = intent
+            continue
+        changed = True
+        intents[intent_id] = replace(
+            intent,
+            cues=intent.cues + tuple(
+                re.compile(cue, re.IGNORECASE) for cue in routing.cues
+            ),
+            description=(
+                f"{intent.description} {routing.description}".strip()
+            ),
+        )
+    return replace(config, intents=intents) if changed else config

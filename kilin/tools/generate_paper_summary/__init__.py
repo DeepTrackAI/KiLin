@@ -67,6 +67,7 @@ from kilin.tools.generate_paper_summary._report_template import (
 )
 from kilin.tools.generate_paper_summary.tool import (
     REFERENCE_LAYOUT,
+    TEMPLATE_CHOOSE,
     SummarySettings,
     choose_paper,
     choose_template,
@@ -76,9 +77,11 @@ from kilin.tools.generate_paper_summary.tool import (
     paper_citation,
     parse_settings,
     references_prompt,
+    routing,
     run,
     section_prompt,
     summary_file_text,
+    templates_answer,
     workspace_resources,
 )
 
@@ -94,6 +97,7 @@ __all__ = [
     "ReportTemplate",
     "SectionSource",
     "SummarySettings",
+    "TEMPLATE_CHOOSE",
     "TemplateSection",
     "check_report",
     "choose_paper",
@@ -108,10 +112,12 @@ __all__ = [
     "parse_settings",
     "parse_template",
     "references_prompt",
+    "routing",
     "run",
     "section_problem",
     "section_prompt",
     "summary_file_text",
     "template_names",
+    "templates_answer",
     "workspace_resources",
 ]
