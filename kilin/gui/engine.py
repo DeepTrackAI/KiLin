@@ -3799,7 +3799,10 @@ class ChatEngine:
                 "repository": str(self.session.project.source),
                 "selected_files": [evidence.path.as_posix()],
             }
-            source = read_repository_files(report)[0]
+            # Read as the index read it, so line numbers match.
+            source = read_repository_files(
+                report, as_code=self.session._reads_as_code()
+            )[0]
             preview = _reference_context(
                 source.text,
                 evidence.text,
