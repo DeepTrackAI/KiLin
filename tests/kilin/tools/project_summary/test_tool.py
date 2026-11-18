@@ -20,6 +20,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from kilin.answering import _cued_intent
+from kilin.tools._shared.report_templates import parse_template
+from kilin.tools.project_summary import _configuration as _config
 from kilin.project_type import project_type, with_project_routing
 from kilin.tools._contract import ToolRequest
 from kilin.tools._registry import TOOL_REGISTRY
@@ -154,12 +156,12 @@ class _Project(unittest.TestCase):
         self.folder.cleanup()
 
     def _run(self, question="write a lab overview of the project",
-             model=_model, confirm=None, **settings):
+             model=_model, confirm=None, choose=None, **settings):
         context = SimpleNamespace(
             project_root=self.root, chunks=self.chunks, progress=Mock(),
             done=Mock(), trace=SimpleNamespace(emit=Mock()),
             trace_turn_id=None, ask_model=Mock(side_effect=model),
-            confirm=confirm, choose=None,
+            confirm=confirm, choose=choose,
             card=lambda path: {"title": "Study A"} if path.name == "a.md"
             else None,
         )
@@ -217,6 +219,10 @@ class TestRun(_Project):
             result, context = self._run(model=model)
         report = (self.root / result.summary["report"]).read_text()
         self.assertEqual(result.summary["failed"], [2])
+        self.assertFalse(result.summary["valid"])
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertEqual(result.summary["coverage"]["read"], 2)
+        self.assertEqual(result.summary["coverage"]["failed"], [2])
         self.assertIn("Not read: [2].", report)
         self.assertIn("Not read: [2].", result.answer)
         prompts = [c.args[1] for c in context.ask_model.call_args_list]
@@ -344,6 +350,37 @@ class TestRun(_Project):
                               confirmation="always")
         self.assertEqual(result.summary["choice"], "quick")
 
+    def test_document_limit_disclosed_in_saved_report(self) -> None:
+        result, context = self._run(max_documents=1)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertFalse(result.summary["valid"])
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertEqual(result.summary["left_out"], 2)
+        self.assertEqual(result.summary["coverage"], {
+            "indexed": 3, "selected": 1, "read": 1,
+            "omitted": ["b.md", "c.md"], "failed": [],
+        })
+        self.assertIn("**Coverage**", report)
+        self.assertIn("1 of 3 indexed documents", report)
+        self.assertIn("`max_documents=1`", report)
+        self.assertIn("`b.md`, `c.md`", report)
+        self.assertIn("**Documents**\n\n[1] Study A", report)
+        self.assertEqual([e["citation"] for e in result.evidence], [1])
+
+    def test_large_omitted_list_is_bounded_in_the_report(self) -> None:
+        self.chunks.extend(
+            chunk(str(i), "Additional indexed document.",
+                  path=f"extra_{i:02d}.md")
+            for i in range(13)
+        )
+        result, _ = self._run(max_documents=1)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertEqual(result.summary["left_out"], 15)
+        self.assertEqual(len(result.summary["coverage"]["omitted"]), 15)
+        self.assertIn("and 5 more (all paths in result metadata)", report)
+        self.assertNotIn("`extra_12.md`", report)
+        self.assertFalse(result.summary["valid"])
+
     def test_no_documents_or_templates(self) -> None:
         self.chunks = []
         result, _ = self._run()
@@ -397,6 +434,148 @@ class TestTemplates(_Project):
         with self.assertRaisesRegex(ValueError, "Which project report"):
             choose_template("summarize the project", self.templates,
                             TEMPLATE_CHOOSE)
+
+    def test_overlapping_template_names_and_ambiguous_requests(
+        self,
+    ) -> None:
+        (self.templates / "lab.md").write_text(
+            LAB.replace("Lab Overview", "Lab")
+        )
+        (self.templates / "lab_notes.md").write_text(
+            LAB.replace("Lab Overview", "Lab Notes")
+        )
+        for question, expected in (
+            ("write lab_notes.md for the project", "lab_notes"),
+            ("make Lab Notes report", "lab_notes"),
+            ("write LAB-NOTES.MD", "lab_notes"),
+            ("use templates/lab_notes.md", "lab_notes"),
+            ("make lab.md report", "lab"),
+            ("write the lab report", "lab"),
+            ("make a collaboration report", "lab_overview"),
+        ):
+            with self.subTest(question=question):
+                actual = choose_template(
+                    question, self.templates, "lab_overview"
+                )
+                self.assertEqual(actual.name, expected)
+        with self.assertRaisesRegex(
+            ValueError, "Several project report templates match"
+        ) as error:
+            choose_template(
+                "use lab_notes and lab", self.templates, TEMPLATE_CHOOSE
+            )
+        self.assertIn("`lab.md`", str(error.exception))
+        self.assertIn("`lab_notes.md`", str(error.exception))
+
+    def test_invalid_choice_does_not_start_generation(self) -> None:
+        shutil.copy(
+            SHIPPED_TEMPLATES_DIR / "project_overview.md", self.templates
+        )
+        for value in (-1, 999, True, "1", None):
+            with self.subTest(value=value):
+                choice = Mock(return_value=value)
+                self.assertIsNone(choose_template(
+                    "write a project report", self.templates,
+                    TEMPLATE_CHOOSE, choice,
+                ))
+                result, context = self._run(
+                    question="write a project report", choose=choice,
+                )
+                self.assertEqual(result.answer, "No template was chosen.")
+                context.ask_model.assert_not_called()
+                self.assertEqual(
+                    context.trace.emit.call_args_list[1].args[0],
+                    "tool.choice.decided",
+                )
+                self.assertIsNone(
+                    context.trace.emit.call_args_list[1].kwargs["data"]
+                    ["index"]
+                )
+
+    def test_choice_announced_to_gui_before_callback(self) -> None:
+        shutil.copy(
+            SHIPPED_TEMPLATES_DIR / "project_overview.md", self.templates
+        )
+        seen = []
+
+        def progress(message, **details):
+            seen.append(("progress", message, details))
+
+        def choose(question, options):
+            self.assertEqual(seen[0][0], "progress")
+            self.assertEqual(seen[0][1], "Waiting for your choice")
+            self.assertEqual(
+                seen[0][2]["choice"],
+                {"question": question, "options": list(options)},
+            )
+            return 0
+
+        context = SimpleNamespace(
+            project_root=self.root, chunks=[], progress=progress,
+            done=Mock(), trace=SimpleNamespace(emit=Mock()),
+            trace_turn_id="turn-1", choose=choose,
+        )
+        result = run(
+            ProjectSummarySettings(),
+            ToolRequest("write a project report", "write a project report"),
+            context,
+        )
+        self.assertIn("no indexed documents", result.answer)
+        self.assertEqual(
+            [call.args[0] for call in context.trace.emit.call_args_list],
+            ["tool.choice.proposed", "tool.choice.decided"],
+        )
+        self.assertEqual(
+            context.trace.emit.call_args_list[0].kwargs["turn_id"],
+            "turn-1",
+        )
+
+    def test_invalid_templates_and_fixed_scope(self) -> None:
+        broken = self.templates / "bad_encoding.md"
+        broken.write_bytes(
+            b"---\nscope: project\ntitle: Bad\n---\n\xff"
+        )
+        found = {name: (template, error) for name, template, error in
+                 project_templates(self.templates)}
+        self.assertIsNone(found["bad_encoding"][0])
+        self.assertTrue(found["bad_encoding"][1])
+        with self.assertRaisesRegex(ValueError, "cannot be used"):
+            choose_template(
+                "use bad_encoding.md", self.templates, TEMPLATE_CHOOSE
+            )
+
+        from kilin.tools.generate_paper_summary import (
+            SHIPPED_TEMPLATES_DIR as PAPER_TEMPLATES,
+        )
+        shutil.copy(PAPER_TEMPLATES / "research_briefing.md", self.templates)
+        with self.assertRaisesRegex(ValueError, "individual-document"):
+            choose_template(
+                "use research_briefing.md", self.templates, TEMPLATE_CHOOSE
+            )
+        with self.assertRaisesRegex(ValueError, "individual documents"):
+            choose_template(
+                "make a report", self.templates, "research_briefing"
+            )
+        with self.assertRaisesRegex(ValueError, "Cannot read"):
+            choose_template("make a report", self.templates, "bad_encoding")
+
+    def test_per_document_section_limit(self) -> None:
+        extra = "".join(
+            f"\n## Added {n} (per document)\n\n"
+            "When: it uses imaging.\nDo: list the technique.\n"
+            for n in range(24)
+        )
+        template = parse_template(
+            LAB + extra, "maximum", _config.TEMPLATE_RULES
+        )
+        self.assertEqual(
+            sum(s.source == "per_document" for s in template.sections), 26
+        )
+        with self.assertRaisesRegex(ValueError, "at most 26"):
+            parse_template(LAB + extra + (
+                "\n## Overflow (per document)\n\n"
+                "When: it uses imaging.\nDo: list the technique.\n"
+            ), "overflow", _config.TEMPLATE_RULES)
 
     def test_routing(self) -> None:
         found = routing(ProjectSummarySettings(), self.root)

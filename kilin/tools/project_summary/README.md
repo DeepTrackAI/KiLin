@@ -3,23 +3,32 @@
 This package owns the `project_summary` registered tool: one report on all
 the documents of a project, written from a project template (`scope:
 project`). Where a search-based answer reads the few passages a question
-retrieves, this tool reads every document once, so the report covers the
-whole project. It is offered by the `templated_project_report` intent of
-the Literature and Writing Assistant project types.
+retrieves, this tool considers all indexed documents, up to the
+configured `MAX_DOCUMENTS` limit. A skipped or failed document makes the
+saved report explicitly partial. It is offered by the
+`templated_project_report` intent of the Literature and Writing Assistant
+project types.
 
 For "write a project overview", the tool:
 
 1. **Chooses the template**: the project template the question names (by
-   title or file name), otherwise the project's only project template, or
-   the one the user chooses from a list. Where nobody can be asked, the
-   answer lists the project templates and how to name one.
+   title or complete file name), otherwise the project's only project
+   template, or the one the user chooses from a list. Names that overlap
+   are resolved by their complete boundaries; naming multiple templates
+   is an error. Invalid choices cancel without reading any documents.
+   The GUI receives the shared traced choice event before it waits for
+   an answer. A document-scoped template named in the request or set
+   as the fixed default is rejected; broken project templates are reported,
+   including invalid UTF-8 files.
 2. **Plans the work**: one model call per document and one per written
    section, with an estimated time (`ESTIMATES`). With `CONFIRMATION`
    `when_large`, a plan of more than `LARGE_BATCHES` calls asks first; the
    quick version ("Shorter reading") reads only each document's card and
    opening (`QUICK_DOCUMENT_TOKENS`). Documents beyond `MAX_DOCUMENTS`, in
-   path order, are left out and the plan says so.
-3. **Reads every document** (the map step, below).
+   path order, are left out and the plan says so. The saved report
+   also identifies omitted files in a **Coverage** section (up to ten
+   filenames; all omitted paths remain in result metadata).
+3. **Reads each selected document** (the map step, below).
 4. **Writes the report** (the reduce step, below), checks it against the
    template (`TEMPLATE_VALIDATION`), and saves it to
    `outputs/<template>_project_report.md`, closed by the numbered list of
@@ -27,7 +36,10 @@ For "write a project overview", the tool:
    passage is its evidence `[n]`. What the checks still found (sections
    outside their limits or citing doubtfully, sections that could not be
    written, documents that could not be read) is saved in the report, in
-   a **Check** list before the documents.
+   a **Check** list before the documents. The result metadata
+   reports `status: partial` and `valid: false` when a document failed,
+   a document was omitted, or validation found a problem. The `coverage`
+   counts distinguish indexed, selected, and successfully read documents.
 
 ## Project templates
 
@@ -39,7 +51,8 @@ documents (`## Main Themes (180-260 words)`), it can have:
 - **per-document sections**: `## Models (per document)` with `When:` (which
   documents) and `Do:` (what to write for each, optionally `(max 30
   words)`); `(per document, table)` with `Do: | Dataset | Size |` gives a
-  table row per document;
+  table row per document. Templates support at most 26 per-document
+  sections (lettered A–Z); larger templates are rejected before use;
 - `**Documents:** {documents}`: the number of documents, written by code;
 - `{key_documents}` in a section's instruction: the model picks documents
   (with an item limit), code writes their titles.
@@ -53,7 +66,7 @@ review or other document).
 Templates for one document are left to `generate_paper_summary`, which
 also lists the project templates when asked "which templates do I have?".
 
-## Reading every document (the map step)
+## Reading the selected documents (the map step)
 
 It reads a short excerpt of each document (`_documents.py`), of about
 `DOCUMENT_TOKENS` tokens:
@@ -66,7 +79,9 @@ It reads a short excerpt of each document (`_documents.py`), of about
   and actions), in document order.
 
 Documents are the project's indexed sources, numbered in path order; the
-number is how the report cites a document (`[3]`).
+number is how the report cites a document (`[3]`). Notebook passages are
+read by cell number and then by their cell-local line ranges. PDF pages
+are likewise ordered by page number before page-local lines.
 
 One model call per document (`_mapping.py`) asks for:
 
@@ -190,4 +205,6 @@ Planning assumptions for the time shown in the plan, not limits.
 A document is read through an excerpt, not in full, so a fact outside it
 is missed; per-document checks say "unclear" rather than guess. The
 synthesis can still misstate what the notes say: check claims against the
-cited documents.
+cited documents. Validation of model-generated quotes and table values
+against independent source passages is deferred to the evidence-validation
+PR; `valid` here describes structural checks and document coverage only.

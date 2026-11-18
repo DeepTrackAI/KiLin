@@ -12,6 +12,7 @@ model's notes and per-document checks are parsed and checked.
 from __future__ import annotations
 
 from pathlib import Path
+from kilin.chunking import Chunk
 import unittest
 
 from kilin.tools._shared.report_templates import (
@@ -91,6 +92,37 @@ class TestDocuments(unittest.TestCase):
         only = project_documents(self.chunks, None, [Path("b.pdf")])
         self.assertEqual([(d.number, d.title) for d in only],
                          [(1, "b.pdf")])
+
+    def test_notebook_cells_are_ordered_before_cell_local_lines(
+        self,
+    ) -> None:
+        passages = [
+            Chunk("a", Path("notes.ipynb"), "Cell one opening", 1, 1,
+                  "python", None, None, 1),
+            Chunk("b", Path("notes.ipynb"), "Cell one end", 40, 40,
+                  "python", None, None, 1),
+            Chunk("c", Path("notes.ipynb"), "Cell two opening", 1, 1,
+                  "python", None, None, 2),
+        ]
+        document = project_documents(passages, None)[0]
+        self.assertEqual(
+            [item.text for item in document.passages],
+            [item.text for item in passages],
+        )
+        excerpt = document_excerpt(document, {"opening"}, 1000)
+        self.assertLess(excerpt.index("Cell one end"),
+                        excerpt.index("Cell two opening"))
+
+    def test_pdf_pages_are_ordered_before_page_local_lines(self) -> None:
+        first = Chunk("p1", Path("paper.pdf"), "Page one conclusion", 40,
+                      40, "pdf", None, "Page 1")
+        second = Chunk("p2", Path("paper.pdf"), "Page two opening", 1,
+                       1, "pdf", None, "Page 2")
+        document = project_documents([first, second], None)[0]
+        self.assertEqual(document.passages, (first, second))
+        excerpt = document_excerpt(document, set(), 1000)
+        self.assertLess(excerpt.index("Page one conclusion"),
+                        excerpt.index("Page two opening"))
 
     def test_excerpt(self) -> None:
         def card(path):

@@ -69,6 +69,8 @@ _CARD_FIELDS: Final[tuple[str, ...]] = (
 )
 # Opening passages always read (title, authors, abstract).
 _OPENING_PASSAGES: Final[int] = 2
+# PDF extractor coordinates restart on each numbered page.
+_PDF_PAGE = re.compile(r"Page (\d+)", re.IGNORECASE)
 _WORD = re.compile(r"[^\W\d_]{4,}")
 # Words of a template's instructions that say nothing about a topic.
 _COMMON: Final[frozenset[str]] = frozenset({
@@ -105,6 +107,29 @@ class ProjectDocument:
     card: Mapping[str, str] | None = None
 
 
+def _passage_order(chunk: Chunk) -> tuple[int, int, int]:
+    """Sort indexed passages by their source-unit location.
+
+    Parameters
+    ----------
+    chunk: Chunk
+        A passage with line ranges and optional notebook/PDF provenance.
+
+    Returns
+    -------
+    tuple[int, int, int]
+        Notebook cell or PDF page, then local line bounds. Other formats
+        use line bounds without a preceding unit index.
+
+    """
+
+    unit = chunk.cell or 0
+    if chunk.cell is None and chunk.path.suffix.casefold() == ".pdf":
+        page = _PDF_PAGE.fullmatch(chunk.section or "")
+        unit = int(page.group(1)) if page else 0
+    return unit, chunk.start_line, chunk.end_line
+
+
 def project_documents(
     chunks: Sequence[Chunk],
     card: Callable[[Path], Mapping[str, str] | None] | None,
@@ -125,7 +150,8 @@ def project_documents(
     -------
     list[ProjectDocument]
         One per source path with passages, sorted by path, with its
-        passages in their order and its card, if any.
+        passages in document order (notebook cells or PDF pages before
+        their local lines) and its card, if any.
 
     """
 
@@ -139,9 +165,9 @@ def project_documents(
             continue
         fields = card(path) if card is not None else None
         title = (fields or {}).get("title", "").strip() or path.name
-        passages = tuple(sorted(
-            by_path[path], key=lambda chunk: (chunk.start_line, chunk.end_line)
-        ))
+        # PDF pages and notebook cells have local line ranges, so the
+        # enclosing unit must precede the line number in sort order.
+        passages = tuple(sorted(by_path[path], key=_passage_order))
         documents.append(ProjectDocument(
             len(documents) + 1, path, title, passages, fields or None,
         ))

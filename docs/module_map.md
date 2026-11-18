@@ -231,7 +231,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 183.**
+**Total production Python modules: 189.**
 
 ## Non-Python resources and UI assets
 

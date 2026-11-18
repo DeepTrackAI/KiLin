@@ -4,23 +4,24 @@ A project template (``scope: project``) says what the report holds:
 sections written from all documents, and per-document sections listing the
 documents that meet a condition. The tool:
 
-1. Chooses the template the question names, the project's only project
-   template, or the one the user chooses.
+1. Chooses the uniquely named project template or asks the user through
+   the shared GUI choice protocol, validating the returned choice.
 2. Plans the work (one call per document, one per section) and asks
    before a large run; the quick version reads a shorter excerpt of each
    document (its card and opening).
-3. Reads every document once (``_documents``, ``_mapping``): notes for each
-   section, and checked per-document answers.
-4. Writes the report (``_reduce``), checks it against the template, fixes
-   sections that miss their limits, and saves it to ``outputs/``, closed by
-   the numbered list of documents it cites.
+3. Reads each selected document once (``_documents``, ``_mapping``):
+   notes for each section, and checked per-document answers.
+4. Writes the report (``_reduce``), checks its structure and completeness,
+   and saves it to ``outputs/``. Failed or omitted documents make the result
+   partial, with coverage disclosed in the saved report and result metadata.
 
 Key Features
 ------------
 
-- **The whole project**
+- **Whole-project scope**
 
-    Every document is read, not only what a search finds.
+    All indexed documents are considered without a search filter. Limits
+    and failed reads are disclosed rather than marked fully validated.
 
 - **Any project template**
 
@@ -64,6 +65,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 import re
 from typing import Final
@@ -85,6 +87,7 @@ from kilin.tools._shared.planning import (
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
     ToolPlan,
+    ask_choice,
     confirm_plan,
 )
 from kilin.tools._shared.report_templates import (
@@ -162,6 +165,8 @@ _ROUTED_DESCRIPTION: Final[int] = 120
 # Characters of a document's other notes standing in for a missing note in
 # a section covering all documents.
 _FALLBACK_NOTE: Final[int] = 400
+# Bound the filenames shown in a partial report; metadata retains every path.
+_OMITTED_NAMES_SHOWN: Final[int] = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,8 +315,15 @@ def project_templates(
     for name in template_names(folder):
         try:
             template = load_template(name, folder, _config.TEMPLATE_RULES)
-        except ValueError as error:
-            text = (folder / f"{name}.md").read_text(encoding="utf-8")
+        except (ValueError, UnicodeError, OSError) as error:
+            # The scope is still readable if the file has invalid UTF-8.
+            # Do not let a broken template prevent discovery of the rest.
+            try:
+                text = (folder / f"{name}.md").read_text(
+                    encoding="utf-8", errors="replace"
+                )
+            except OSError:
+                text = ""
             if re.search(r"^scope:\s*project\s*$", text, re.M | re.I):
                 found.append((name, None, str(error)))
             continue
@@ -320,30 +332,84 @@ def project_templates(
     return found
 
 
-def _named(question: str, name: str, template: ReportTemplate | None) -> bool:
-    """Tell whether a question names a template.
+def _named_templates(
+    question: str,
+    found: list[tuple[str, ReportTemplate | None, str]],
+) -> list[tuple[str, ReportTemplate | None, str]]:
+    """Find templates named by complete IDs, filenames, or titles.
+
+    Separators are interchangeable. A shorter name embedded in a longer
+    matched name is not an additional match; separate names are ambiguous.
 
     Parameters
     ----------
     question: str
-        The question, in lower case with single spaces.
-    name: str
-        The template's file name.
-    template: ReportTemplate | None
-        The template, for its title.
+        The user's request.
+    found: list[tuple[str, ReportTemplate | None, str]]
+        Project templates, including unusable ones without a title.
 
     Returns
     -------
-    bool
-        True when the file name, the file name with spaces, or the title
-        occurs in the question.
+    list[tuple[str, ReportTemplate | None, str]]
+        All distinct matching templates, in folder order.
 
     """
 
-    words = [name.casefold(), name.casefold().replace("_", " ")]
-    if template is not None:
-        words.append(template.title.casefold())
-    return any(word in question for word in words)
+    text = " ".join(question.casefold().split())
+    hits: list[tuple[str, tuple[int, int]]] = []
+    for name, template, _ in found:
+        aliases = {name, f"{name}.md"}
+        if template is not None:
+            aliases.add(template.title)
+        for alias in aliases:
+            words = [
+                part for part in re.split(r"[\s_-]+", alias.casefold())
+                if part
+            ]
+            if not words:
+                continue
+            pattern = (
+                r"(?<!\w)" + r"[\s_-]+".join(
+                    re.escape(word) for word in words
+                ) + r"(?!\w)"
+            )
+            hits.extend(
+                (name, match.span())
+                for match in re.finditer(pattern, text)
+            )
+    named = {
+        name for name, (start, end) in hits
+        if not any(
+            other_start <= start and end <= other_end
+            and (other_start, other_end) != (start, end)
+            for _, (other_start, other_end) in hits
+        )
+    }
+    return [item for item in found if item[0] in named]
+
+
+def _ambiguous_templates(
+    named: list[tuple[str, ReportTemplate | None, str]],
+) -> str:
+    """Explain a request naming more than one project template.
+
+    Parameters
+    ----------
+    named: list[tuple[str, ReportTemplate | None, str]]
+        Matching templates.
+
+    Returns
+    -------
+    str
+        Instructions to identify exactly one template by filename.
+
+    """
+
+    options = ", ".join(f"`{name}.md`" for name, _, _ in named)
+    return (
+        f"Several project report templates match this question: {options}. "
+        "Name exactly one template by its filename."
+    )
 
 
 def choose_template(
@@ -369,27 +435,61 @@ def choose_template(
     Returns
     -------
     ReportTemplate | None
-        The project template the question names; otherwise the default,
-        or with ``TEMPLATE_CHOOSE`` the only one or the user's choice;
-        None when the user cancels.
+        The uniquely named project template or the fixed default; with
+        ``TEMPLATE_CHOOSE``, the only usable template or the user's choice.
+        None if the user cancels or returns an invalid index.
 
     Raises
     ------
     ValueError
-        If the named template breaks a rule, there is no project template,
-        or nobody can be asked which; the message says how to go on.
+        If a named template is invalid, several are named, the default
+        is not project-scoped, there is no usable template, or nobody can
+        choose among several; the message explains the problem.
 
     """
 
-    text = " ".join(question.casefold().split())
     found = project_templates(folder)
-    for name, template, error in found:
-        if _named(text, name, template):
-            if template is None:
-                raise ValueError(f"`{name}.md` cannot be used: {error}")
-            return template
+    named = _named_templates(question, found)
+    if len(named) > 1:
+        raise ValueError(_ambiguous_templates(named))
+    if named:
+        name, template, error = named[0]
+        if template is None:
+            raise ValueError(f"`{name}.md` cannot be used: {error}")
+        return template
+    # An explicitly named document template must not silently fall back
+    # to an unrelated project template when routing chose this tool.
+    known = {name for name, _, _ in found}
+    document_templates = []
+    for name in template_names(folder):
+        if name in known:
+            continue
+        try:
+            other = load_template(name, folder, _config.TEMPLATE_RULES)
+        except (ValueError, UnicodeError, OSError):
+            continue
+        if other.scope != SCOPE_PROJECT:
+            document_templates.append((name, other, ""))
+    wrong_scope = _named_templates(question, document_templates)
+    if wrong_scope:
+        names = ", ".join(f"`{name}.md`" for name, _, _ in wrong_scope)
+        raise ValueError(
+            f"{names} belongs to individual-document reports, not "
+            "reports on the whole project."
+        )
     if default != TEMPLATE_CHOOSE:
-        return load_template(default, folder, _config.TEMPLATE_RULES)
+        try:
+            template = load_template(default, folder, _config.TEMPLATE_RULES)
+        except (UnicodeError, OSError) as error:
+            raise ValueError(
+                f"Cannot read project report template {default!r}: {error}"
+            ) from error
+        if template.scope != SCOPE_PROJECT:
+            raise ValueError(
+                f"Template {template.name!r} is for individual documents, "
+                "not a report on the whole project."
+            )
+        return template
     usable = [template for _, template, _ in found if template is not None]
     if not usable:
         raise ValueError(
@@ -410,7 +510,9 @@ def choose_template(
         "Which report on the whole project?",
         tuple(f"{t.title} ({t.name})" for t in usable),
     )
-    return None if index is None else usable[index]
+    if type(index) is not int or not 0 <= index < len(usable):
+        return None
+    return usable[index]
 
 
 def routing(
@@ -567,9 +669,15 @@ def _plan(
     scope = f"{count} documents of the project, {cards} with a card"
     if left_out:
         scope += f"; {left_out} more are left out (the limit is {count})"
+    summary = f"Write a {template.title} from every document."
+    if left_out:
+        summary = (
+            f"Write a partial {template.title}: {count} of "
+            f"{count + left_out} documents."
+        )
     return ToolPlan(
         tool="project_summary",
-        summary=f"Write a {template.title} from every document.",
+        summary=summary,
         scope=scope + ".",
         items=count,
         batches=count + writing,
@@ -792,10 +900,15 @@ def run(
 
     summary: dict[str, object] = {"name": "project_summary"}
     folder = templates_folder(context.project_root)
+    # Emit the choice event to the GUI before blocking for its reply.
+    chooser = (
+        partial(ask_choice, context=context)
+        if getattr(context, "choose", None) is not None
+        else None
+    )
     try:
         template = choose_template(
-            request.question, folder, settings.template,
-            getattr(context, "choose", None),
+            request.question, folder, settings.template, chooser,
         )
     except ValueError as error:
         context.done("No project template", evidence_count=0)
@@ -814,7 +927,9 @@ def run(
             "The project has no indexed documents to report on.", (),
             summary,
         )
-    left_out = max(0, len(documents) - settings.max_documents)
+    total_documents = len(documents)
+    omitted = documents[settings.max_documents:]
+    left_out = len(omitted)
     documents = documents[:settings.max_documents]
     plan = _plan(template, documents, settings, left_out)
     choice, asked = confirm_plan(
@@ -926,6 +1041,22 @@ def run(
         problems.append(
             "Not read: " + ", ".join(f"[{n}]" for n in failed) + "."
         )
+    # Coverage is a separate contract from structural template checks.
+    # Omitted files have no report citation because they were never read.
+    coverage = ""
+    if omitted:
+        shown = omitted[:_OMITTED_NAMES_SHOWN]
+        names = ", ".join(f"`{doc.path.as_posix()}`" for doc in shown)
+        remaining = left_out - len(shown)
+        if remaining:
+            names += f", and {remaining} more (all paths in result metadata)"
+        coverage = (
+            "**Coverage**\n\n"
+            f"Partial report: {len(documents)} of {total_documents} indexed "
+            "documents were selected "
+            f"(`max_documents={settings.max_documents}`). "
+            f"The following {left_out} were not analyzed: {names}.\n\n"
+        )
     # What the checks still found is kept with the report, for whoever
     # reads the file later.
     checked = (
@@ -934,13 +1065,24 @@ def run(
         if problems else ""
     )
     final = (
-        f"{report}\n\n---\n\n{checked}{documents_list(documents)}\n"
+        f"{report}\n\n---\n\n"
+        f"{checked}{coverage}{documents_list(documents)}\n"
     )
     saved = save_output_file(
         context.project_root, f"{template.name}_project_report.md", final
     )
+    valid = check.valid and not failures and not failed and not omitted
     summary.update({
-        "report": saved.as_posix(), "valid": check.valid and not failures,
+        "report": saved.as_posix(),
+        "valid": valid,
+        "status": "complete" if valid else "partial",
+        "coverage": {
+            "indexed": total_documents,
+            "selected": len(documents),
+            "read": len(documents) - len(failed),
+            "omitted": [doc.path.as_posix() for doc in omitted],
+            "failed": failed,
+        },
         "estimated_tokens": estimate_tokens(final),
     })
     note = f"\n\n*Saved to `{saved.as_posix()}`.*"

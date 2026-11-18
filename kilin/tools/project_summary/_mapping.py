@@ -185,10 +185,13 @@ def per_document_sections(template: ReportTemplate) -> list[TemplateSection]:
 
     """
 
-    return [
+    sections = [
         s for s in template.sections
         if s.source == SECTION_SOURCE_PER_DOCUMENT
-    ][:len(_LETTERS)]
+    ]
+    if len(sections) > len(_LETTERS):
+        raise ValueError("At most 26 per-document sections are supported.")
+    return sections
 
 
 def template_texts(template: ReportTemplate) -> list[str]:

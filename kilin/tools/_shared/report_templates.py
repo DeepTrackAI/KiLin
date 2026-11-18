@@ -67,7 +67,9 @@ Key Features
     ``Do:`` line (what to write for each document that meets it, with an
     optional ``(max 40 words)``): the report lists one entry per matching
     document, assembled by code. ``(per document, table)`` with ``Do: |
-    Dataset | Size |`` gives one table row per document instead.
+    Dataset | Size |`` gives one table row per document instead. At
+    most 26 such sections are allowed per template, because each maps to
+    one of the letters A–Z in the document-reading protocol.
 
 - **Sections covering every document (project templates)**
 
@@ -235,6 +237,8 @@ _PLACEHOLDER_NAMES: Final[dict[str, frozenset[str]]] = {
 }
 # Words in a heading's brackets marking a per-document section.
 _PER_DOCUMENT: Final[str] = "per document"
+# Map responses identify per-document sections with letters A through Z.
+_MAX_PER_DOCUMENT_SECTIONS: Final[int] = 26
 _TABLE: Final[str] = "table"
 _ALL_DOCUMENTS: Final[str] = "all documents"
 # "When:" and "Do:" lines of a per-document section; a "Do:" line's
@@ -671,6 +675,14 @@ def parse_template(
 
     if not any(not section.inline for section in sections):
         raise ValueError(f"{name}: a template needs at least one ## section.")
+
+    if sum(
+        section.source == SECTION_SOURCE_PER_DOCUMENT for section in sections
+    ) > _MAX_PER_DOCUMENT_SECTIONS:
+        raise ValueError(
+            f"{name}: a project template can contain at most "
+            f"{_MAX_PER_DOCUMENT_SECTIONS} per-document sections."
+        )
 
     names = [section.name.casefold() for section in sections]
     for index, key in enumerate(names):
