@@ -1715,6 +1715,13 @@ function renderToolSettings(data) {
 let projectBehaviorData = null;
 let behaviorSave = { nextId: 0, pending: null };
 let projectPresentation = null;
+// Ready-to-send questions about the open project's sources, as
+// {intent, question}, up to three per intent; empty means none. The
+// question_suggestions event comes just before its project's "opened"
+// event, which takes them from pending, and before each new empty chat
+// of the open project, which uses them at once.
+let sourceQuestions = [];
+let pendingSourceQuestions = null;
 let feedbackData = { project: "", revision: "", entries: {} };
 let feedbackSave = { nextId: 0, pending: null };
 let memoryIndexState = null;
@@ -6308,6 +6315,34 @@ function clearAskingConversation() {
 }
 
 /**
+ * Pick the three questions an empty chat offers.
+ *
+ * Questions about the project's own sources come first: three intents
+ * at random, each with one of its questions at random, so each new chat
+ * shows other things KíLín can do with other files and topics. When
+ * there are fewer than three intents, for example in a project without
+ * sources, the type's fixed suggestions fill the rest: its first one,
+ * then others at random.
+ *
+ * @param questions Ready-to-send {intent, question} items.
+ * @param fixed The project type's fixed suggestions.
+ * @returns Up to three distinct texts.
+ */
+function chooseSuggestions(questions, fixed) {
+  const shuffled = (items) => [...items].sort(() => Math.random() - 0.5);
+  const intents = new Set();
+  const picked = [];
+  for (const item of shuffled(questions)) {
+    if (intents.has(item.intent)) continue;
+    intents.add(item.intent);
+    picked.push(item.question);
+  }
+  const [first, ...rest] = fixed;
+  const pool = [...picked, first, ...shuffled(rest)];
+  return [...new Set(pool.filter(Boolean))].slice(0, 3);
+}
+
+/**
  * Render the project-type welcome screen for an empty conversation.
  */
 function renderConversationEmpty() {
@@ -6329,9 +6364,7 @@ function renderConversationEmpty() {
   prompt.textContent = content.prompts[promptIndex];
   const suggestions = document.createElement("div");
   suggestions.className = "prompt-suggestions";
-  // The type's first suggestion is always shown; two others vary.
-  const [first, ...rest] = content.suggestions;
-  const choices = [first, ...rest.sort(() => Math.random() - 0.5).slice(0, 2)].filter(Boolean);
+  const choices = chooseSuggestions(openProjectPath ? sourceQuestions : [], content.suggestions);
   for (const text of choices) {
     const button = document.createElement("button");
     button.type = "button";
@@ -7526,6 +7559,9 @@ function onEvent(raw) {
       displayedMemoryProject = "";
       displayedMemoryRevision = "";
     }
+    sourceQuestions = pendingSourceQuestions?.project === data.project
+      ? pendingSourceQuestions.questions : [];
+    pendingSourceQuestions = null;
     openProjectPath = data.project;
     projectPresentation = data.behavior_presentation || null;
     requestProjectBehavior();
@@ -7569,6 +7605,10 @@ function onEvent(raw) {
       attachedAsk = null;
       sendQuestion(ask);
     }
+  } else if (data.event === "question_suggestions") {
+    const questions = (data.questions || []).filter((item) => item?.question);
+    if (data.project === openProjectPath) sourceQuestions = questions;
+    pendingSourceQuestions = { project: data.project, questions };
   } else if (data.event === "conversation_opened") {
     finishStopping();
     reading = null;
@@ -8375,6 +8415,8 @@ function returnToLaunch() {
   bridge.closeProject();
   openProjectPath = "";
   projectPresentation = null;
+  sourceQuestions = [];
+  pendingSourceQuestions = null;
   projectBehaviorData = null;
   behaviorSave.pending = null;
   feedbackData = { project: "", revision: "", entries: {} };

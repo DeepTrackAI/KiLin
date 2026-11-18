@@ -193,6 +193,21 @@
         "indexing": "never",
         "read": false
       }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)"
+      ]
     }
   },
   "welcome_prompts": [
@@ -209,5 +224,19 @@
     "Design experiments that distinguish between these hypotheses",
     "Check the evidence supporting this proposed mechanism",
     "Summarize the unanswered questions in my indexed papers"
-  ]
+  ],
+  "suggestion_templates": {
+    "research_context": "Summarize what the sources say about {topic} and what is still unresolved.",
+    "grounded_ideation": [
+      "Brainstorm new hypotheses about {topic} from the project sources.",
+      "Propose three new research questions that build on {file}."
+    ],
+    "evidence_check": "Which assumptions about {topic} do the sources support, and which do they contradict?",
+    "cross_domain": "Connect the findings on {topic} to a different field, with evidence.",
+    "challenge_assumptions": [
+      "Challenge an assumption the sources make about {topic}.",
+      "Which assumption in {file} would be most interesting to question?"
+    ],
+    "assistant_help": "What can you do for me?"
+  }
 }

@@ -325,6 +325,40 @@ its display metadata, extensions, size limit, base prompts,
 retrieval instruction, capabilities, history defaults, optional
 generation defaults, default intent, intents, welcome prompts and suggestions.
 
+`suggestion_templates` maps intent IDs to one fill-in question, or a list
+of them, such as `"paper_overview": "Give me a short summary of {file}."`.
+It may use only `{file}`, `{file2}` (a different file), `{topic}` and
+`{term}`, and must name the type's own intents. Intents that need an
+earlier answer or the user's own text (follow-ups, rephrasing, small
+talk) have no template.
+
+`kilin/question_suggestions.py` fills them in two steps:
+
+1. **Once per source change:** the router model reads the first two files
+   (usually the user's own) and a random mix of ten others, and picks a
+   pool of up to ten topics and ten exact terms. A topic or term is kept
+   only when it is printed in the sources. The pool is saved in
+   `indexes/suggestion_words.json` and picked again only when the sources
+   or the router model change.
+2. **Every time questions are needed** (when a project opens, for each new
+   empty chat, and for "What can you do for me?"): each template is filled
+   up to three times with files, topics and terms chosen at random from
+   the project and the pool. No model is called, so this is instant and
+   the examples change every time. A question with an unfilled
+   placeholder is left out; a code project's questions name only code
+   files.
+
+The empty chat picks three intents and one of their questions at random;
+clicking one fills the question box, so Enter sends it. Without sources,
+or with fewer than three questions, the fixed `suggestions` fill the rest.
+
+Every packaged type also has an `assistant_help` intent, routed by
+shortcuts such as "What can you do for me?" and "help". Its
+`assistant_guide` tool answers with one of these questions per intent, so
+the user sees what each kind of request does with their own files; a
+project without sources gets the fixed `suggestions` and is told to add
+its files.
+
 An intent can override inherited prompt/history/retrieval settings, specify
 shortcut regexes and select a registered tool. The parser gives missing
 fields documented defaults (including `search` for ordinary intents and

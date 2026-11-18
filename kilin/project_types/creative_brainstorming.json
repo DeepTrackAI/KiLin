@@ -182,6 +182,21 @@
         "indexing": "never",
         "read": false
       }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)"
+      ]
     }
   },
   "welcome_prompts": [
@@ -198,5 +213,20 @@
     "Use my project papers as inspiration for unconventional hypotheses",
     "Develop the wildest idea into predictions and experiments",
     "Which factual premises of this speculation are supported by sources?"
-  ]
+  ],
+  "suggestion_templates": {
+    "research_context": "What do the papers say about {topic}?",
+    "open_ideation": "Invent five wildly different hypotheses about {topic}.",
+    "grounded_ideation": [
+      "Use my project papers as inspiration for unconventional hypotheses about {topic}.",
+      "Use {file} as inspiration for three unconventional hypotheses."
+    ],
+    "evidence_check": "Which premises about {topic} are supported by the project sources?",
+    "cross_domain": "Find a surprising connection between {topic} and an unrelated field.",
+    "challenge_assumptions": [
+      "What if the central assumption about {topic} were exactly backwards?",
+      "What if the central assumption of {file} were wrong?"
+    ],
+    "assistant_help": "What can you do for me?"
+  }
 }

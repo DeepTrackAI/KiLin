@@ -36,7 +36,7 @@
   "default_intent": "code_explanation",
   "intents": {
     "code_explanation": {
-      "description": "Explain existing code, or how parts of the repository work and connect, including where and how the code decides something (for example, how it selects, reads, or skips files), and how one function or class relates to others: which functions it calls, which ones call it, and which class it extends ('which function does load_data call?', 'what calls save?').",
+      "description": "Explain existing code, or how parts of the repository work and connect, including where and how the code decides something (for example, how it selects, reads, or skips files), and how one function or class relates to others: which functions it calls, which ones call it, and which class it extends ('which function does load_data call?', 'what calls save?'). Also what the code can do for the user and how to use it for a task or analysis ('what can this code do for me?', 'which analyses does this toolbox support?', 'how do I analyze functional data with it?').",
       "cues": [
         "\\b(?:which|what)\\s+(?:functions?|methods?)\\s+(?:does|do|did)\\b.{0,80}\\bcall\\b",
         "\\b(?:which|what|who)\\b(?:\\s+[\\w-]+){0,4}\\s+calls?\\s+[A-Za-z_][\\w.]*(?:\\(\\))?\\s*\\?",
@@ -272,6 +272,21 @@
         "indexing": "never",
         "read": false
       }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)"
+      ]
     }
   },
   "welcome_prompts": [
@@ -291,5 +306,19 @@
     "Which files mention …?",
     "Show every comment that discusses …",
     "How many Python files are in this project?"
-  ]
+  ],
+  "suggestion_templates": {
+    "code_explanation": [
+      "Explain how {file} works.",
+      "How can I use this code for {topic}?"
+    ],
+    "fact_finding": "Which libraries does {file} use?",
+    "code_generation": "Write a unit test for a function in {file}.",
+    "file_reading": "Review the whole {file} file.",
+    "project_inventory": "How many files are in this project?",
+    "mention_listing": "Show every line that uses {term}.",
+    "topic_listing": "List the comments that discuss {topic}.",
+    "mention_classification": "Which uses of {term} are in tests, and which are in the main code?",
+    "assistant_help": "What can you do for me?"
+  }
 }

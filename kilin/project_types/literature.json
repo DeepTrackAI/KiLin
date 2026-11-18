@@ -495,6 +495,21 @@
         "indexing": "never",
         "read": false
       }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)"
+      ]
     }
   },
   "welcome_prompts": [
@@ -516,5 +531,25 @@
     "Show every sentence that mentions …",
     "Which papers mention …?",
     "How many papers are in this project?"
-  ]
+  ],
+  "suggestion_templates": {
+    "question_answering": "What do the papers say about {topic}?",
+    "fact_finding": "Which datasets does {file} use?",
+    "compare_sources": "Compare the methods of {file} and {file2}.",
+    "document_reading": "Go through the whole {file} and tell me which software it uses.",
+    "paper_overview": "Give me a short summary of {file}.",
+    "reference_check": "Check the references of {file}.",
+    "suggest_reference": "Which paper could I cite for a sentence about {topic}?",
+    "writing_check": "Check the grammar and spelling of {file}.",
+    "research_briefing": "Write a research briefing for {file}.",
+    "popular_science_summary": "Explain {file} for a general audience.",
+    "technical_summary": "Write a technical summary of {file}.",
+    "experimental_protocol": "Extract an experimental protocol from {file}.",
+    "project_inventory": "How many papers are in this project?",
+    "mention_listing": "Which papers mention {term}?",
+    "topic_listing": "Which papers are related to {topic}?",
+    "mention_classification": "Which mentions of {term} describe the authors' own work, and which cite other work?",
+    "report_generation": "Write an overview of how the papers approach {topic}.",
+    "assistant_help": "What can you do for me?"
+  }
 }

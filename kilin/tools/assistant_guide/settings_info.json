@@ -1,0 +1,10 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "max_listed": {
+      "title": "Maximum listed examples",
+      "summary": "Caps how many example questions the answer lists.",
+      "description": "Shows one example per kind of request, up to this number, so the answer stays short."
+    }
+  }
+}

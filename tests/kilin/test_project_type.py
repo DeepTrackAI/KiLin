@@ -507,6 +507,9 @@ class TestPackagedProjectTypes(unittest.TestCase):
                     }
                 }
                 raw["default_intent"] = "new_intent"
+                raw["suggestion_templates"] = {
+                    "new_intent": "Explain {file}."
+                }
                 (folder / path.name).write_text(
                     json.dumps(raw), encoding="utf-8"
                 )
@@ -868,6 +871,54 @@ class TestProjectTypeFields(ProjectTypeFixture):
         self.assertEqual(item.welcome_prompts,
                          ("First question", "Second question"))
         self.assertEqual(item.suggestions, ("Try this",))
+
+    def test_suggestion_templates_are_checked(self) -> None:
+        """Keep valid fill-in questions; reject bad intents or names."""
+
+        data = _type_data()
+        data["suggestion_templates"] = {
+            "explain": [
+                "  Explain {topic} in {file} and {file2}.  ",
+                "Which files mention {term}?",
+            ],
+        }
+        item = self._load("templates", data)
+        self.assertEqual(
+            item.suggestion_templates,
+            (
+                ("explain", "Explain {topic} in {file} and {file2}."),
+                ("explain", "Which files mention {term}?"),
+            ),
+        )
+        self.assertEqual(self._load("no-templates", _type_data())
+                         .suggestion_templates, ())
+        for index, value in enumerate((
+            [],
+            {"unknown": "Explain {file}."},
+            {"explain": " "},
+            {"explain": 3},
+            {"explain": "Explain {paper}."},
+            {"explain": "Explain {file."},
+            {"explain": ["Explain {file}.", ""]},
+        )):
+            with self.subTest(value=value):
+                data = _type_data()
+                data["suggestion_templates"] = value
+                with self.assertRaisesRegex(
+                    ValueError, "suggestion_templates"
+                ):
+                    self._load(f"badtemplates{index}", data)
+
+    def test_packaged_suggestion_templates_name_their_intents(self) -> None:
+        """Every packaged type has fill-in questions for its own intents."""
+
+        for type_id, item in load_project_types().items():
+            with self.subTest(type_id=type_id):
+                self.assertTrue(item.suggestion_templates)
+                self.assertLessEqual(
+                    {intent for intent, _ in item.suggestion_templates},
+                    set(item.intents),
+                )
 
     def test_missing_required_and_invalid_text_fields(self) -> None:
         """Reject missing, blank, or non-string required descriptions."""

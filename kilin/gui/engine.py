@@ -2154,6 +2154,9 @@ class ChatEngine:
     ) -> None:
         """Send the ``opened`` event for the prepared core project.
 
+        The suggested questions about its sources are sent just before,
+        in their own event, so the page shows them with the project.
+
         Parameters
         ----------
         project: QAProject
@@ -2165,6 +2168,7 @@ class ChatEngine:
 
         session = self.session
         behavior = effective_project_type(project.root)
+        self._send_question_suggestions(project)
         self._send(
             "opened",
             project=str(project.root),
@@ -2209,6 +2213,44 @@ class ChatEngine:
                 }
                 for item in self.conversation_store.conversations()
             ],
+        )
+
+    def _send_question_suggestions(self, project: QAProject) -> None:
+        """Send example questions about the open project's own sources.
+
+        Parameters
+        ----------
+        project: QAProject
+            The open project, or the one being announced; the page keeps
+            the questions for its ``opened`` event.
+
+        Notes
+        -----
+        Sent before ``opened`` and before ``conversation_opened`` of an
+        empty chat; each time the questions are chosen anew, without a
+        model once the project's pool of topics is known. An empty list,
+        sent when there are no sources or writing them fails, tells the
+        page to keep the project type's fixed suggestions. A failure is
+        traced and never stops the project from opening.
+
+        """
+
+        try:
+            questions = [
+                {"intent": item.intent, "question": item.question}
+                for item in self.session.question_suggestions()
+            ]
+        except Exception as error:
+            self.active_trace.emit(
+                "gui.question_suggestions.failed",
+                component="gui_engine",
+                data={"error": f"{type(error).__name__}: {error}"},
+            )
+            questions = []
+        self._send(
+            "question_suggestions",
+            project=str(project.root),
+            questions=questions,
         )
 
     def _use_project_answer_settings(self) -> None:
@@ -4397,6 +4439,9 @@ class ChatEngine:
             component="gui_engine",
             data=asdict(conversation),
         )
+        if not turns:
+            # A new chat gets its own fresh suggested questions.
+            self._send_question_suggestions(self.session.project)
         self._send_conversations(
             "conversation_opened",
             turns=_turn_payloads(turns),

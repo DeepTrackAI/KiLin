@@ -227,6 +227,12 @@ from kilin.project_behavior import (
 )
 from kilin.model_settings import read_router_model, validate_model_id
 from kilin.project_layout import source_scan_exclusions
+from kilin.question_suggestions import (
+    Suggestion,
+    SuggestionWords,
+    question_suggestions,
+    suggestion_words,
+)
 from kilin.workspace import include_explicit_imports
 from kilin.project_type import (
     HISTORY_POLICY_NONE,
@@ -1040,6 +1046,8 @@ class RAGSession:
         Change the router model, releasing the previous one if separate.
     router_reply(system, prompt, *, max_new_tokens)
         Ask the router model a side question, such as a chat title.
+    question_suggestions()
+        Return example questions about the project's own sources.
     usage_mark()
         Remember the token totals of the loaded model sessions.
     usage_since(mark)
@@ -1355,6 +1363,11 @@ class RAGSession:
         self.turns = turns
         self.router_model = resolved_router_model
         self._router_session: ChatSession | None = None
+        # The pool of topics and terms for suggested questions, with the
+        # passages it was picked for; see ``question_suggestions``.
+        self._suggestion_pool: (
+            tuple[list[Chunk], SuggestionWords] | None
+        ) = None
         self._closed = False
         self.trace.emit(
             "session.ready",
@@ -3428,6 +3441,48 @@ class RAGSession:
             language_context=language_context,
         )
 
+    def question_suggestions(self: RAGSession) -> list[Suggestion]:
+        """Return example questions about the project's own sources.
+
+        Returns
+        -------
+        list[Suggestion]
+            Up to three questions per fill-in question of the project
+            type, naming the project's files and topics, chosen anew on
+            every call; empty without sources.
+
+        Notes
+        -----
+        The router model picks a pool of topics and terms once, when the
+        saved pool (``indexes/suggestion_words.json``) is out of date; it
+        is then kept in memory until the sources change. Writing the
+        questions calls no model. See ``kilin.question_suggestions``.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        pool = self._suggestion_pool
+        if pool is None or pool[0] is not self.chunks:
+            cards = tuple(
+                record.result.card
+                for record in getattr(self.source_cards, "records", ())
+                if record.result.card is not None
+            )
+            words = suggestion_words(
+                self.project.indexes,
+                self.chunks,
+                cards,
+                self._ask_router,
+                self.router_model,
+            )
+            pool = self._suggestion_pool = (self.chunks, words)
+        return question_suggestions(
+            self._behavior_config().suggestion_templates,
+            self.chunks,
+            pool[1],
+        )
+
     def usage_mark(self: RAGSession) -> dict[int, tuple[int, int]]:
         """Remember the token totals of the loaded model sessions.
 
@@ -5193,6 +5248,14 @@ class RAGSession:
             retrieve=lambda query: self._retrieve_for_tool(
                 query, trace_turn_id
             ),
+            # Without the question's own intent: "What can you do?" does
+            # not list itself as an example.
+            suggestions=lambda: [
+                item
+                for item in self.question_suggestions()
+                if item.intent != decision.intent
+            ],
+            fixed_suggestions=self._behavior_config().suggestions,
         )
 
         request = ToolRequest(

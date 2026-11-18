@@ -1,0 +1,8 @@
+{
+  "SETTINGS": {
+    "MAX_LISTED": 20
+  },
+  "MODEL_CALLS": {
+    "THINKING": "inherit"
+  }
+}

@@ -196,6 +196,21 @@
         "coverage": "bounded",
         "include_related_evidence": true
       }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)"
+      ]
     }
   },
   "welcome_prompts": [
@@ -214,5 +229,15 @@
     "What do the project sources say about …?",
     "Verify the technical claims in this paragraph",
     "Check whether these statements are supported by the documents"
-  ]
+  ],
+  "suggestion_templates": {
+    "writing_check": "Check the grammar and spelling of {file}.",
+    "research": "What do the project sources say about {topic}?",
+    "grounded_writing": [
+      "Draft a short background paragraph about {topic} using the project sources.",
+      "Write a related-work section on {topic} from the project sources."
+    ],
+    "verification": "Check whether the main claims of {file} are supported by the other project sources.",
+    "assistant_help": "What can you do for me?"
+  }
 }

@@ -174,6 +174,8 @@ def _type_config(
         system_prompt="Project instruction",
         code_graph=True,
         answer_guidance=guidance,
+        suggestions=(),
+        suggestion_templates=(),
     )
 
 

@@ -39,8 +39,8 @@ Module Structure
   ``TOOL_FIND_FACT``, ``TOOL_FIND_PASSAGES``,
   ``TOOL_GENERATE_PAPER_SUMMARY``, ``TOOL_PAPER_OVERVIEW``,
   ``TOOL_PROJECT_SUMMARY``, ``TOOL_REFERENCE_CHECK``,
-  ``TOOL_SHOW_SOURCE``, ``TOOL_SUGGEST_REFERENCE``, and
-  ``TOOL_WRITING_CHECK``
+  ``TOOL_SHOW_SOURCE``, ``TOOL_SUGGEST_REFERENCE``,
+  ``TOOL_WRITING_CHECK``, and ``TOOL_ASSISTANT_GUIDE``
 
     Canonical string values of the registered tool names.
 
@@ -89,6 +89,7 @@ from pathlib import Path
 from typing import Final, Literal, TypeAlias
 
 from kilin.tools import (
+    assistant_guide,
     batch_classify,
     batch_review,
     filter_results,
@@ -118,6 +119,7 @@ from kilin.tools._model_calls import (
 from kilin.workspace_resources import WorkspaceResource
 
 __all__ = [
+    "TOOL_ASSISTANT_GUIDE",
     "TOOL_BATCH_CLASSIFY",
     "TOOL_BATCH_REVIEW",
     "TOOL_CHOICES",
@@ -157,6 +159,7 @@ ToolName: TypeAlias = Literal[
     "suggest_reference",
     "writing_check",
     "project_summary",
+    "assistant_guide",
 ]
 TOOL_PROJECT_INVENTORY: Final[ToolName] = "project_inventory"
 TOOL_SCAN_AND_LIST: Final[ToolName] = "scan_and_list"
@@ -172,6 +175,7 @@ TOOL_SHOW_SOURCE: Final[ToolName] = "show_source"
 TOOL_SUGGEST_REFERENCE: Final[ToolName] = "suggest_reference"
 TOOL_WRITING_CHECK: Final[ToolName] = "writing_check"
 TOOL_PROJECT_SUMMARY: Final[ToolName] = "project_summary"
+TOOL_ASSISTANT_GUIDE: Final[ToolName] = "assistant_guide"
 TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_PROJECT_INVENTORY,
     TOOL_SCAN_AND_LIST,
@@ -187,6 +191,7 @@ TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_SUGGEST_REFERENCE,
     TOOL_WRITING_CHECK,
     TOOL_PROJECT_SUMMARY,
+    TOOL_ASSISTANT_GUIDE,
 )
 
 
@@ -374,6 +379,13 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         writing_check.parse_settings,
         writing_check.run,
         follows_up_when=writing_check.asks_rewrite,
+    ),
+    TOOL_ASSISTANT_GUIDE: Tool(
+        TOOL_ASSISTANT_GUIDE,
+        "Answer what KíLín can do with one ready-to-send example question "
+        "per kind of request, about the project's own files.",
+        assistant_guide.parse_settings,
+        assistant_guide.run,
     ),
     TOOL_SHOW_SOURCE: Tool(
         TOOL_SHOW_SOURCE,

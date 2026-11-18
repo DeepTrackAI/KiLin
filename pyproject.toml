@@ -104,6 +104,7 @@ include = ["kilin*"]
     "settings_info.json",
     "templates/*.md",
 ]
+"kilin.tools.assistant_guide" = ["README.md", "defaults.json", "settings_info.json"]
 "kilin.tools.generate_paper_summary" = [
     "README.md",
     "defaults.json",
