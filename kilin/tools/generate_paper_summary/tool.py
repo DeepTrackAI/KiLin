@@ -79,7 +79,13 @@ Module Structure
 
 - ``choose_template``
 
-    Pick the template a question asks for.
+    Pick the template a question asks for, or ask which.
+
+- ``TEMPLATE_CHOOSE``, ``routing`` and ``templates_answer``
+
+    The setting value that lets any project template be used, the cues
+    and router description built from the project's templates, and the
+    answer listing them.
 
 - ``paper_citation``
 
@@ -141,7 +147,9 @@ Examples
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 import re
 from time import perf_counter
@@ -171,6 +179,7 @@ from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
+    ToolRouting,
     check_choice,
     check_int,
     reject_unknown,
@@ -191,6 +200,7 @@ from kilin.tools._shared.planning import (
     PLAN_CHOICE_QUICK,
     ConfirmationPolicy,
     ToolPlan,
+    ask_choice,
     confirm_plan,
 )
 from kilin.workspace_resources import (
@@ -244,6 +254,7 @@ from kilin.tools.generate_paper_summary._report_template import (
 
 __all__ = [
     "REFERENCE_LAYOUT",
+    "TEMPLATE_CHOOSE",
     "SummarySettings",
     "choose_paper",
     "choose_template",
@@ -254,9 +265,11 @@ __all__ = [
     "parse_settings",
     "workspace_resources",
     "references_prompt",
+    "routing",
     "run",
     "section_prompt",
     "summary_file_text",
+    "templates_answer",
 ]
 
 # One or more passage citations, with separators: " [1], [3]", "[2][24]".
@@ -280,6 +293,29 @@ _FILE_REFERENCE = re.compile(
 _SUFFIXES: Final[tuple[str, ...]] = (".pdf", ".doc", ".docx", ".md", ".txt")
 # Template setting: a plain file name, so it cannot point outside templates/.
 _TEMPLATE_NAME = re.compile(r"[A-Za-z0-9][\w-]*")
+# The ``template`` value of an intent that uses any template of the
+# project: the one the question names, else the user's choice.
+TEMPLATE_CHOOSE: Final[str] = "choose"
+# Words asking to write a report, before a template's name ("write a
+# journal club of smith20"); or words after it ("journal club for ...").
+_WRITE_WORDS: Final[str] = (
+    r"\b(?:write|prepare|make|generate|create|produce|draft|fill(?:\s+in)?|"
+    r"do|give\s+me|turn)\b[^\n]{0,60}?"
+)
+_FOR_WORDS: Final[str] = r"\s+(?:of|for|on|from|about)\b"
+# A request for the project's templates, or to check one.
+_LIST_TEMPLATES: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:list|which|what|show|available)\b[^\n]{0,40}\btemplates\b"
+    r"|\btemplates\b[^\n]{0,40}\b(?:do\s+(?:i|we)\s+have|available)\b",
+    re.IGNORECASE,
+)
+_CHECK_TEMPLATE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:check|validate|test|verify)\b[^\n]{0,40}\btemplate\b",
+    re.IGNORECASE,
+)
+# Templates described to the router, and characters of each description.
+_ROUTED_TEMPLATES: Final[int] = 30
+_ROUTED_DESCRIPTION: Final[int] = 120
 
 # Numeric and vocabulary heuristics come from this tool's defaults.json.
 _BEGINNING_PASSAGES: Final[int] = BEGINNING_PASSAGES
@@ -427,7 +463,7 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
 def workspace_resources(
     settings: SummarySettings,
 ) -> tuple[WorkspaceResource, ...]:
-    """Declare the report template needed by one configured intent.
+    """Declare the report templates needed by one configured intent.
 
     Parameters
     ----------
@@ -438,7 +474,10 @@ def workspace_resources(
     -------
     tuple[WorkspaceResource, ...]
         One shipped template to install when available, otherwise
-        an empty tuple for a user-provided custom template.
+        an empty tuple for a user-provided custom template. An intent
+        using any template (``TEMPLATE_CHOOSE``) installs every shipped
+        template and ``templates/README.md``, which explains how to
+        write one.
 
     Notes
     -----
@@ -447,6 +486,11 @@ def workspace_resources(
 
     """
 
+    if settings.template == TEMPLATE_CHOOSE:
+        return tuple(
+            WorkspaceResource(source, f"templates/{source.name}")
+            for source in sorted(SHIPPED_TEMPLATES_DIR.glob("*.md"))
+        )
     name = f"{settings.template}.md"
     source = SHIPPED_TEMPLATES_DIR / name
     if not source.exists():
@@ -619,9 +663,12 @@ def choose_paper(
 
 
 def choose_template(
-    question: str, folder: Path, default: str
-) -> ReportTemplate:
-    """Pick the template a question asks for.
+    question: str,
+    folder: Path,
+    default: str,
+    choose: Callable[[str, tuple[str, ...]], int | None] | None = None,
+) -> ReportTemplate | None:
+    """Pick the template a question asks for, or ask which.
 
     Parameters
     ----------
@@ -630,41 +677,359 @@ def choose_template(
     folder: pathlib.Path
         The project's templates folder.
     default: str
-        Template used when the question names none.
+        Template used when the question names none; ``TEMPLATE_CHOOSE``
+        to use the project's only template or ask which.
+    choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
+        ``ToolContext.choose``, to ask which template when the default is
+        ``TEMPLATE_CHOOSE`` and the question names none. Defaults to
+        ``None``.
 
     Returns
     -------
-    ReportTemplate
-        The first template in the folder whose title ("Research
-        Briefing"), file name ("research_briefing"), or file name with
-        spaces occurs in the question; otherwise the default, read from
-        the folder. Missing project-owned templates are not restored.
+    ReportTemplate | None
+        The uniquely named template (by title, ID, or filename), or the
+        default. With ``TEMPLATE_CHOOSE``, the only valid template or the
+        user's choice; None when the user cancels or chooses an invalid
+        index. A named template always takes precedence over the default.
 
     Raises
     ------
     ValueError
-        If the chosen template does not exist or breaks a template rule;
-        the message names the line and lists the project's templates.
+        If the chosen template does not exist or breaks a template rule,
+        or with ``TEMPLATE_CHOOSE`` the project has no valid template or
+        nobody can be asked, or more than one template is named; the
+        message identifies the problem or lists the project's templates.
+
+    """
+
+    found = _templates(folder)
+    named = _named_templates(question, found)
+    if len(named) > 1:
+        raise ValueError(_ambiguous_templates(named))
+    if named:
+        _, template, error = named[0]
+        if template is None:
+            raise ValueError(error)
+        return template
+
+    if default != TEMPLATE_CHOOSE:
+        return load_template(default, folder)  # Raises, listing templates.
+    usable = [template for _, template, _ in found if template]
+    if len(usable) == 1:
+        return usable[0]
+    if not usable:
+        raise ValueError(templates_answer(folder))
+    if choose is None:
+        raise ValueError(
+            "Which template? Name one in the question, for example "
+            f"“write a {usable[0].title.lower()} of smith20”.\n\n"
+            + templates_answer(folder)
+        )
+    index = choose(
+        "Which template should the report use?",
+        tuple(f"{t.title} ({t.name})" for t in usable),
+    )
+    if type(index) is not int or not 0 <= index < len(usable):
+        return None
+    return usable[index]
+
+
+def _templates(
+    folder: Path,
+) -> list[tuple[str, ReportTemplate | None, str]]:
+    """Return the project's templates, read and checked.
+
+    Parameters
+    ----------
+    folder: pathlib.Path
+        The project's templates folder.
+
+    Returns
+    -------
+    list[tuple[str, ReportTemplate | None, str]]
+        Each template's file name (without ``.md``), the template (None
+        when it breaks a rule) and the error (``""`` when valid), by name;
+        empty without the folder.
+
+    """
+
+    if not folder.is_dir():
+        return []
+    found: list[tuple[str, ReportTemplate | None, str]] = []
+    for name in template_names(folder):
+        try:
+            found.append((name, load_template(name, folder), ""))
+        except ValueError as error:
+            found.append((name, None, str(error)))
+    return found
+
+
+def _named_templates(
+    question: str,
+    found: list[tuple[str, ReportTemplate | None, str]],
+) -> list[tuple[str, ReportTemplate | None, str]]:
+    """Find templates named by complete IDs, filenames, or titles.
+
+    Shorter names embedded in a longer matched name are discarded, but
+    separate mentions of distinct templates remain ambiguous. Name
+    separators (space, underscore, hyphen) are interchangeable.
+
+    Parameters
+    ----------
+    question: str
+        The user's request.
+    found: list[tuple[str, ReportTemplate | None, str]]
+        Project templates, including invalid ones without a usable title.
+
+    Returns
+    -------
+    list[tuple[str, ReportTemplate | None, str]]
+        All distinct templates explicitly mentioned, in folder order.
 
     """
 
     text = " ".join(question.casefold().split())
-    for name in template_names(folder):
-        words = (name.casefold(), name.casefold().replace("_", " "))
-        try:
-            template = load_template(name, folder)
-        except ValueError:
-            # Broken templates are reported only when they are chosen.
-            if any(word in text for word in words):
-                raise
+    hits: list[tuple[str, tuple[int, int]]] = []
+    for name, template, _ in found:
+        aliases = {name, f"{name}.md"}
+        if template is not None:
+            aliases.add(template.title)
+        for alias in aliases:
+            words = [
+                part for part in re.split(r"[\s_-]+", alias.casefold())
+                if part
+            ]
+            if not words:
+                continue
+            pattern = (
+                r"(?<!\w)" + r"[\s_-]+".join(
+                    re.escape(word) for word in words
+                ) + r"(?!\w)"
+            )
+            hits.extend(
+                (name, match.span())
+                for match in re.finditer(pattern, text)
+            )
+
+    named = {
+        name for name, (start, end) in hits
+        if not any(
+            other_start <= start and end <= other_end
+            and (other_start, other_end) != (start, end)
+            for _, (other_start, other_end) in hits
+        )
+    }
+    return [item for item in found if item[0] in named]
+
+
+def _ambiguous_templates(
+    named: list[tuple[str, ReportTemplate | None, str]],
+) -> str:
+    """Explain why a request cannot select one report template.
+
+    Parameters
+    ----------
+    named: list[tuple[str, ReportTemplate | None, str]]
+        Distinct template matches.
+
+    Returns
+    -------
+    str
+        A request to name exactly one template by its filename.
+
+    """
+
+    options = ", ".join(f"`{name}.md`" for name, _, _ in named)
+    return (
+        f"Several report templates match this question: {options}. "
+        "Name exactly one template by its filename."
+    )
+
+
+def templates_answer(folder: Path) -> str:
+    """Return the answer listing the project's templates.
+
+    Parameters
+    ----------
+    folder: pathlib.Path
+        The project's templates folder.
+
+    Returns
+    -------
+    str
+        Each valid template's title, file name and description, then the
+        templates that break a rule with the problem, and where the format
+        is explained: the project's ``templates/README.md``, or for a
+        project created before it was installed, the guide shipped with
+        KíLín.
+
+    """
+
+    found = _templates(folder)
+    lines = [
+        f"- **{template.title}** (`{name}.md`): {template.description}"
+        for name, template, _ in found if template is not None
+    ]
+    broken = [
+        f"- `{name}.md` cannot be used: {error}"
+        for name, template, error in found if template is None
+    ]
+    head = (
+        "**Report templates in this project**" if lines
+        else "This project has no usable report template."
+    )
+    parts = [head, "", *lines]
+    if broken:
+        parts += ["", "**Templates with problems**", "", *broken]
+    guide = (
+        "`templates/README.md` explains how to write one"
+        if (folder / "README.md").is_file()
+        else "the guide shipped with KíLín "
+        "(`kilin/tools/generate_paper_summary/templates/README.md`) "
+        "explains how to write one"
+    )
+    parts += [
+        "",
+        "Name one to use it (“write a research briefing of smith20”). "
+        "Templates are Markdown files in the project's `templates/` "
+        f"folder; {guide}.",
+    ]
+    return "\n".join(parts)
+
+
+def _template_check(question: str, folder: Path) -> str:
+    """Return the answer to a request to check a template.
+
+    Parameters
+    ----------
+    question: str
+        The question, naming the template.
+    folder: pathlib.Path
+        The project's templates folder.
+
+    Returns
+    -------
+    str
+        For the named template, that it can be used, with its sections
+        and their limits, or the rule it breaks; the list of templates
+        when the question names none.
+
+    """
+
+    named = _named_templates(question, _templates(folder))
+    if len(named) > 1:
+        return _ambiguous_templates(named)
+    for name, template, error in named:
+        if template is None:
+            return f"`{name}.md` cannot be used: {error}"
+        sections = []
+        for section in template.sections:
+            limit = (
+                f"{section.words[0]}–{section.words[1]} words"
+                if section.words
+                else f"{section.items[0]}–{section.items[1]} items"
+                if section.items
+                else section.source
+            )
+            sections.append(f"- {section.name} ({limit})")
+        return "\n".join([
+            f"**{template.title}** (`{name}.md`) can be used.",
+            "",
+            template.description,
+            "",
+            *sections,
+        ])
+    return templates_answer(folder)
+
+
+def routing(
+    settings: SummarySettings,
+    root: Path,
+    others: tuple[SummarySettings, ...] = (),
+) -> ToolRouting | None:
+    """Return the routing the project's templates add to this intent.
+
+    Parameters
+    ----------
+    settings: SummarySettings
+        The intent's settings.
+    root: pathlib.Path
+        The project's workspace.
+    others: tuple[SummarySettings, ...], optional
+        The settings of the project type's other intents using this tool;
+        templates they name keep their own intent. Defaults to none.
+
+    Returns
+    -------
+    ToolRouting | None
+        For an intent using any template (``TEMPLATE_CHOOSE``): a cue per
+        valid template not named by another intent (``others``) whose
+        title or file name has at least two words,
+        matched after a word asking to write ("write a journal club of
+        smith20") or before "of", "for", "on", "from" or "about" ("journal
+        club for smith20"); and a description listing the templates for
+        the router. None for an intent with a fixed template, or a project
+        without templates.
+
+    """
+
+    if settings.template != TEMPLATE_CHOOSE:
+        return None
+    claimed = {other.template for other in others}
+    usable = [
+        template
+        for name, template, _ in _templates(templates_folder(root))
+        if template is not None and name not in claimed
+    ]
+    if not usable:
+        return None
+    cues: list[str] = []
+    for template in usable:
+        phrases = {
+            " ".join(phrase.casefold().split())
+            for phrase in (template.title, template.name.replace("_", " "))
+            if len(phrase.replace("_", " ").split()) >= 2
+        }
+        if not phrases:
             continue
+        alternatives = "|".join(
+            r"[\s_-]+".join(re.escape(word) for word in phrase.split())
+            for phrase in sorted(phrases)
+        )
+        cues.append(rf"{_WRITE_WORDS}\b(?:{alternatives})\b")
+        cues.append(rf"\b(?:{alternatives})\b{_FOR_WORDS}")
+    described = "; ".join(
+        f"{template.title} ({template.name}): "
+        + _shortened(template.description, _ROUTED_DESCRIPTION)
+        for template in usable[:_ROUTED_TEMPLATES]
+    )
+    return ToolRouting(
+        tuple(cues), f"Report templates in this project: {described}."
+    )
 
-        if template.title.casefold() in text or any(
-            word in text for word in words
-        ):
-            return template
 
-    return load_template(default, folder)  # Raises, listing the templates.
+def _shortened(text: str, limit: int) -> str:
+    """Return a description for the router, at most ``limit`` characters.
+
+    Parameters
+    ----------
+    text: str
+        A template's description.
+    limit: int
+        Most characters.
+
+    Returns
+    -------
+    str
+        Without its final full stop; when longer, cut at a word and ended
+        with "…".
+
+    """
+
+    text = " ".join(text.split()).rstrip(". ")
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
 def paper_citation(file: Path | None, passages: tuple[Chunk, ...]) -> str:
@@ -1206,15 +1571,37 @@ def run(
 
     trace = context.trace
     summary: dict[str, object] = {"name": "generate_paper_summary"}
+    folder = templates_folder(context.project_root)
+    if _LIST_TEMPLATES.search(request.question):
+        context.done("Listed the templates", evidence_count=0)
+        summary["listed_templates"] = True
+        return ToolResult(templates_answer(folder), (), summary)
+    if _CHECK_TEMPLATE.search(request.question):
+        context.done("Checked the template", evidence_count=0)
+        summary["checked_template"] = True
+        return ToolResult(
+            _template_check(request.question, folder), (), summary
+        )
+    # Reuse the shared choice protocol: it emits the options to the GUI
+    # before waiting for the callback, and validates the returned index.
+    chooser = (
+        partial(ask_choice, context=context)
+        if getattr(context, "choose", None) is not None
+        else None
+    )
     try:
         template = choose_template(
             request.question,
-            templates_folder(context.project_root),
+            folder,
             settings.template,
+            chooser,
         )
     except ValueError as error:
         context.done("Could not read the template", evidence_count=0)
         return ToolResult(str(error), (), summary)
+    if template is None:
+        context.done("No template chosen", evidence_count=0)
+        return ToolResult("No template was chosen.", (), summary)
     summary["template"] = template.name
 
     context.progress("Choosing the paper to summarize")

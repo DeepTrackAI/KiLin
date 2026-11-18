@@ -398,7 +398,8 @@ def template_names(directory: Path) -> list[str]:
     Returns
     -------
     list[str]
-        Template IDs (file names without ``.md``), sorted.
+        Template IDs (file names without ``.md``), sorted; not
+        ``README.md``, which explains the format.
 
     Raises
     ------
@@ -414,6 +415,7 @@ def template_names(directory: Path) -> list[str]:
         path.stem
         for path in folder.glob("*.md")
         if path.is_file() and not path.is_symlink() and path.stem
+        and path.stem.casefold() != "readme"  # Explains the format.
     )
 
 

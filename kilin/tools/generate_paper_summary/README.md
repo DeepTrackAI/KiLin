@@ -169,11 +169,49 @@ public PDF and do not remove the saved Markdown report.
 PDF generation is not a project-type output-format setting. The caller
 controls whether a PDF renderer is available through `ToolContext`.
 
+## Using any template of the project
+
+An intent whose `template` setting is `"choose"` (`templated_report`, in the
+Literature and Writing Assistant project types) uses any template in the
+project's `templates/` folder, so anyone can add a report format by adding
+a Markdown file there, without editing a project type:
+
+- **Routing.** Before each question is routed, `routing(settings,
+  project_root, others)` reads the project's templates and returns cues and
+  a router description (`ToolRouting`, added by `with_project_routing`). A
+  template whose title or file name has at least two words is cued after
+  a word asking to write ("write a journal club handout of smith20") or
+  before "of", "for", "on", "from" or "about" ("journal club for smith20");
+  the intent's own cues add "... template" forms ("use the minutes template
+  for smith20"). Templates that another intent of the project type names
+  (the four fixed Literature intents) are left to that intent.
+- **Choosing.** A complete template ID, filename (with or without `.md`),
+  or title names the format. Spaces, underscores, and hyphens in names are
+  interchangeable; a shorter name within a longer one is not a second
+  match. If two distinct templates are named, KíLín asks for exactly one
+  filename instead of silently picking the first. When none is named,
+  the project's only valid template is used, or the user chooses one
+  (`ToolContext.choose`). The desktop GUI receives the choices through
+  the shared, traced `ask_choice` protocol before waiting for a selection;
+  cancellation or an invalid response stops the report. Without an
+  interactive callback, the answer lists the templates and how to name one.
+- **Listing and checking.** "Which templates do I have?" lists each
+  template with its description, and those that break a rule with the
+  problem (`templates_answer`). "Check my journal_club template" says
+  whether it can be used, with its sections and limits, or what to fix.
+  Neither reads a document.
+- **The format guide.** `templates/README.md` (shipped in
+  `templates/` here and installed with the templates) explains the format
+  for people writing a template by hand, with a complete example that the
+  tests check is valid. `template_names` skips it.
+
 ## Workspace resources
 
 The core always creates `templates/` and `outputs/` for every project.
 On **new** project creation, the tool's `workspace_resources(settings)`
-returns the one bundled template selected by each configured intent.
+returns the one bundled template selected by each configured intent, and
+for an intent using any template (`"choose"`) every bundled template and
+`README.md`.
 The core deduplicates repeated declarations and copies only required files.
 An unbundled custom template name results in no packaged resource:
 users can create the Markdown file manually in `templates/`.

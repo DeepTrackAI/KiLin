@@ -116,6 +116,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
                 "popular_science_summary",
                 "technical_summary",
                 "experimental_protocol",
+                "choose",
             },
         )
 

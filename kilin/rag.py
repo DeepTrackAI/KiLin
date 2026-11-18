@@ -237,6 +237,7 @@ from kilin.project_type import (
     RETRIEVAL_MODE_SEARCH,
     RETRIEVAL_STRATEGY_SOURCE_FIRST,
     project_type,
+    with_project_routing,
 )
 from kilin.query_formats import (
     QUERY_FORMAT_PLAIN,
@@ -6023,9 +6024,11 @@ class RAGSession:
                 data={"router_model": self.router_model},
                 turn_id=turn_id,
             ):
+                # Tools add routing from the project's own files (its
+                # report templates), read for each question.
                 decision = route_question(
                     self._router_chat(),
-                    config,
+                    with_project_routing(config, Path(self.project.root)),
                     self.turns,
                     question,
                     **(

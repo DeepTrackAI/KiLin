@@ -79,7 +79,11 @@ class TestProjectToolSettings(ToolSettingsFixture):
             tool["per_intent"]["research_briefing"],
             {"template": "research_briefing"},
         )
-        self.assertEqual(len(tool["intents"]), 4)
+        # Four fixed templates and templated_report (any template).
+        self.assertEqual(len(tool["intents"]), 5)
+        self.assertEqual(
+            tool["per_intent"]["templated_report"], {"template": "choose"}
+        )
 
 
 class TestSaveToolSettings(ToolSettingsFixture):

@@ -61,6 +61,10 @@ Module Structure
 
     What a tool returns.
 
+- ``ToolRouting``
+
+    Routing a tool adds for one project, from the project's own files.
+
 - ``reject_unknown``
 
     Reject settings a tool does not have.
@@ -106,6 +110,7 @@ __all__ = [
     "ToolContext",
     "ToolRequest",
     "ToolResult",
+    "ToolRouting",
     "check_bool",
     "check_choice",
     "check_int",
@@ -328,6 +333,28 @@ class ToolResult:
     evidence: tuple[dict[str, object], ...]
     summary: dict[str, object]
     streamed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ToolRouting:
+    """Routing a tool adds to its intent for one project.
+
+    A tool whose use depends on the project's own files (the report
+    templates in ``templates/``) describes them for routing, so a new file
+    is routed to without editing the project type.
+
+    Attributes
+    ----------
+    cues: tuple[str, ...]
+        Regular expressions (case-insensitive) added to the intent's cues.
+    description: str
+        Text added to the intent's description for the router, such as
+        the templates the project has; ``""`` adds nothing.
+
+    """
+
+    cues: tuple[str, ...] = ()
+    description: str = ""
 
 
 def reject_unknown(where: str, data: dict, known: Collection[str]) -> None:
