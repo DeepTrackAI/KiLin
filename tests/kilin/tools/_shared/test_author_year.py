@@ -138,6 +138,40 @@ class TestMarkers(unittest.TestCase):
                 self.assertEqual(markers[0].works[0].first, expected)
                 self.assertEqual(markers[0].works[0].authors, 1)
 
+    def test_short_and_linked_organizational_names(self) -> None:
+        """Retain corporate identities without changing personal names.
+
+        """
+
+        for name in (
+            "European Commission", "Federal Commission", "United Nations",
+            "African Nations", "National Institutes of Health",
+            "Department of Health", "World Bank",
+            "Centers for Disease Control and Prevention",
+        ):
+            expected = name.casefold()
+            for text in (
+                f"({name}, 2020)",
+                f"(e.g., {name}, 2020)",
+                f"{name} (2020) reported",
+            ):
+                with self.subTest(text=text):
+                    markers = find_markers(text)
+                    self.assertEqual(len(markers), 1)
+                    self.assertEqual(len(markers[0].works), 1)
+                    self.assertEqual(markers[0].works[0].first, expected)
+                    self.assertEqual(markers[0].works[0].authors, 1)
+        for text, expected in (
+            ("(García López 2015)", ("lopez", "", 1)),
+            ("(van den Heuvel 2020)", ("heuvel", "", 1)),
+            ("Smith and Lee (2020) found", ("smith", "lee", 2)),
+        ):
+            with self.subTest(text=text):
+                work = find_markers(text)[0].works[0]
+                self.assertEqual(
+                    (work.first, work.second, work.authors), expected
+                )
+
 
 class TestEntries(unittest.TestCase):
 
@@ -190,6 +224,29 @@ class TestEntries(unittest.TestCase):
                 )
                 self.assertEqual(found.number, 7)
         self.assertIsNone(entry_key(1, "Smith, J. Title without a year."))
+
+    def test_short_organizational_entry_heads(self) -> None:
+        """Keep full corporate names from common year-bearing headers.
+
+        """
+
+        for name in (
+            "European Commission", "Federal Commission", "United Nations",
+            "African Nations", "National Institutes of Health",
+            "Department of Health", "World Bank",
+            "Centers for Disease Control and Prevention",
+        ):
+            for entry in (
+                f"{name}. 2020. A report on global research.",
+                f"{name} (2020). A report on global research.",
+            ):
+                with self.subTest(entry=entry):
+                    key = entry_key(7, entry)
+                    self.assertIsNotNone(key)
+                    self.assertEqual(key.first, name.casefold())
+        self.assertEqual(
+            entry_key(7, "García López. 2015. A study.").first, "lopez"
+        )
 
     def test_suffixes_in_list_order(self) -> None:
         keys = entry_keys([
@@ -277,6 +334,26 @@ class TestResolve(unittest.TestCase):
             with self.subTest(text=text):
                 work = find_markers(text)[0].works[0]
                 self.assertEqual(resolve(work, keys), (number,))
+
+    def test_organizations_do_not_resolve_to_other_organizations(self) -> None:
+        """Avoid false attribution when only the final word matches.
+
+        """
+
+        entries = entry_keys([
+            (1, "Federal Commission. 2020. A report about physics."),
+            (2, "African Nations. 2020. A report about physics."),
+            (3, "Department of Health. 2020. A public report."),
+            (4, "European Commission. 2020. A separate report."),
+        ])
+        for name, expected in (
+            ("European Commission", (4,)),
+            ("United Nations", ()),
+            ("National Institutes of Health", ()),
+        ):
+            with self.subTest(name=name):
+                work = find_markers(f"({name}, 2020)")[0].works[0]
+                self.assertEqual(resolve(work, entries), expected)
 
 
 if __name__ == "__main__":

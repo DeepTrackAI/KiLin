@@ -243,6 +243,53 @@ class TestReferenceEntries(unittest.TestCase):
             2,
         )
 
+    def test_wrapped_author_headers_remain_one_reference(self) -> None:
+        """The first line of wrapped authors must start the entry.
+
+        """
+
+        for text, expected in (
+            (
+                "References\n"
+                "Adams, A. (2018). An overview of computational science. "
+                "Journal 1, 2.\n"
+                "Brown, A., Clark, B.,\n"
+                "Ford, C., & Green, D. (2019). Research on microscopy. "
+                "Journal 3, 4.\n"
+                "Cole, C. (2020). A different experimental study. "
+                "Journal 5, 6.\n",
+                ("Adams, A.", "Brown, A., Clark, B., Ford, C.",
+                 "Cole, C."),
+            ),
+            (
+                "References\n"
+                "Adams, A. (2018). A scientific overview. Journal 1, 2.\n"
+                "Brown, A., Clark, B.\n"
+                "Ford, C., & Green, D. (2019). A new study. Journal 3, 4.\n"
+                "Cole, C. (2020). Another study. Journal 5, 6.\n",
+                ("Adams, A.", "Brown, A., Clark, B. Ford, C.", "Cole, C."),
+            ),
+            (
+                "References\n"
+                "Adams AA. 2018. A scientific review in biology. J 1:2.\n"
+                "Brown AB, Clark CD,\n"
+                "Ford EF, Green GH. 2019. Findings about microscopy. "
+                "J 3:4.\n"
+                "Cole CC. 2020. A separate research article. J 5:6.\n",
+                ("Adams AA", "Brown AB, Clark CD, Ford EF", "Cole CC"),
+            ),
+        ):
+            with self.subTest(expected=expected):
+                entries = numbered_reference_entries(
+                    (chunk("a", text),), LAYOUT
+                )
+                self.assertEqual(len(entries), 3)
+                self.assertTrue(all(not e.printed for e in entries))
+                for entry, head in zip(entries, expected):
+                    self.assertTrue(entry.text.startswith(head), entry.text)
+                self.assertNotIn("Brown", entries[0].text)
+                self.assertNotIn("Cole", entries[1].text)
+
     def test_year_in_title_is_not_author_year_header(self) -> None:
         # A year after the title is a standard reference-list end, not
         # evidence that all entries should be split only at their heads.

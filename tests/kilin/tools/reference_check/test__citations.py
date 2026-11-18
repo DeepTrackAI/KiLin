@@ -240,6 +240,41 @@ class TestAuthorYear(unittest.TestCase):
         self.assertEqual(scan.unresolved, ("Smith and Lee, 2020",))
         self.assertEqual(scan.uncited, (2,))
 
+    def test_wrapped_author_lists_cite_the_first_author(self) -> None:
+        """Use the reconstructed header, not its continuation authors.
+
+        """
+
+        from kilin.tools._shared.references import (
+            ReferenceLayout, numbered_reference_entries,
+        )
+        layout = ReferenceLayout(40000, 5, 3, 12, 5)
+        source = (
+            "References\n"
+            "Adams, A. (2018). A scientific overview. Journal 1, 2.\n"
+            "Brown, A., Clark, B.,\n"
+            "Ford, C., & Green, D. (2019). New microscopy research. "
+            "Journal 3, 4.\n"
+            "Cole, C. (2020). A different research article. Journal 5, 6.\n"
+        )
+        entries = numbered_reference_entries(
+            (chunk("a", source),), layout,
+        )
+        self.assertEqual(len(entries), 3)
+        passages = (chunk(
+            "b", "Adams (2018) introduced this idea. "
+            "Brown et al. (2019) expanded it. "
+            "Ford and Green (2019) offered another view.",
+        ),)
+        scan = find_citations(
+            passages, 3, None, RULES,
+            tuple((entry.number, entry.text) for entry in entries),
+        )
+        self.assertEqual(scan.style, STYLE_AUTHOR_YEAR)
+        self.assertEqual([c.numbers for c in scan.citations], [(1,), (2,)])
+        self.assertEqual(scan.unresolved, ("Ford and Green, 2019",))
+        self.assertEqual(scan.uncited, (3,))
+
 
 class TestSuperscripts(unittest.TestCase):
     """Superscripts count only when the PDF prints them small."""

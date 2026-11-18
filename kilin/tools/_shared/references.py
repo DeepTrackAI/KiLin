@@ -28,8 +28,9 @@ Key Features
 
 - **Layout-aware splitting**
 
-    Numbered lists split at their numbers; others split after a line that
-    ends an entry (a year, volume and pages, a PMID, or a DOI).
+    Numbered lists split at their numbers. Author-year lists use author
+    headings, including wrapped author lists with the year on a later line.
+    Other lists split after a line that ends an entry.
 
 - **Page furniture removed**
 
@@ -194,6 +195,18 @@ _SURNAME: Final[str] = (
 # with a parenthesized year near its end ("Smith, J. Title ... (2020)").
 _APA_INITIALS: Final[str] = r"[A-Z]\.(?:\s*-?\s*[A-Z]\.)*"
 _APA_AUTHOR: Final[str] = rf"{_SURNAME},\s+{_APA_INITIALS}"
+_ELIFE_AUTHOR: Final[str] = (
+    rf"{_SURNAME}\s+[A-Z]{{1,3}}(?:-[A-Z]{{1,2}})?"
+)
+# The first line of a wrapped author list may not yet contain its year.
+# Start a new unnumbered entry at such a line only after the previous
+# entry's date is already known. The following author lines belong to
+# the new entry until its date is read.
+_WRAPPED_AUTHOR_HEAD: Final[re.Pattern[str]] = re.compile(
+    rf"^{_APA_AUTHOR}(?:,\s*(?:&\s*|and\s+)?{_APA_AUTHOR})+"
+    r"(?:,\s*(?:&|and)?)?\s*$"
+    rf"|^{_ELIFE_AUTHOR}(?:,\s*{_ELIFE_AUTHOR})+\s*,?\s*$"
+)
 _AUTHOR_YEAR_HEAD: Final[re.Pattern[str]] = re.compile(
     rf"^{_APA_AUTHOR}(?:,?\s*(?:,|and\s+|&\s+)?{_APA_AUTHOR})*"
     r"\s*\((?:19|20)\d\d[a-z]?\)"
@@ -697,11 +710,13 @@ def numbered_reference_entries(
     numbered = sum(bool(_ENTRY_START.match(line)) for line in lines)
     lone_numbers = any(_LONE_NUMBER.match(line) for line in lines)
     by_number = numbered >= layout.numbered_entries_min and not lone_numbers
-    # Author-year lists need head-based splitting even when short: a
-    # standalone "Hunter JD. 2007." line ends its authors, not its entry.
+    # Author-year lists need head-based splitting even when short. A
+    # wrapped author line without its year also signals a possible head.
     # Keep the numeric threshold for numbered lists only.
     by_head = not numbered and not lone_numbers and any(
-        _AUTHOR_YEAR_HEAD.match(line.strip()) for line in lines
+        _AUTHOR_YEAR_HEAD.match(line.strip())
+        or _WRAPPED_AUTHOR_HEAD.match(line.strip())
+        for line in lines
     )
 
     # The list in order: entries (printed number or None, lines) and the
@@ -742,7 +757,10 @@ def numbered_reference_entries(
             not by_number and not by_head and complete
             and not _CONTINUATION.match(text)
         ) or (
-            not by_number and _AUTHOR_YEAR_HEAD.match(text)
+            not by_number and (
+                _AUTHOR_YEAR_HEAD.match(text)
+                or (by_head and _WRAPPED_AUTHOR_HEAD.match(text))
+            )
             and _ENTRY_HAS_YEAR.search(" ".join(entries[-1][1]))
         ):
             number = int(match.group(1) or match.group(2)) if match else None

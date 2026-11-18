@@ -18,7 +18,9 @@ Personal names are compared by their last word, without accents and
 case, so "(van den Heuvel 2020)" and "van den Heuvel MP" agree. Known
 author counts and second authors must also agree; an incomplete entry
 may remain a candidate, but a conflicting one cannot. Organization
-names retain all their words, so two development teams remain distinct.
+names with institutional cues retain all their words, so two development
+teams or commissions remain distinct. Unmarked multiword personal names
+retain surname matching; institutional detection is heuristic.
 Anything that only looks like a citation ("(Phase 2020)") may be found:
 callers count only markers that resolve.
 
@@ -145,19 +147,17 @@ _WORK: Final[re.Pattern[str]] = re.compile(
 _GROUP_WORK: Final[re.Pattern[str]] = re.compile(
     rf"(?:^|(?<=[\s,]))(?:{_WORK.pattern})(?=\s*(?:,|$)|\s+[a-z])"
 )
-# A group naming an organisation as author: "The pandas development team,
-# 2020", "World Health Organization 2020".
+# Corporate names can be two words ("European Commission") or contain
+# lowercase connectors ("National Institutes of Health"). These forms
+# are considered before ordinary personal-author citation markers.
 _ORGANIZATION: Final[re.Pattern[str]] = re.compile(
-    rf"\s*(?P<authors>(?:The\s+)?{_UPPER}[\w-]*(?:\s+[\w-]+){{1,5}}),?\s+"
-    rf"(?P<years>{_YEARS})\s*"
+    rf"(?<![\w(])(?P<authors>(?:The\s+)?{_UPPER}[\w-]*"
+    rf"(?:\s+[\w-]+){{1,8}}),?\s+(?P<years>{_YEARS})"
 )
-# Narrative organizations are recognized before single-name narratives.
-# Require "The ..." or at least three title-case words to avoid treating
-# an ordinary two-author surname group as an organization.
 _ORGANIZATION_NARRATIVE: Final[re.Pattern[str]] = re.compile(
     rf"(?<![\w(])(?P<authors>"
-    rf"The\s+[\w-]+(?:\s+[\w-]+){{1,5}}"
-    rf"|{_WORD}(?:\s+{_WORD}){{2,5}})\s+"
+    rf"The\s+[\w-]+(?:\s+[\w-]+){{1,8}}"
+    rf"|{_WORD}(?:\s+(?:{_WORD}|(?i:of|for|and|the))){{1,8}})\s+"
     rf"\((?P<years>{_YEARS})(?:{_LOCATOR})?\)"
 )
 _PARENTHESES: Final[re.Pattern[str]] = re.compile(
@@ -359,33 +359,78 @@ def _normalized_organization(name: str) -> str:
     return " ".join(normalized_name(word) for word in name.split())
 
 
+# A distinctive institutional word also identifies two-word organizations.
+# A generic capitalized pair can instead be a compound personal surname.
+_ORGANIZATION_WORDS: Final[frozenset[str]] = frozenset({
+    "academy", "agency", "association", "authority", "bank", "board",
+    "bureau", "center", "centre", "collaboration", "commission",
+    "committee", "consortium", "council", "department", "foundation",
+    "government", "institute", "institutes", "laboratory", "ministry",
+    "nations", "office", "organisation", "organization", "research",
+    "service", "services", "society", "statistics", "team", "union",
+    "university",
+})
+_PERSONAL_PARTICLES: Final[frozenset[str]] = frozenset({
+    "van", "von", "de", "del", "den", "der", "di", "da", "du", "la", "le",
+})
+
+
 def _organization_name(name: str) -> bool:
-    """Distinguish an organization from an ordinary author group.
+    """Identify a corporate author without confusing personal name groups.
 
     Parameters
     ----------
     name: str
-        A candidate organization from a parenthetical marker.
+        Candidate author name, without its publication year.
 
     Returns
     -------
     bool
-        Whether the name has a leading "The" or at least three
-        capitalized words, excluding author groups joined with "and".
+        True for institutional words (including two-word names), a
+        corporate connective such as "of", a leading "The", or three
+        title-case words without a personal-author conjunction. Personal
+        surname particles and "Smith and Lee" are excluded.
 
     """
 
     words = name.split()
+    lower = [word.casefold() for word in words]
+    if len(words) < 2 or lower[0] in _PERSONAL_PARTICLES:
+        return False
     return (
-        len(words) >= 3
-        and (
-            words[0] == "The"
-            or (
-                all(word[0].isupper() for word in words)
-                and "and" not in name.casefold().split()
-            )
+        lower[0] == "the"
+        or bool(_ORGANIZATION_WORDS.intersection(lower))
+        or any(word in {"of", "for"} for word in lower[1:-1])
+        or (
+            len(words) >= 3
+            and all(word[0].isupper() for word in words)
+            and "and" not in lower
         )
     )
+
+
+def _organization_author(name: str) -> str:
+    """Return a corporate author without introductory prose, if present.
+
+    Parameters
+    ----------
+    name: str
+        A candidate organization, potentially preceded by "In" or "See".
+
+    Returns
+    -------
+    str
+        A recognized organization's name, or an empty string.
+
+    """
+
+    words = name.split()
+    while len(words) > 2 and words[0].casefold() in _NOT_NAMES:
+        if words[0].casefold() == "the":
+            break
+        words.pop(0)
+    candidate = " ".join(words)
+    return candidate if _organization_name(candidate) else ""
 
 
 def find_markers(text: str) -> list[AuthorYearMarker]:
@@ -410,10 +455,14 @@ def find_markers(text: str) -> list[AuthorYearMarker]:
 
     found: list[AuthorYearMarker] = []
     for match in _ORGANIZATION_NARRATIVE.finditer(text):
-        works = _works(match["authors"], match["years"], organization=True)
+        authors = _organization_author(match["authors"])
+        if not authors:
+            continue
+        works = _works(authors, match["years"], organization=True)
         if works:
+            start = match.end("authors") - len(authors)
             found.append(AuthorYearMarker(
-                match.start(), match.end(), match.group(), works, True
+                start, match.end(), text[start:match.end()], works, True
             ))
     taken = [(marker.start, marker.end) for marker in found]
     for match in _NARRATIVE.finditer(text):
@@ -470,18 +519,27 @@ def _parenthetical(inner: str) -> tuple[CitedWork, ...]:
 
     works: list[CitedWork] = []
     for group in inner.split(";"):
-        organization = _ORGANIZATION.fullmatch(group)
-        if organization and _organization_name(organization["authors"]):
-            works.extend(_works(
-                organization["authors"], organization["years"],
-                organization=True,
+        matches: list[tuple[int, int, tuple[CitedWork, ...]]] = []
+        organizations: list[tuple[int, int]] = []
+        for match in _ORGANIZATION.finditer(group):
+            authors = _organization_author(match["authors"])
+            if not authors:
+                continue
+            organizations.append(match.span())
+            matches.append((
+                match.start(), match.end(),
+                _works(authors, match["years"], organization=True),
             ))
-            continue
-        found = list(_GROUP_WORK.finditer(group))
-        for match in found:
-            works.extend(_works(match["authors"], match["years"]))
-        if not found and (match := _ORGANIZATION.fullmatch(group)):
-            works.extend(_works(match["authors"], match["years"]))
+        for match in _GROUP_WORK.finditer(group):
+            if any(start < match.end() and match.start() < end
+                   for start, end in organizations):
+                continue
+            matches.append((
+                match.start(), match.end(),
+                _works(match["authors"], match["years"]),
+            ))
+        for _, _, cited in sorted(matches):
+            works.extend(cited)
     return tuple(works)
 
 
@@ -588,7 +646,9 @@ def entry_key(number: int, entry: str) -> EntryKey | None:
             before_year["name"] if before_year
             else entry.split(",", 1)[0].split("(", 1)[0].strip()
         )
-        if not head or len(head.split()) > 6:
+        if not head or (
+            len(head.split()) > 6 and not _organization_name(head)
+        ):
             return None
         names, authors = [head], None
     match = _ENTRY_DATE_AFTER_AUTHORS.match(
