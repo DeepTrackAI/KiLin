@@ -179,7 +179,10 @@ class _PageText(HTMLParser):
 
         """
 
-        if tag == "title":
+        if tag == "title" and all(
+            name == "head" for name in self.hidden
+        ):
+            # SVG and other hidden elements can have their own <title>.
             self.in_title = True
         if tag == "body" and "head" in self.hidden:
             # The end of <head> may be left out.

@@ -23,10 +23,6 @@ from kilin.chunking import chunk_source_units
 from kilin.project_type import project_type
 from kilin.repository import scan_repository
 from kilin.retrievals.code_graph import CodeRelation, build_code_graph
-from kilin.retrievals.context_expansion import (
-    names_code,
-    plan_context_expansion,
-)
 from kilin.sources import extract_source_units, read_repository_files
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "code_repo"
@@ -145,29 +141,6 @@ class TestCodeFixtureRepository(unittest.TestCase):
                     any(target.endswith(name) for target in targets)
                 )
 
-    def test_javascript_functions_expand_to_callers_and_callees(self) -> None:
-        js = "js.calculator_js"
-        plan = plan_context_expansion(
-            "Which functions call js_function_A?", self.graph
-        )
-        self.assertTrue(names_code("Explain js_function_A", self.graph))
-        self.assertEqual(plan.functions, (f"{js}.js_function_A",))
-        self.assertTrue(plan.relationship)
-        self.assertIn(f"{js}.JsChildClass.js_method_C", plan.related_functions)
-        plain = plan_context_expansion("Explain js_function_A", self.graph)
-        self.assertIn(f"{js}.js_function_B", plain.related_functions)
-
-    def test_javascript_class_expands_to_its_methods(self) -> None:
-        plan = plan_context_expansion(
-            "Which methods belong to JsChildClass?", self.graph
-        )
-        self.assertEqual(plan.functions, ())
-        self.assertIn("exact class", plan.signals)
-        self.assertIn(
-            "js.calculator_js.JsChildClass.js_method_C",
-            plan.related_functions,
-        )
-
     def test_html_is_read_as_code(self) -> None:
         page = next(
             chunk for chunk in self.chunks if chunk.path.suffix == ".html"
@@ -190,6 +163,40 @@ class TestCodeFixtureRepository(unittest.TestCase):
         ):
             with self.subTest(relation=expected):
                 self.assertIn(expected, self.relations)
+
+    def test_html_page_is_retrieved_through_javascript_calls(self) -> None:
+        """Follow a JavaScript function's call edge to its HTML page."""
+
+        results = code_search(
+            self.graph, self.chunks, "js_function_A", count=20
+        )
+        self.assertIn(
+            Path("html/page_html.html"),
+            {result.chunk.path for result in results},
+        )
+
+    def test_javascript_functions_expand_to_callers_and_callees(self) -> None:
+        js = "js.calculator_js"
+        plan = plan_context_expansion(
+            "Which functions call js_function_A?", self.graph
+        )
+        self.assertTrue(names_code("Explain js_function_A", self.graph))
+        self.assertEqual(plan.functions, (f"{js}.js_function_A",))
+        self.assertTrue(plan.relationship)
+        self.assertIn(f"{js}.JsChildClass.js_method_C", plan.related_functions)
+        plain = plan_context_expansion("Explain js_function_A", self.graph)
+        self.assertIn(f"{js}.js_function_B", plain.related_functions)
+
+    def test_javascript_class_expands_to_its_methods(self) -> None:
+        plan = plan_context_expansion(
+            "Which methods belong to JsChildClass?", self.graph
+        )
+        self.assertEqual(plan.functions, ())
+        self.assertIn("exact class", plan.signals)
+        self.assertIn(
+            "js.calculator_js.JsChildClass.js_method_C",
+            plan.related_functions,
+        )
 
 
 if __name__ == "__main__":

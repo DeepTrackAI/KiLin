@@ -3290,12 +3290,16 @@ class RAGSession:
         # Text read earlier is reused when the file's bytes are unchanged
         # (same SHA-256), so only new or changed files are read again;
         # reading is slow for PDFs. A file with the same name but other
-        # content has another hash and is read again. Text read as code is
-        # kept under another key, as HTML then reads differently.
+        # content has another hash and is read again. HTML read as code
+        # has a separate cache identity; other formats are unaffected.
         texts = _read_text_cache(self.project.indexes)
         hashes = {
             name: sha256((self.project.source / name).read_bytes()).hexdigest()
-            + (":code" if as_code else "")
+            + (
+                ":code"
+                if as_code and Path(name).suffix.lower() == ".html"
+                else ""
+            )
             for name in selected
         }
         reused = {
@@ -3500,12 +3504,21 @@ class RAGSession:
             component="rag",
             data={"chunk_count": len(chunks)},
         ):
-            if not use_code_graph or not source_files:
-                # A project type without a code graph, or a project without
-                # files, gets an empty graph; retrieval then skips it.
+            # HTML read as page text is evidence, not executable markup.
+            # Its displayed code examples must not create graph links.
+            graph_files = [
+                source for source in source_files
+                if as_code or source.path.suffix.lower() != ".html"
+            ] if use_code_graph else []
+            graph_paths = {source.path for source in graph_files}
+            graph_units = [
+                unit for unit in units if unit.path in graph_paths
+            ]
+            if not graph_files or not graph_units:
+                # An HTML-only document can have no visible text or units.
                 code_graph = CodeGraph((), ())
             else:
-                code_graph = build_code_graph(source_files, units)
+                code_graph = build_code_graph(graph_files, graph_units)
         return chunks, code_graph
 
     def _prepare_retrieval(

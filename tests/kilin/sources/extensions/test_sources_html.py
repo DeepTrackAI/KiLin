@@ -79,6 +79,17 @@ class TestPageText(unittest.TestCase):
         self.assertIn("```\nx = 1\n# not a heading\n```", self.text)
         self.assertIn("\\# Also not a heading", self.text)
 
+    def test_hidden_svg_title_is_not_the_page_title(self) -> None:
+        """An icon's accessibility title is not a document heading."""
+
+        html = (
+            "<svg><title>Hidden icon</title></svg>"
+            "<p>Visible paragraph</p>"
+        )
+        self.assertEqual(
+            sources_html.page_text(html), "Visible paragraph\n"
+        )
+
     def test_head_without_an_end_tag_keeps_the_body(self) -> None:
         text = sources_html.page_text(
             "<html><head><title>T</title><body><p>Body text</p>"
