@@ -468,6 +468,26 @@ class TestRAGLifecycle(unittest.TestCase):
                 )
 
 
+    def test_json_source_format_reindexes_only_json_profiles(self) -> None:
+        """Distinguish legacy JSON chunks without changing other indexes."""
+
+        session = _session()
+        self.assertNotIn("json_source_units", session._index_metadata())
+        session.project.profile.extensions = (".json",)
+        metadata = session._index_metadata()
+        self.assertEqual(
+            metadata["json_source_units"], rag.JSON_SOURCE_UNITS_FORMAT
+        )
+        # Older indexes have the same configured options, but no version.
+        legacy = dict(metadata)
+        legacy.pop("json_source_units")
+        self.assertNotEqual(legacy, metadata)
+        # The version is stable for repeated reads of the same profile.
+        self.assertEqual(session._index_metadata(), metadata)
+        session.project.profile.extensions = (".py", ".md")
+        self.assertNotIn("json_source_units", session._index_metadata())
+
+
 class TestRAGConversationPersistence(unittest.TestCase):
     """Verify resumable turns, checkpoint identities, and path containment."""
 

@@ -69,6 +69,9 @@ class TestProjectInventory(unittest.TestCase):
         from tests.kilin.tools._shared._support import chunk
 
         self.assertEqual(tool.file_types_in("List PDFs"), (".pdf",))
+        self.assertEqual(
+            tool.file_types_in("List JSON files"), (".json",)
+        )
         self.assertEqual(tool.file_types_in("text files"), (".txt",))
         self.assertEqual(
             tool.file_types_in("How many Word documents?"), (".doc", ".docx")

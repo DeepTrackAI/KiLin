@@ -38,6 +38,8 @@ Examples
 
 from __future__ import annotations
 
+from typing import Final
+
 from kilin.sources.sources import (
     SourceFile,
     SourceUnit,
@@ -47,6 +49,10 @@ from kilin.sources.sources import (
 __all__ = [
     "extract_source_units",
 ]
+
+
+# Changing this version reindexes profiles that select JSON files.
+JSON_SOURCE_UNITS_FORMAT: Final[str] = "top-level-keys-v1"
 
 
 def _top_level_keys(text: str) -> list[tuple[int, str]]:
