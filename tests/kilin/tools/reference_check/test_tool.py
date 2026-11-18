@@ -799,6 +799,47 @@ class TestReferenceCheckRun(unittest.TestCase):
         citation = Citation((2,), "2", sentence, start, start + 3)
         self.assertEqual(_cited_for(sentence, [citation], 2), "")
 
+    def test_shared_marker_cites_a_list_as_a_whole(self) -> None:
+        def cited_for(text: str, numbers: tuple[int, ...]) -> str:
+            """Return what the first number is cited for in a sentence.
+
+            Parameters
+            ----------
+            text: str
+                The sentence, with one marker in brackets.
+            numbers: tuple[int, ...]
+                The marker's references.
+
+            Returns
+            -------
+            str
+                ``_cited_for`` for the first reference.
+
+            """
+
+            sentence = Sentence(Path("p.md"), 1, text, chunk("s", "x"))
+            start, end = text.index("["), text.index("]") + 1
+            marker = text[start + 1:end - 1]
+            citation = Citation(numbers, marker, sentence, start, end)
+            return _cited_for(sentence, [citation], numbers[0])
+
+        long_list = (
+            "Several studies identified protective genetic variants that "
+            "reduce Aβ production, promoting its clearance, limiting tau "
+            "phosphorylation and regulating microglial responses [11-18]."
+        )
+        self.assertEqual(cited_for(long_list, tuple(range(11, 19))), "")
+        self.assertEqual(
+            cited_for("It was applied to segmentation, tracking and "
+                      "denoising [3-5].", (3, 4, 5)),
+            "It was applied to segmentation, tracking and denoising",
+        )
+        self.assertEqual(
+            cited_for("It was applied to segmentation, tracking and "
+                      "denoising [3].", (3,)),
+            "tracking and denoising",
+        )
+
     def test_answer_has_no_bracketed_numbers(self) -> None:
         self.chunks[1] = chunk(
             "b1", BRAPH + "Earlier toolboxes [20, 21] exist.\n",

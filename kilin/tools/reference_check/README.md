@@ -112,7 +112,11 @@ For "check the references of the Smith paper", the tool:
    reference (one call per sentence), used only as an additional retrieval
    query. The original citing sentence stays authoritative for the
    verdict; a model-generated rewrite cannot establish support for
-   something not asserted in that sentence.
+   something not asserted in that sentence. When such a sentence does
+   not say which part each reference backs (one marker such as
+   "[11-18]" after a list), a work that backs some parts but not others
+   is partly supported, and the comment names the part it backs and
+   leaves the rest to the other cited references.
    A claim found not supported, or without a matching passage, is read
    again with the next best-ranked passages (`RETRY_PASSAGES`) in a
    second call; a better verdict from that reading replaces the first,
