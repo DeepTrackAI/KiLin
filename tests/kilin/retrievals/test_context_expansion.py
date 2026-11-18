@@ -67,6 +67,89 @@ class TestContextExpansionPlanning(unittest.TestCase):
         self.assertEqual(ordinary.functions, ())
         self.assertEqual(named.functions, ("web.App.reply",))
 
+    def test_r_method_has_the_same_plain_word_guard(self) -> None:
+        graph = CodeGraph(
+            entities=(
+                CodeEntity('r.Store.reply', 'r_method', Path('r/store.R')),
+            ),
+            relations=(),
+        )
+        ordinary = context_expansion.plan_context_expansion(
+            'I need a reply to the user.', graph
+        )
+        named = context_expansion.plan_context_expansion(
+            'Explain the reply method.', graph
+        )
+        self.assertEqual(ordinary.functions, ())
+        self.assertEqual(named.functions, ('r.Store.reply',))
+
+    def test_r_script_context_bridges_to_functions(self) -> None:
+        graph = CodeGraph(
+            entities=(
+                CodeEntity('r.main', 'source_file', Path('r/main.R')),
+                CodeEntity('r.main.run', 'r_function', Path('r/main.R')),
+            ),
+            relations=(),
+        )
+        header = ranked(
+            chunk('header', path='r/main.R', kind='r_script')
+        )
+        plan = context_expansion.plan_context_expansion(
+            'What does this source provide?', graph, (header,)
+        )
+        self.assertIn('r.main.run', plan.related_functions)
+        self.assertIn('module functions', plan.signals)
+
+    def test_dotted_r_function_requires_the_complete_name(self) -> None:
+        graph = CodeGraph(
+            entities=(
+                CodeEntity('r.main.read.data', 'r_function',
+                           Path('r/main.R')),
+            ),
+            relations=(),
+        )
+        named = context_expansion.plan_context_expansion(
+            'Explain read.data', graph
+        )
+        ordinary = context_expansion.plan_context_expansion(
+            'Explain data', graph
+        )
+        self.assertEqual(named.functions, ('r.main.read.data',))
+        self.assertEqual(ordinary.functions, ())
+
+    def test_dotted_r_context_does_not_include_shorter_function(
+        self,
+    ) -> None:
+        path = Path('r/main.R')
+        target = CodeEntity('r.main.read.data', 'r_function', path)
+        chunks = (
+            chunk('dotted', path='r/main.R', kind='r_function',
+                  symbol='read.data'),
+            chunk('plain', path='r/main.R', kind='r_function',
+                  symbol='data'),
+        )
+        found = context_expansion._chunks_for_functions(
+            chunks, CodeGraph((target,), ()), (target.name,)
+        )
+        self.assertEqual([item.identifier for item in found], ['dotted'])
+
+    def test_r_script_bridges_to_dotted_top_level_functions(self) -> None:
+        graph = CodeGraph(
+            entities=(
+                CodeEntity('r.main', 'source_file', Path('r/main.R')),
+                CodeEntity('r.main.read.data', 'r_function',
+                           Path('r/main.R')),
+            ),
+            relations=(),
+        )
+        header = ranked(
+            chunk('header', path='r/main.R', kind='r_script')
+        )
+        plan = context_expansion.plan_context_expansion(
+            'What does this source provide?', graph, (header,)
+        )
+        self.assertIn('r.main.read.data', plan.related_functions)
+
     def test_javascript_module_context_bridges_to_functions(self) -> None:
         graph = CodeGraph(
             entities=(

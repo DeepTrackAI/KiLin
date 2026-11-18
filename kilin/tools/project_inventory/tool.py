@@ -107,8 +107,8 @@ _TYPE_WORDS: Final[dict[str, tuple[str, ...]]] = {
     "notebooks": (".ipynb",),
     "python": (".py",),
     "matlab": (".m",),
-    "script": (".py", ".m", ".js"),
-    "scripts": (".py", ".m", ".js"),
+    "script": (".py", ".m", ".js", ".r"),
+    "scripts": (".py", ".m", ".js", ".r"),
     "javascript": (".js",),
     "js": (".js",),
     "html": (".html",),
@@ -130,6 +130,7 @@ _TYPE_NAMES: Final[dict[str, str]] = {
     ".m": "MATLAB",
     ".js": "JavaScript",
     ".html": "HTML",
+    ".r": "R",
 }
 # Questions about files that could not be read list only those files.
 _UNREADABLE_WORDS: Final[re.Pattern[str]] = re.compile(
@@ -220,6 +221,9 @@ def file_types_in(question: str) -> tuple[str, ...]:
     # "word" alone is too common ("the word MRI"); "Word files" counts.
     if re.search(r"\bword (?:files?|documents?|docs?)\b", text):
         found.extend((".doc", ".docx"))
+    # "r" alone is too common; "R files" and "R scripts" count.
+    if re.search(r"\br (?:files?|scripts?|code)\b", text):
+        found.append(".r")
 
     for word in re.findall(r"\.?[a-z]+", text):
         if word.startswith(".") and word in _TYPE_NAMES:

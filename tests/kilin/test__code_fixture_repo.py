@@ -79,6 +79,10 @@ class TestCodeFixtureRepository(unittest.TestCase):
             ("js/calculator_js.js", "JsBaseClass"),
             ("js/calculator_js.js", "JsChildClass"),
             ("js/calculator_js.js", "js_function_D"),
+            ("r/calculator_r.R", "r_function_A"),
+            ("r/calculator_r.R", "r_function_B"),
+            ("r/calculator_r.R", "RChildClass"),
+            ("r/calculator_r.R", "r_function_D"),
         ):
             with self.subTest(passage=expected):
                 self.assertIn(expected, passages)
@@ -118,6 +122,19 @@ class TestCodeFixtureRepository(unittest.TestCase):
             CodeRelation(
                 f"{js}.JsChildClass", "inherits", f"{js}.JsBaseClass"
             ),
+        ):
+            with self.subTest(relation=expected):
+                self.assertIn(expected, self.relations)
+
+    def test_r_calls_inheritance_and_package(self) -> None:
+        r = "r.calculator_r"
+        for expected in (
+            CodeRelation(f"{r}.r_function_A", "calls", f"{r}.r_function_B"),
+            CodeRelation(
+                f"{r}.RChildClass.r_method_C", "calls", f"{r}.r_function_A"
+            ),
+            CodeRelation(f"{r}.RChildClass", "inherits", f"{r}.RBaseClass"),
+            CodeRelation(r, "imports", "methods"),
         ):
             with self.subTest(relation=expected):
                 self.assertIn(expected, self.relations)
@@ -180,6 +197,31 @@ class TestCodeFixtureRepository(unittest.TestCase):
             {result.chunk.path for result in results},
         )
 
+    def test_r_functions_expand_to_callers_and_callees(self) -> None:
+        r = 'r.calculator_r'
+        plan = plan_context_expansion(
+            'Which functions call r_function_A?', self.graph
+        )
+        self.assertTrue(names_code('Explain r_function_A', self.graph))
+        self.assertEqual(plan.functions, (f'{r}.r_function_A',))
+        self.assertTrue(plan.relationship)
+        self.assertIn(
+            f'{r}.RChildClass.r_method_C', plan.related_functions
+        )
+        plain = plan_context_expansion('Explain r_function_A', self.graph)
+        self.assertIn(f'{r}.r_function_B', plain.related_functions)
+
+    def test_r_class_expands_to_its_methods(self) -> None:
+        plan = plan_context_expansion(
+            'Which methods belong to RChildClass?', self.graph
+        )
+        self.assertEqual(plan.functions, ())
+        self.assertIn('exact class', plan.signals)
+        self.assertIn(
+            'r.calculator_r.RChildClass.r_method_C',
+            plan.related_functions,
+        )
+
     def test_javascript_functions_expand_to_callers_and_callees(self) -> None:
         js = "js.calculator_js"
         plan = plan_context_expansion(
@@ -188,9 +230,7 @@ class TestCodeFixtureRepository(unittest.TestCase):
         self.assertTrue(names_code("Explain js_function_A", self.graph))
         self.assertEqual(plan.functions, (f"{js}.js_function_A",))
         self.assertTrue(plan.relationship)
-        self.assertIn(
-            f"{js}.JsChildClass.js_method_C", plan.related_functions
-        )
+        self.assertIn(f"{js}.JsChildClass.js_method_C", plan.related_functions)
         plain = plan_context_expansion("Explain js_function_A", self.graph)
         self.assertIn(f"{js}.js_function_B", plain.related_functions)
 

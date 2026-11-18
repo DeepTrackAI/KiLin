@@ -260,7 +260,7 @@ _REFERS_BACK: Final[re.Pattern[str]] = require_default_pattern(
 # names a file and says nothing about earlier answers ("In Figure 1G of
 # smith20.pdf, what does 79.7 represent?").
 _NAMED_FILE: Final[re.Pattern[str]] = re.compile(
-    r"\b[\w.-]+\.(?:pdf|md|txt|docx?|py|ipynb|m|json|js|html?)\b", re.I
+    r"\b[\w.-]+\.(?:pdf|md|txt|docx?|py|ipynb|m|json|js|html?|r)\b", re.I
 )
 _EARLIER_ANSWER: Final[re.Pattern[str]] = re.compile(
     r"\b(?:you|your|cited|quoted|listed|answer|answers|previous|earlier"
