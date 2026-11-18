@@ -1,0 +1,11 @@
+{
+  "json_key_A": {
+    "multiplier": 2,
+    "used_by": "js_function_B"
+  },
+  "json_key_B": [
+    "python/calculator_py.py",
+    "js/calculator_js.js"
+  ],
+  "json_key_C": "calculator"
+}

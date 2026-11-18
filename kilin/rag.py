@@ -323,6 +323,9 @@ from kilin.sources import (
     extract_source_units,
     read_repository_files,
 )
+from kilin.sources.extensions.sources_json import (
+    JSON_SOURCE_UNITS_FORMAT,
+)
 from kilin.sources.extensions.sources_pdf import PDF_TEXT_EXTRACTOR
 from kilin.tools import (
     TOOL_REGISTRY,
@@ -5984,6 +5987,10 @@ class RAGSession:
         # indexed again when this changes.
         if ".html" in profile.extensions:
             metadata["html_as_code"] = self._reads_as_code()
+        # JSON now splits large objects at top-level keys. Older indexes
+        # keep the previous whole-file chunks unless rebuilt once.
+        if ".json" in profile.extensions:
+            metadata["json_source_units"] = JSON_SOURCE_UNITS_FORMAT
         # Indexes built from plain chunk text are rebuilt once.
         metadata["retrieval_text"] = RETRIEVAL_TEXT_FORMAT
         # Projects that read PDFs re-index when the PDF text extractor

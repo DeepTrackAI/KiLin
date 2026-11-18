@@ -16,6 +16,8 @@ answer is easy to check:
   project types read only its text (`html_heading_A`, `html_heading_B`).
 - `r/calculator_r.R`: `r_function_A` calls `r_function_B`; `RChildClass`
   extends `RBaseClass`, and its `r_method_C` calls `r_function_A`.
+- `json/settings_json.json`: `json_key_A` holds `"multiplier": 2`, used by
+  `js_function_B`; `json_key_B` lists two calculator files.
 
 Each pull request that teaches KíLín a new file type adds one file here and
 the questions that check it in

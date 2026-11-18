@@ -128,6 +128,7 @@ It does **not execute source files or notebook cells**.
 | `sources_html.py` | HTML page text with heading sections; as code, source markup split at main HTML elements |
 | `sources_js.py` | JavaScript line-leading functions, classes, and direct methods; lexical masking and balanced braces prevent spurious declarations and scope crossings |
 | `sources_r.py` | R top-level functions, classes, and S4 methods, with attached comment blocks and class-method children |
+| `sources_json.py` | JSON preserved as written; top-level object keys become child units for large files |
 | `sources_tex.py` | LaTeX front matter and sections at `\part` to `\subsubsection`; setup before `\begin{document}` left out |
 | `sources_bib.py` | BibTeX entries and macros as independently indexed units with citation keys |
 | `sources_bbl.py` | Compiled LaTeX `\bibitem` references with original line and key provenance |
@@ -147,6 +148,17 @@ their associated comments. A comment-only line between a function's
 parameter list and its opening brace does not terminate the function.
 Other statements remain in `r_script` units. R readers use structural
 heuristics rather than executing R or building a complete syntax tree.
+
+JSON extraction retains the original file text and line coordinates.
+Large top-level objects can be divided into child units at their
+keys, while arrays and single-line objects remain whole. The reader
+is a structural scan, not JSON validation; malformed JSON can still
+be searched. Projects selecting `.json` record `json_source_units`
+(`top-level-keys-v2`) in index metadata. Key line coordinates follow
+Python's `splitlines` boundaries, including Unicode separators inside JSON
+strings. Existing JSON indexes with an older version (or no version) are
+rebuilt once to correct section provenance. Profiles not selecting `.json`
+retain their previous index identity.
 
 Word title and author properties are read separately for literature
 search headers and the paper-summary tool. The property reader handles OLE
