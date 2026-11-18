@@ -50,6 +50,7 @@ from kilin.tools.project_summary._reduce import (
     documents_line,
     documents_list,
     note_groups,
+    numeric_support_problem,
     per_document_markdown,
 )
 from kilin.tools._shared.report_templates import TemplateSection
@@ -185,12 +186,16 @@ class TestRun(_Project):
             "[1, 3], reviewed in [2]."
         ))
         self.assertIn(
-            "## Models\n\n1 of 3 documents. Unclear: [3] (the quoted words "
+            "## Models\n\n1 of 3 documents. Unclear: [2] (no explicit "
+            "source-backed negative evidence), [3] (the quoted words "
             "are not in the document).\n\n- **Study A**: U-Net [1]",
             report,
         )
         self.assertIn(
-            "## Datasets\n\n1 of 3 documents.\n\n| Document | Dataset | "
+            "## Datasets\n\n1 of 3 documents. Unclear: [2] (no explicit "
+            "source-backed negative evidence), [3] (no explicit "
+            "source-backed negative evidence).\n\n"
+            "| Document | Dataset | "
             "Size |\n| --- | --- | --- |\n| Study A [1] | BBBC | 40 images |",
             report,
         )
@@ -198,15 +203,19 @@ class TestRun(_Project):
         self.assertTrue(report.rstrip().endswith(
             "**Documents**\n\n[1] Study A (`a.md`)  \n[2] b.md  \n[3] c.md"
         ))
-        self.assertTrue(result.summary["valid"])
-        self.assertNotIn("**Check**", report)
+        self.assertFalse(result.summary["valid"])
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertEqual(len(result.summary["uncertain_checks"]), 4)
+        self.assertIn("**Check**", report)
+        self.assertIn("unresolved evidence check(s)", report)
         self.assertEqual([e["citation"] for e in result.evidence],
                          [1, 2, 3])
         self.assertEqual(result.evidence[0]["path"], Path("a.md"))
         self.assertIn("*Saved to `outputs/lab_overview_project_report.md`",
                       result.answer)
         # Three documents, one section, one choice, one headline.
-        self.assertEqual(context.ask_model.call_count, 6)
+        # Source-grounding repairs use the existing bounded repair policy.
+        self.assertEqual(context.ask_model.call_count, 8)
 
     def test_failed_document_and_groups(self) -> None:
         def model(system, prompt, tokens):
@@ -242,7 +251,9 @@ class TestRun(_Project):
         fix = next(c.args[1] for c in context.ask_model.call_args_list
                    if "has a problem" in c.args[1])
         self.assertIn("[n1], [n3]", fix)
-        self.assertTrue(result.summary["valid"])
+        # The synthetic claim about plants is absent from both sources.
+        self.assertFalse(result.summary["valid"])
+        self.assertIn("source passages", result.answer)
 
         def stubborn(system, prompt, tokens):
             if "Section: Themes" in prompt or "has a problem" in prompt:
@@ -258,8 +269,9 @@ class TestRun(_Project):
         # The check is saved with the report, before the documents.
         self.assertIn(
             "---\n\n**Check**\n\n- Themes: 1 citation(s) of no document "
-            "removed.\n\n**Documents**", report,
+            "removed.", report,
         )
+        self.assertIn("source passages", report)
         self.assertNotIn("names documents in the text", result.answer)
         self.assertFalse(result.summary["valid"])
 
@@ -269,16 +281,16 @@ class TestRun(_Project):
                 return ("U-Net models segment nuclei [1], and transformers "
                         "classify cells [2].")
             if "has a problem" in prompt:
-                return ("U-Net models segment nuclei [1], and transformers "
-                        "classify cells [3].")
+                return ("U-Net models segment nuclei [1], and ResNet "
+                        "classifiers use private data [3].")
             return _model(system, prompt, tokens)
         result, context = self._run(model=model)
         fix = next(c.args[1] for c in context.ask_model.call_args_list
                    if "has a problem" in c.args[1])
-        self.assertIn("“and transformers classify cells” cites [2], whose "
-                      "notes do not mention it; it may be [3]", fix)
+        self.assertIn("“and transformers classify cells” cites [2] "
+                      "without a recognizable anchor", fix)
         report = (self.root / result.summary["report"]).read_text()
-        self.assertIn("classify cells [3].", report)
+        self.assertIn("ResNet classifiers use private data [3].", report)
 
     def test_headline_and_coverage(self) -> None:
         (self.templates / "lab_overview.md").write_text(LAB.replace(
@@ -335,6 +347,90 @@ class TestRun(_Project):
         report = (self.root / result.summary["report"]).read_text()
         self.assertTrue(report.startswith("# Deep learning for nuclei\n"))
         self.assertIn("and methods reviewed [2].", report)
+
+    def test_evidence_excerpt_follows_checked_original_quote(self) -> None:
+        self.chunks = [
+            chunk("first", "Introduction with no dataset details.",
+                  path="a.md", line=1),
+            chunk("second", PAPERS["a.md"], path="a.md", line=20),
+        ]
+        result, _ = self._run()
+        self.assertEqual(len(result.evidence), 1)
+        self.assertEqual(result.evidence[0]["start_line"], 20)
+        self.assertIn("public BBBC dataset", result.evidence[0]["text"])
+
+    def test_fabricated_table_values_are_never_published_as_valid(
+        self,
+    ) -> None:
+        def model(system, prompt, tokens):
+            if "Document [1]" in prompt:
+                return (
+                    "NOTE 1: U-Net on BBBC.\n"
+                    "CHECK A: YES\nQUOTE A: trained a U-Net\n"
+                    "ENTRY A: U-Net\nCHECK B: YES\n"
+                    "QUOTE B: public BBBC dataset\n"
+                    "VALUE B1 Dataset: FraudData\n"
+                    "VALUE B2 Size: 999 million images"
+                )
+            return _model(system, prompt, tokens)
+
+        result, _ = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertFalse(result.summary["valid"])
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertNotIn("FraudData", report)
+        self.assertNotIn("999 million", report)
+        self.assertIn("unverified table value(s): Dataset, Size", report)
+        self.assertTrue(any(
+            item["document"] == 1 and item["section"] == "Datasets"
+            for item in result.summary["uncertain_checks"]
+        ))
+
+    def test_fabricated_model_name_is_not_published(self) -> None:
+        def model(system, prompt, tokens):
+            if "Document [1]" in prompt:
+                return (
+                    "NOTE 1: U-Net on BBBC.\n"
+                    "CHECK A: YES\nQUOTE A: trained a U-Net\n"
+                    "ENTRY A: FraudNet\n"
+                    "CHECK B: YES\nQUOTE B: public BBBC dataset\n"
+                    "VALUE B1 Dataset: BBBC\nVALUE B2 Size: 40 images"
+                )
+            return _model(system, prompt, tokens)
+
+        result, _ = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertFalse(result.summary["valid"])
+        self.assertNotIn("FraudNet", report)
+        self.assertIn("entry's wording is not in the original source", report)
+
+    def test_unverified_numeric_citation_is_visible_and_partial(self) -> None:
+        def model(system, prompt, tokens):
+            if "Section: Themes" in prompt or "has a problem" in prompt:
+                return "BBBC includes 999 million images [1]."
+            return _model(system, prompt, tokens)
+
+        result, _ = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertFalse(result.summary["valid"])
+        self.assertIn("Value 999 cited as [1]", report)
+        self.assertIn("**Check**", report)
+
+    def test_source_citation_not_verified_by_generated_notes(self) -> None:
+        def model(system, prompt, tokens):
+            if "Document [1]" in prompt:
+                return (
+                    "NOTE 1: Quantum photonic systems are investigated.\n"
+                    "CHECK A: NO\nCHECK B: NO"
+                )
+            if "Section: Themes" in prompt or "has a problem" in prompt:
+                return "Quantum photonic systems are investigated [1]."
+            return _model(system, prompt, tokens)
+
+        result, _ = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertFalse(result.summary["valid"])
+        self.assertIn("without a recognizable anchor", report)
 
     def test_cancel_and_quick(self) -> None:
         result, context = self._run(confirm=Mock(return_value="cancel"),
@@ -683,7 +779,7 @@ class TestReduce(unittest.TestCase):
         )
         self.assertIn(
             "“and genomic analysis of psychiatric disorders” cites [4], "
-            "whose notes do not mention it; it may be [5]",
+            "whose source text does not mention it; it may be [5]",
             support_problem(overview, texts),
         )
         self.assertEqual(
@@ -691,8 +787,8 @@ class TestReduce(unittest.TestCase):
         )
         # A long clause before the citation: its last part is judged.
         self.assertIn(
-            "“reservoir computing” cites [1], whose notes do not mention "
-            "it; it may be [2]",
+            "“reservoir computing” cites [1], whose source text "
+            "does not mention it; it may be [2]",
             support_problem(
                 "The main differences lie in their focus areas—brain "
                 "connectivity, memory capacity and psychiatric disorders—"
@@ -706,6 +802,12 @@ class TestReduce(unittest.TestCase):
             support_problem("Quantum chromodynamics lattices [4].", texts),
             "",
         )
+        self.assertIn("without a recognizable anchor", support_problem(
+            "Quantum chromodynamics lattices [4].", texts, strict=True,
+        ))
+        self.assertIn("without a recognizable anchor", support_problem(
+            "FraudData [1].", {1: "BBBC source"}, strict=True,
+        ))
         # A real report's "Agreements and Disagreements".
         self.assertIn(
             "cites only [1]",
@@ -736,6 +838,26 @@ class TestReduce(unittest.TestCase):
             "neurological conditions through graph theory",
         )
         self.assertEqual(fitted_headline("Short.", 20), "Short")
+        self.assertIn("Value 999 cited as [1]", numeric_support_problem(
+            "The dataset contains 999 images [1].",
+            {1: "The dataset contains 40 images"},
+        ))
+        self.assertEqual(numeric_support_problem(
+            "The dataset contains 40 images [1].",
+            {1: "The dataset contains 40 images"},
+        ), "")
+        self.assertIn("Quantity 40 million", numeric_support_problem(
+            "The sample contains 40 million images [1].",
+            {1: "The sample contains 40 images"},
+        ))
+        self.assertIn("Comparison p < 0.05", numeric_support_problem(
+            "The effect is significant (p<0.05) [1].",
+            {1: "The effect was not significant (p>0.05)"},
+        ))
+        self.assertEqual(numeric_support_problem(
+            "The effect is significant (p≤0.05) [1].",
+            {1: "The effect had p <= 0.05"},
+        ), "")
         groups = note_groups([(1, "a " * 30), (2, "b"), (3, "c")], 10)
         self.assertEqual([[n for n, _ in g] for g in groups], [[1], [2, 3]])
 

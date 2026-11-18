@@ -63,7 +63,7 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -71,6 +71,7 @@ import re
 from typing import Final
 
 from kilin._model_completion import strip_thinking
+from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._contract import (
     ToolContext,
@@ -111,9 +112,13 @@ from kilin.tools.project_summary._documents import (
     query_words,
 )
 from kilin.tools.project_summary._mapping import (
+    CHECK_NO,
+    CHECK_UNCLEAR,
+    CHECK_YES,
     DocumentNotes,
     map_prompt,
     parse_notes,
+    quote_found,
     template_texts,
     topics,
 )
@@ -134,6 +139,7 @@ from kilin.tools.project_summary._reduce import (
     headline_prompt,
     key_documents_prompt,
     note_groups,
+    numeric_support_problem,
     per_document_markdown,
     section_prompt,
 )
@@ -165,8 +171,9 @@ _ROUTED_DESCRIPTION: Final[int] = 120
 # Characters of a document's other notes standing in for a missing note in
 # a section covering all documents.
 _FALLBACK_NOTE: Final[int] = 400
-# Bound the filenames shown in a partial report; metadata retains every path.
+# Bound the filenames and unresolved evidence shown in a saved report.
 _OMITTED_NAMES_SHOWN: Final[int] = 10
+_UNCERTAIN_SHOWN: Final[int] = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -732,6 +739,7 @@ def _write_section(
     section: TemplateSection,
     notes: dict[int, DocumentNotes],
     documents: Sequence[ProjectDocument],
+    source_texts: Mapping[int, str],
     settings: ProjectSummarySettings,
     context: ToolContext,
     failures: list[str],
@@ -748,6 +756,8 @@ def _write_section(
         Each read document's notes, by number.
     documents: Sequence[ProjectDocument]
         The documents.
+    source_texts: Mapping[int, str]
+        Original indexed source text, assembled once per report run.
     settings: ProjectSummarySettings
         The settings, for repair attempts.
     context: ToolContext
@@ -765,7 +775,8 @@ def _write_section(
         its title and its other notes, and must be cited. A section
         outside its limits,
         citing documents wrongly (``citation_problem``), citing a document
-        that does not mention what it is cited for (``support_problem``),
+        that lacks the claim in its original source passages, or inventing
+        a numerical value (``numeric_support_problem``),
         calling one document's view an agreement or disagreement
         (``agreement_problem``) or, when marked ``all documents``, leaving
         out documents with notes (``coverage_problem``) is rewritten up to
@@ -810,14 +821,8 @@ def _write_section(
     ), section)
     cite = bool(lines) and not section.inline
     noted = [number for number, _ in lines]
-    titles = {document.number: document.title for document in documents}
-    texts = {
-        number: " ".join((
-            titles.get(number, ""), *found.notes.values(),
-            *(f"{c.entry} {' '.join(c.cells)}" for c in found.checks.values()),
-        ))
-        for number, found in notes.items() if not found.failure
-    }
+    # Model-generated notes must never serve as independent evidence.
+    texts = source_texts
 
     def problem_of(text: str) -> str:
         """Return the section's first problem, or ``""``.
@@ -839,11 +844,12 @@ def _write_section(
 
         return (
             citation_problem(text, len(documents), cite)
-            or support_problem(text, texts)
             or agreement_problem(text)
             or (coverage_problem(text, noted) if section.all_documents
                 else "")
             or section_problem(section, text, _config.TEMPLATE_RULES)
+            or numeric_support_problem(text, texts)
+            or support_problem(text, texts, strict=True)
             or ""
         )
 
@@ -862,14 +868,46 @@ def _write_section(
         )
     left = (
         citation_problem(content, len(documents), cite)
-        or support_problem(content, texts)
         or agreement_problem(content)
         or (coverage_problem(content, noted) if section.all_documents
             else "")
+        or numeric_support_problem(content, texts)
+        or support_problem(content, texts, strict=True)
     )
     if left:
         failures.append(f"{section.name}: {left}")
     return content
+
+
+def _evidence_passage(
+    document: ProjectDocument, notes: DocumentNotes | None,
+) -> Chunk:
+    """Select one original passage that supports a checked quote.
+
+    Parameters
+    ----------
+    document: ProjectDocument
+        One indexed document with source-order passages.
+    notes: DocumentNotes | None
+        The source-checked mapping result, if the model read it.
+
+    Returns
+    -------
+    Chunk
+        The earliest passage with a verified positive or negative
+        quotation, or the opening passage when none is available. The
+        citation still refers to the whole document, not this excerpt.
+
+    """
+
+    if notes is not None and not notes.failure:
+        for check in notes.checks.values():
+            if check.answer not in (CHECK_YES, CHECK_NO):
+                continue
+            for passage in document.passages:
+                if quote_found(check.quote, passage.text):
+                    return passage
+    return document.passages[0]
 
 
 def run(
@@ -892,9 +930,9 @@ def run(
     Returns
     -------
     ToolResult
-        The report, citing documents as ``[n]`` with each document's first
-        passage as evidence ``n``, and where it was saved; or why it could
-        not be written.
+        The report, citing documents as ``[n]``, with an original source
+        passage as representative evidence per document and the saved
+        output location; or why the report could not be written.
 
     """
 
@@ -959,16 +997,34 @@ def run(
             reply = context.ask_model(
                 *map_prompt(template, document, excerpt), None
             )
+            source_passages = tuple(
+                chunk.text for chunk in document.passages
+            )
             notes[document.number] = parse_notes(
-                reply, template, document.number, excerpt
+                reply, template, document.number, excerpt, source_passages
             )
         except Exception as error:  # One document must not stop the rest.
             notes[document.number] = DocumentNotes(
                 document.number, failure=str(error) or type(error).__name__
             )
     failed = [n for n, found in notes.items() if found.failure]
+    uncertain = [
+        {"document": number, "section": section, "reason": check.why
+         or "the evidence does not establish the condition"}
+        for number, found in sorted(notes.items()) if not found.failure
+        for section, check in found.checks.items()
+        if check.answer == CHECK_UNCLEAR
+    ]
     summary["failed"] = failed
+    summary["uncertain_checks"] = uncertain
 
+    # Assemble source text once, not again for every section and repair.
+    source_texts = {
+        document.number: "\n".join(
+            chunk.text for chunk in document.passages
+        )
+        for document in documents
+    }
     written: dict[str, str] = {}
     failures: list[str] = []
     for section in template.sections:
@@ -976,7 +1032,8 @@ def run(
         try:
             if section.source == SECTION_SOURCE_NOTES:
                 written[section.name] = _write_section(
-                    template, section, notes, documents, settings, context,
+                    template, section, notes, documents, source_texts,
+                    settings, context,
                     failures,
                 )
             elif section.source == SECTION_SOURCE_PER_DOCUMENT:
@@ -1041,6 +1098,18 @@ def run(
         problems.append(
             "Not read: " + ", ".join(f"[{n}]" for n in failed) + "."
         )
+    if uncertain:
+        shown = uncertain[:_UNCERTAIN_SHOWN]
+        details = "; ".join(
+            f"[{item['document']}] {item['section']} ({item['reason']})"
+            for item in shown
+        )
+        remainder = len(uncertain) - len(shown)
+        if remainder:
+            details += f"; and {remainder} more (see result metadata)"
+        problems.append(
+            f"{len(uncertain)} unresolved evidence check(s): {details}."
+        )
     # Coverage is a separate contract from structural template checks.
     # Omitted files have no report citation because they were never read.
     coverage = ""
@@ -1071,7 +1140,10 @@ def run(
     saved = save_output_file(
         context.project_root, f"{template.name}_project_report.md", final
     )
-    valid = check.valid and not failures and not failed and not omitted
+    valid = (
+        check.valid and not failures and not failed and not omitted
+        and not uncertain
+    )
     summary.update({
         "report": saved.as_posix(),
         "valid": valid,
@@ -1086,18 +1158,19 @@ def run(
         "estimated_tokens": estimate_tokens(final),
     })
     note = f"\n\n*Saved to `{saved.as_posix()}`.*"
-    evidence = tuple(
-        {
+    evidence_items: list[dict[str, object]] = []
+    for document in documents:
+        passage = _evidence_passage(document, notes.get(document.number))
+        evidence_items.append({
             "citation": document.number,
             "path": document.path,
-            "start_line": document.passages[0].start_line,
-            "end_line": document.passages[0].end_line,
-            "symbol": None,
-            "text": document.passages[0].text,
-            "cell": getattr(document.passages[0], "cell", None),
-        }
-        for document in documents
-    )
+            "start_line": passage.start_line,
+            "end_line": passage.end_line,
+            "symbol": passage.symbol,
+            "text": passage.text,
+            "cell": passage.cell,
+        })
+    evidence = tuple(evidence_items)
     context.done(
         f"Wrote the {template.title}", evidence_count=len(evidence)
     )

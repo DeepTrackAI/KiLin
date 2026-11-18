@@ -48,11 +48,11 @@ Module Structure
     removed, and documents named in the text ("Document 4") written as
     citations.
 
-- ``support_problem``, ``agreement_problem`` and ``coverage_problem``
+- ``support_problem``, ``numeric_support_problem``,
+  ``agreement_problem`` and ``coverage_problem``
 
-    Whether each citation's document mentions what it is cited for, each
-    agreement or disagreement cites two documents, and a section marked
-    ``all documents`` cites every document read.
+    Independent source-text checks for cited wording and numeric facts;
+    agreement and complete-coverage checks are separate.
 
 - ``headline_fix_prompt`` and ``fitted_headline``
 
@@ -106,6 +106,7 @@ __all__ = [
     "headline_prompt",
     "key_documents_prompt",
     "note_groups",
+    "numeric_support_problem",
     "per_document_markdown",
     "section_prompt",
 ]
@@ -138,10 +139,10 @@ _CLAUSE = re.compile(
     r"[,;:(—–]|\s-\s|\b(?:such\s+as|including|like|e\.g\.)\s",
     re.IGNORECASE,
 )
-# Words compared between a cited phrase and the cited document's notes:
+# Words compared between a cited phrase and original source passages:
 # four or more letters, compared by their first five ("genomic" and
 # "genome-wide" match), without words that say nothing of a topic.
-_TOPIC_WORD = re.compile(r"[^\W\d_]{4,}")
+_TOPIC_WORD = re.compile(r"[^\W\d_]+(?:-[^\W\d_]+)*")
 _STEM: Final[int] = 5
 _PLAIN_WORDS: Final[frozenset[str]] = frozenset({
     "about", "across", "also", "along", "among", "based", "both", "each",
@@ -168,6 +169,22 @@ _DANGLING = re.compile(
 # is flagged when another document shares this many of them.
 _SUPPORT_WORDS_MIN: Final[int] = 2
 _NUMBERS = re.compile(r"\d+")
+# Numerical assertions are checked against source passages, not notes.
+_FACT_NUMBER = re.compile(r"(?<![\w])\d+(?:[.,]\d+)*(?:%)?(?![\w])")
+# Statistical comparisons must preserve the reported inequality direction.
+_COMPARISON = re.compile(
+    r"(?<!\w)([a-z][a-z0-9_]*)\s*(<=|>=|<|>|=)\s*"
+    r"(\d+(?:\.\d+)?%?)(?!\w)", re.IGNORECASE,
+)
+# A value alone cannot verify a differently scaled amount (40 vs 40 million).
+_QUANTITY = re.compile(
+    r"(?<!\w)(\d+(?:[.,]\d+)*(?:%)?)\s+([a-z][a-z0-9-]*)",
+    re.IGNORECASE,
+)
+_UNIT_IGNORED: Final[frozenset[str]] = frozenset({
+    "a", "an", "and", "as", "at", "by", "for", "from", "in", "into",
+    "is", "of", "on", "or", "the", "to", "was", "were", "with",
+})
 # Unclear documents named in a per-document section's count line.
 _UNCLEAR_NAMED: Final[int] = 10
 
@@ -600,12 +617,16 @@ def _stems(text: str) -> set[str]:
     """
 
     return {
-        word.casefold()[:_STEM] for word in _TOPIC_WORD.findall(text)
-        if word.casefold() not in _PLAIN_WORDS
+        normalized[:_STEM]
+        for word in _TOPIC_WORD.findall(text)
+        if (normalized := word.casefold().replace("-", ""))
+        not in _PLAIN_WORDS and len(normalized) >= 4
     }
 
 
-def support_problem(content: str, texts: dict[int, str]) -> str:
+def support_problem(
+    content: str, texts: dict[int, str], *, strict: bool = False,
+) -> str:
     """Return a citation whose document does not mention what it cites.
 
     Parameters
@@ -613,7 +634,12 @@ def support_problem(content: str, texts: dict[int, str]) -> str:
     content: str
         A section written from the notes.
     texts: dict[int, str]
-        Each document's title, notes and entries, by number.
+        Each document's texts by number. The caller must supply original
+        indexed source passages for independent validation.
+    strict: bool, optional
+        Also flag cited phrases with no overlap in their original source
+        even when no alternative document is better. Defaults to False
+        for the earlier heuristic's compatibility.
 
     Returns
     -------
@@ -626,17 +652,19 @@ def support_problem(content: str, texts: dict[int, str]) -> str:
         document's text, while another document has at least
         ``_SUPPORT_WORDS_MIN``: a problem naming the phrase, the citation
         and the document that may be meant. Words in more than half the
-        documents are not distinctive. ``""`` when every citation is
-        supported or cannot be judged.
+        documents are not distinctive. In strict mode, a cited phrase
+        without a recognizable original-source anchor is reported even
+        when no alternative document seems better. ``""`` otherwise.
 
     """
 
     stems = {number: _stems(text) for number, text in texts.items()}
-    if len(stems) < 2:
+    if len(stems) < 2 and not strict:
         return ""
     common = {
         stem for stem in set().union(*stems.values())
-        if sum(stem in found for found in stems.values()) * 2 > len(stems)
+        if len(stems) > 1
+        and sum(stem in found for found in stems.values()) * 2 > len(stems)
     }
     for sentence in re.split(r"(?<=[.!?])\s+", content):
         start = 0
@@ -645,10 +673,11 @@ def support_problem(content: str, texts: dict[int, str]) -> str:
             start = match.end()
             cited = _cited(match.group(1), max(stems, default=0))
             clause = _CLAUSE.split(phrase)[-1]
-            if len(_stems(clause) - common) >= _SUPPORT_WORDS_MIN:
+            threshold = 1 if strict else _SUPPORT_WORDS_MIN
+            if len(_stems(clause) - common) >= threshold:
                 phrase = clause  # "..., such as reservoir computing [1]"
             words = _stems(phrase) - common
-            if not cited or len(words) < _SUPPORT_WORDS_MIN:
+            if not cited or len(words) < threshold:
                 continue
             for number in cited:
                 if words & stems.get(number, set()):
@@ -658,16 +687,123 @@ def support_problem(content: str, texts: dict[int, str]) -> str:
                     key=lambda n: len(words & stems[n]),
                     default=None,
                 )
-                if best is None or len(words & stems[best]) < (
+                shown = " ".join(phrase.strip(" ,;:").split()[-8:])
+                if best is not None and len(words & stems[best]) >= (
                     _SUPPORT_WORDS_MIN
                 ):
-                    continue
-                shown = " ".join(phrase.strip(" ,;:").split()[-8:])
-                return (
-                    f"“{shown}” cites [{number}], whose notes do not "
-                    f"mention it; it may be [{best}]. Cite the document "
-                    "each statement comes from."
-                )
+                    return (
+                        f"“{shown}” cites [{number}], whose source text "
+                        f"does not mention it; it may be [{best}]. Cite "
+                        "the document each statement comes from."
+                    )
+                if strict:
+                    return (
+                        f"“{shown}” cites [{number}] without a recognizable "
+                        "anchor in its original source passages. Check "
+                        "the claim against the source."
+                    )
+    return ""
+
+
+def _comparisons(text: str) -> set[tuple[str, str, str]]:
+    """Extract comparison operators and values from source text.
+
+    Parameters
+    ----------
+    text: str
+        A claim or original source text.
+
+    Returns
+    -------
+    set[tuple[str, str, str]]
+        Variable, operator, and numerical value, with Unicode comparison
+        signs normalized to their ASCII equivalents.
+
+    """
+
+    normalized = text.replace("≤", "<=").replace("≥", ">=")
+    return {
+        (key.casefold(), operator, value)
+        for key, operator, value in _COMPARISON.findall(normalized)
+    }
+
+
+def numeric_support_problem(
+    content: str, texts: dict[int, str]
+) -> str:
+    """Reject cited numerical values absent from original source text.
+
+    Parameters
+    ----------
+    content: str
+        A model-written report section.
+    texts: dict[int, str]
+        Original indexed passage text by document citation number.
+
+    Returns
+    -------
+    str
+        A warning identifying an absent value, value-unit pair or
+        mismatched statistical comparison, or ``""`` when those literal
+        anchors occur in the cited source. This is not a semantic proof.
+
+    """
+
+    source_numbers = {
+        number: set(_FACT_NUMBER.findall(text.replace(",", "")))
+        for number, text in texts.items()
+    }
+    source_comparisons = {
+        number: _comparisons(text) for number, text in texts.items()
+    }
+    source_phrases = {
+        number: " " + " ".join(re.findall(
+            r"[a-z0-9]+", text.replace(",", "").casefold()
+        )) + " "
+        for number, text in texts.items()
+    }
+    for sentence in re.split(r"(?<=[.!?])\s+", content):
+        start = 0
+        for match in _BRACKETS.finditer(sentence):
+            clause = sentence[start:match.start()]
+            start = match.end()
+            numbers = _FACT_NUMBER.findall(clause.replace(",", ""))
+            cited = _cited(match.group(1), max(texts, default=0))
+            if not cited:
+                continue
+            for number in cited:
+                for comparison in _comparisons(clause):
+                    if comparison not in source_comparisons.get(
+                        number, set()
+                    ):
+                        key, operator, value = comparison
+                        return (
+                            f"Comparison {key} {operator} {value} cited "
+                            f"as [{number}] was not found in that "
+                            "document's original source passages."
+                        )
+                for value in numbers:
+                    if value not in source_numbers.get(number, set()):
+                        return (
+                            f"Value {value} cited as [{number}] was not "
+                            "found in that document's original source "
+                            "passages. Check or remove the claim."
+                        )
+                for value, unit in _QUANTITY.findall(clause):
+                    if unit.casefold() in _UNIT_IGNORED:
+                        continue
+                    normalized = (
+                        value.replace(",", "").casefold() + " "
+                        + unit.casefold().replace("-", " ")
+                    )
+                    if (f" {normalized} " not in source_phrases.get(
+                        number, ""
+                    )):
+                        return (
+                            f"Quantity {value} {unit} cited as [{number}] "
+                            "was not found in that document's original "
+                            "source passages."
+                        )
     return ""
 
 

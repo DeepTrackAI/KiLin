@@ -32,14 +32,18 @@ For "write a project overview", the tool:
 4. **Writes the report** (the reduce step, below), checks it against the
    template (`TEMPLATE_VALIDATION`), and saves it to
    `outputs/<template>_project_report.md`, closed by the numbered list of
-   the documents. The chat answer is the report; each document's first
-   passage is its evidence `[n]`. What the checks still found (sections
+   the documents. The chat answer is the report; citation `[n]` names
+   its indexed document, with a representative source passage shown as
+   evidence. What the checks still found (sections
    outside their limits or citing doubtfully, sections that could not be
    written, documents that could not be read) is saved in the report, in
    a **Check** list before the documents. The result metadata
    reports `status: partial` and `valid: false` when a document failed,
-   a document was omitted, or validation found a problem. The `coverage`
-   counts distinguish indexed, selected, and successfully read documents.
+   a document was omitted, a per-document evidence check is unresolved,
+   or validation found a problem. `uncertain_checks` records every such
+   condition with its document number and reason; the saved **Check**
+   section shows up to ten. The `coverage` counts distinguish indexed,
+   selected, and successfully read documents.
 
 ## Project templates
 
@@ -93,14 +97,43 @@ One model call per document (`_mapping.py`) asks for:
    it, and for a yes the entry its `Do:` asks for; for a table, one
    `VALUE` line per column, each asked for by its column's name.
 
-Code then checks the reply. A yes becomes unclear when its quoted words
-are not in the excerpt (ignoring case, punctuation and line breaks; a long
-quote may be found by its first four words), when it has no entry, or
-when a table row has no value, so no document is listed without evidence.
-In a table, a column name written before a value ("Aim: ...") is removed,
-and a value that only repeats its column's name is "not reported", so an
-echoed header is not taken for a row. Entries are cut to their word limit. A
-document whose call fails is reported as not read; the others go on.
+Code checks the model's output against **original indexed passages**,
+separately from source cards and model-generated notes:
+
+- Every segment of a quoted phrase must occur **in full and in order** in
+  the supplied excerpt and original source. An ellipsis may separate
+  segments from different passages, but a continuous quote may not be
+  constructed by joining passage boundaries. A four-word prefix is no
+  longer sufficient. Numerical signs, decimal values, percentages and
+  mathematical inequalities are retained.
+- A proposed `ENTRY` must be found verbatim in an original passage and
+  the excerpt, before its word-limit trimming. Unsupported prose or
+  invented model names become unclear rather than appearing as verified
+  entries. The model is asked to use source wording; legitimate paraphrases
+  may be flagged as unverified.
+- Nonmissing `VALUE` cells must occur verbatim (after whitespace and
+  punctuation normalization) in an original source passage as well as in
+  the excerpt. If any cell is not found, the entire proposed row becomes
+  **unclear** rather than publishing the unsupported values. `not
+  reported` may represent a missing cell; a repeated column heading does
+  not count as a value. Paraphrased but legitimate values may therefore
+  also remain unclear.
+- `CHECK ...: NO` is **not** established by silence or by a general quote.
+  A negative result requires an exact quotation with explicit negation
+  and at least one topic term overlapping the template's `When:` clause.
+  This is a lexical check, not proof that the conclusion applies to the
+  entire document. Without such evidence, the result is **unclear**.
+- Missing or invalid answers remain unclear. The model is instructed to
+  copy quotations, entries and table values without inventing or silently
+  normalizing them. Source validation is deterministic. It may trigger
+  the existing bounded section-repair calls, but adds no checking model.
+
+The report identifies unclear documents and their reasons in each
+per-document section. Every unresolved check also makes the saved result
+`status: partial`, `valid: false`, with details in the result metadata
+and its **Check** section. Unverified table values are never published
+as confirmed cells. A document whose call fails is reported as not read;
+other documents continue.
 
 ## Writing the report (the reduce step)
 
@@ -117,15 +150,22 @@ document whose call fails is reported as not read; the others go on.
   section: every bracket must cite existing documents (`[n1]` or `[7]` of
   five does not), documents must not be named in the text ("Document 4"),
   and a section written from notes must cite at least one document. Each
-  citation must also be supported: when the words it is cited for (the
-  clause before it: since the previous citation, from the last comma,
-  dash or "such as" when that is enough to judge) share no distinctive word with the cited
-  document's title, notes and entries, while another document shares at
-  least two, the section is sent back saying which document it may be
-  ("“genomic analysis of psychiatric disorders” cites [4] … it may be
-  [5]"); words found in more than half the documents are not
-  distinctive, and code never changes a citation itself. A sentence
-  saying documents agree, disagree, concur or conflict must cite at least
+  citation is additionally checked against **original indexed source
+  passages**, not the mapping model's notes or table entries. Numerical
+  values, value-unit pairs and statistical inequalities must have
+  matching literal anchors
+  in their cited source, including the comparison direction. The existing
+  word-overlap check uses the clause preceding each citation and
+  compares distinctive word stems against the original indexed passages,
+  ignoring vocabulary common to most documents. If the cited document
+  shares no distinctive term while another matches at least two, the
+  model is asked to reconsider the citation; it is never silently changed
+  by code. In strict mode, a cited phrase with no recognizable source
+  anchor is flagged even without a better alternative. Literal checks
+  identify absent numbers and reversed statistical inequalities, but
+  lexical overlap cannot prove that an interpretation is scientifically
+  correct. A sentence saying documents agree, disagree, concur or conflict
+  must cite at least
   two documents in each citation (the shipped Project Overview has no
   agreements section: notes taken one document at a time cannot show
   agreement between documents) ("agree on X [1], and on Y [2]" is sent
@@ -145,6 +185,12 @@ document whose call fails is reported as not read; the others go on.
   not read, then one entry or table row per matching document.
 - **`{documents}`** and **`{key_documents}`**: the count, and the chosen
   documents' titles, written by code.
+- **Citation evidence**: the tool's `[n]` citation identifies the entire
+  document. The displayed evidence excerpt is selected from an original
+  indexed passage containing a checked positive or negative quotation,
+  where possible, rather than automatically taking only the first page.
+  One excerpt cannot establish every claim about a long document; the
+  report's document list retains the complete source path.
 - **The headline**, when the template asks for one, in one call; a
   headline over its limit is asked for again, shorter, and if still too
   long cut at a word, without a final "and" or "of". Citations are
@@ -202,9 +248,14 @@ Planning assumptions for the time shown in the plan, not limits.
 
 ## Limits
 
-A document is read through an excerpt, not in full, so a fact outside it
-is missed; per-document checks say "unclear" rather than guess. The
-synthesis can still misstate what the notes say: check claims against the
-cited documents. Validation of model-generated quotes and table values
-against independent source passages is deferred to the evidence-validation
-PR; `valid` here describes structural checks and document coverage only.
+A document is read through a bounded excerpt, so some relevant facts
+may never be provided to the model. The verification step checks source
+wording, table values, numerical assertions, comparisons and citation
+anchors deterministically. It cannot prove that a paraphrase is true, that
+all relevant passages were read, or that a quoted fact supports the model's
+broader interpretation. In particular, a valid source quotation may be
+about a different experiment or data subset. `valid: true` therefore means
+**the automated structural, coverage and source-anchoring checks passed**,
+not that the scientific content has been independently established.
+Unresolved source evidence remains visible in a partial report. Researchers
+must check substantive conclusions against their original cited documents.

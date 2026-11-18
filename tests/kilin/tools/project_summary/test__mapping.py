@@ -177,8 +177,9 @@ class TestMapping(unittest.TestCase):
             "CHECK A: YES\nQUOTE A: “trained a U-Net”\n"
             "ENTRY A: U-Net with five levels and skip connections\n"
             "CHECK B: Yes.\nQUOTE B: the public ... BBBC dataset\n"
-            "ENTRY B: BBBC | 40 images | extra\n",
-            TEMPLATE, 3, EXCERPT,
+            "ENTRY B: BBBC | 40 annotated images\n",
+            TEMPLATE, 3, EXCERPT +
+            "\nThe U-Net with five levels and skip connections was used.",
         )
         self.assertEqual(notes.number, 3)
         self.assertEqual(notes.notes, {
@@ -187,12 +188,12 @@ class TestMapping(unittest.TestCase):
         model, data = notes.checks["Models"], notes.checks["Datasets"]
         self.assertEqual((model.answer, model.entry),
                          (CHECK_YES, "U-Net with five levels and…"))
-        self.assertEqual(data.cells, ("BBBC", "40 images extra"))
+        self.assertEqual(data.cells, ("BBBC", "40 annotated images"))
 
     def test_table_values(self) -> None:
         for reply, answer, cells in (
-            ("VALUE B1 Dataset: BBBC\nVALUE B2 Size: 40 images",
-             CHECK_YES, ("BBBC", "40 images")),
+            ("VALUE B1 Dataset: BBBC\nVALUE B2 Size: 40 annotated images",
+             CHECK_YES, ("BBBC", "40 annotated images")),
             ("VALUE B1: Dataset: BBBC\nVALUE B2 Size: **Size:** 40",
              CHECK_YES, ("BBBC", "40")),
             ("VALUE B1 Dataset: BBBC", CHECK_YES, ("BBBC", "not reported")),
@@ -228,20 +229,124 @@ class TestMapping(unittest.TestCase):
         check = parse_notes("NOTE 1: NONE\nCHECK A: NO\nQUOTE A: x",
                             TEMPLATE, 1, EXCERPT)
         self.assertEqual(check.notes, {})
-        self.assertEqual(check.checks["Models"].answer, CHECK_NO)
+        self.assertEqual(check.checks["Models"].answer, CHECK_UNCLEAR)
+        self.assertEqual(
+            check.checks["Models"].why,
+            "no explicit source-backed negative evidence",
+        )
         self.assertEqual(check.checks["Datasets"].answer, CHECK_UNCLEAR)
 
     def test_quote_found(self) -> None:
         for quote, found in (
             ("trained a U-Net", True),
             ("“We trained a U-Net on 40 annotated images”", True),
-            ("we trained a U-Net on 400 images of cells", True),
+            ("we trained a U-Net on 400 images of cells", False),
             ("public ... dataset", True),
             ("a ResNet", False),
             ("", False),
         ):
             with self.subTest(quote=quote):
                 self.assertEqual(quote_found(quote, EXCERPT), found)
+
+
+class TestEvidenceValidation(unittest.TestCase):
+
+    def test_quotes_require_full_ordered_source_matches(self) -> None:
+        source = ("Researchers observed a statistically significant "
+                  "decrease in measured fluorescence.")
+        self.assertFalse(quote_found(
+            "Researchers observed a statistically significant increase", source
+        ))
+        self.assertTrue(quote_found(
+            "observed a statistically significant decrease", source
+        ))
+        self.assertFalse(quote_found("decrease ... researchers", source))
+        self.assertTrue(quote_found("Researchers ... fluorescence", source))
+        self.assertFalse(quote_found("p < 0.05", "The result had p > 0.05"))
+        self.assertTrue(quote_found("p ≤ 0.05", "The result had p <= 0.05"))
+        # Numeric signs and percentages must not vanish as punctuation.
+        self.assertFalse(quote_found("increased by 40%", "increased by 40"))
+        self.assertFalse(quote_found("decreased by -5", "decreased by 5"))
+        self.assertFalse(quote_found("loss was −3%", "loss was 3%"))
+        self.assertTrue(quote_found("loss was −3 %", "loss was -3%"))
+        self.assertFalse(quote_found("rate of 1e-3", "rate of 1e3"))
+
+    def test_unsupported_prose_entry_is_not_accepted(self) -> None:
+        result = parse_notes(
+            "CHECK A: YES\nQUOTE A: trained a U-Net\n"
+            "ENTRY A: FraudNet",
+            TEMPLATE, 1, EXCERPT,
+        )
+        check = result.checks["Models"]
+        self.assertEqual(check.answer, CHECK_UNCLEAR)
+        self.assertIn("entry's wording", check.why)
+        self.assertEqual(check.entry, "")
+
+    def test_table_fabrication_is_not_accepted(self) -> None:
+        reply = (
+            "CHECK B: YES\nQUOTE B: public BBBC dataset\n"
+            "VALUE B1 Dataset: FraudData\n"
+            "VALUE B2 Size: 999 million images"
+        )
+        found = parse_notes(reply, TEMPLATE, 1, EXCERPT)
+        self.assertEqual(found.checks["Datasets"].answer, CHECK_UNCLEAR)
+        self.assertIn("Dataset, Size", found.checks["Datasets"].why)
+        self.assertEqual(found.checks["Datasets"].cells, ())
+        # A missing field is allowed, but the other cells must be sourced.
+        accepted = parse_notes(
+            "CHECK B: YES\nQUOTE B: public BBBC dataset\n"
+            "VALUE B1 Dataset: BBBC\nVALUE B2 Size: not reported",
+            TEMPLATE, 1, EXCERPT,
+        )
+        self.assertEqual(
+            accepted.checks["Datasets"].cells,
+            ("BBBC", "not reported"),
+        )
+
+    def test_source_card_alone_cannot_verify_a_quote_or_cell(self) -> None:
+        card = ("From the document's card:\nFindings: "
+                "FraudData has 999 million images.\n" + EXCERPT)
+        reply = (
+            "CHECK B: YES\nQUOTE B: FraudData has 999 million images\n"
+            "VALUE B1 Dataset: FraudData\n"
+            "VALUE B2 Size: 999 million images"
+        )
+        check = parse_notes(
+            reply, TEMPLATE, 1, card, source_passages=(EXCERPT,)
+        ).checks["Datasets"]
+        self.assertEqual(check.answer, CHECK_UNCLEAR)
+        self.assertIn("quoted words", check.why)
+
+    def test_source_passage_boundaries_are_not_spliced(self) -> None:
+        source = ("A public BBBC", "dataset of forty images")
+        exact = parse_notes(
+            "CHECK B: YES\nQUOTE B: public BBBC dataset\n"
+            "VALUE B1 Dataset: BBBC\nVALUE B2 Size: forty images",
+            TEMPLATE, 1, " ".join(source), source_passages=source,
+        )
+        self.assertEqual(exact.checks["Datasets"].answer, CHECK_UNCLEAR)
+        self.assertIn("quoted words", exact.checks["Datasets"].why)
+        # Explicit ellipsis can bridge the two distinct source passages.
+        quoted = parse_notes(
+            "CHECK B: YES\nQUOTE B: public BBBC ... forty images\n"
+            "VALUE B1 Dataset: BBBC\nVALUE B2 Size: forty images",
+            TEMPLATE, 1, " ".join(source), source_passages=source,
+        )
+        self.assertEqual(quoted.checks["Datasets"].answer, CHECK_YES)
+
+    def test_negative_requires_explicit_relevant_source_evidence(self) -> None:
+        explicit = "We did not train any deep-learning model."
+        report = parse_notes(
+            "CHECK A: NO\nQUOTE A: did not train any deep-learning model",
+            TEMPLATE, 1, explicit, source_passages=(explicit,),
+        )
+        self.assertEqual(report.checks["Models"].answer, CHECK_NO)
+        for quote in ("did not report the publication year", "a review"):
+            source = f"{quote}. A U-Net was trained on an image dataset."
+            result = parse_notes(
+                f"CHECK A: NO\nQUOTE A: {quote}", TEMPLATE, 1, source
+            )
+            self.assertEqual(result.checks["Models"].answer, CHECK_UNCLEAR)
 
 
 if __name__ == "__main__":
