@@ -72,7 +72,7 @@ Key Features
 - **Sections covering every document (project templates)**
 
     ``## Scope (80-120 words, all documents)``: the section must cite
-    every document that has something on it.
+    every document the report reads.
 
 - **Checks in Python**
 

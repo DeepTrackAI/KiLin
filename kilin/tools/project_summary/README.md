@@ -71,7 +71,8 @@ number is how the report cites a document (`[3]`).
 One model call per document (`_mapping.py`) asks for:
 
 1. a note for each section written from all documents (`notes`
-   sections): the document's facts about it, or `NONE`;
+   sections): what the document contributes to it (for a section about
+   the collection as a whole, what the document is about), or `NONE`;
 2. for each per-document section, whether the document meets its `When:`
    condition (`YES`, `NO` or `UNCLEAR`), the excerpt's words that decide
    it, and for a yes the entry its `Do:` asks for; for a table, one
@@ -115,7 +116,9 @@ document whose call fails is reported as not read; the others go on.
   agreement between documents) ("agree on X [1], and on Y [2]" is sent
   back). A section marked `all documents` in its heading's brackets
   (`## Scope of the Collection (80-120 words, all documents)`) must cite
-  every document with a note on it; the repair names those left out. A
+  every document read: one without a note for that section (a paper
+  says nothing of "the scope of the collection") is represented by its
+  title and its other notes, and the repair names those left out. A
   section with such a problem, or outside its limits, is rewritten up to
   `REPAIR_ATTEMPTS` times; brackets still citing no document are then
   removed, and what remains wrong is listed under the report.
@@ -126,7 +129,8 @@ document whose call fails is reported as not read; the others go on.
   documents' titles, written by code.
 - **The headline**, when the template asks for one, in one call; a
   headline over its limit is asked for again, shorter, and if still too
-  long cut at a word, without a final "and" or "of".
+  long cut at a word, without a final "and" or "of". Citations are
+  removed from it.
 
 ## Defaults (`defaults.json`)
 

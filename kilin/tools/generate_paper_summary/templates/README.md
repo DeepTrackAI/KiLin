@@ -120,7 +120,7 @@ Its sections can be:
 A section that must speak of every document, such as an overview of
 the collection, says so in its brackets: `## Scope of the Collection
 (80-120 words, all documents)`. KíLín then has it rewritten until it
-cites every document with something on it. Leave it out where only some
+cites every document of the project. Leave it out where only some
 documents belong, such as agreements between documents.
 
 Project templates use `**Documents:** {documents}` (the number of

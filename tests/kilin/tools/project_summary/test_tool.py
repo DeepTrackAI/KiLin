@@ -303,6 +303,33 @@ class TestRun(_Project):
             "# Deep learning segments nuclei\n"
         ))
 
+    def test_all_documents_include_those_without_a_note(self) -> None:
+        (self.templates / "lab_overview.md").write_text(LAB.replace(
+            "## Themes (3-40 words)", "## Themes (3-40 words, all documents)"
+        ))
+
+        def model(system, prompt, tokens):
+            if "Document [2]" in prompt:  # Nothing on the themes.
+                return "NOTE 1: NONE\nCHECK A: NO\nQUOTE A: x\nCHECK B: NO"
+            if "Section: Themes" in prompt:
+                return "Nuclei are segmented [1] and cells classified [3]."
+            if "has a problem" in prompt:
+                return ("Nuclei are segmented [1], cells classified [3], and "
+                        "methods reviewed [2].")
+            if "Write the headline" in prompt:
+                return "Deep learning for nuclei [1, 3]"
+            return _model(system, prompt, tokens)
+        result, context = self._run(model=model)
+        prompts = [c.args[1] for c in context.ask_model.call_args_list]
+        themes = next(p for p in prompts if "Section: Themes" in p)
+        # The document without a note is there, by its title.
+        self.assertIn("[2] b.md.", themes)
+        fix = next(p for p in prompts if "has a problem" in p)
+        self.assertIn("leaves out [2]", fix)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertTrue(report.startswith("# Deep learning for nuclei\n"))
+        self.assertIn("and methods reviewed [2].", report)
+
     def test_cancel_and_quick(self) -> None:
         result, context = self._run(confirm=Mock(return_value="cancel"),
                                     confirmation="always")

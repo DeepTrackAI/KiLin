@@ -158,6 +158,9 @@ _WRITE_WORDS: Final[str] = (
 )
 _FOR_WORDS: Final[str] = r"\s+(?:of|for|on|from|about|across)\b"
 _ROUTED_DESCRIPTION: Final[int] = 120
+# Characters of a document's other notes standing in for a missing note in
+# a section covering all documents.
+_FALLBACK_NOTE: Final[int] = 400
 
 
 @dataclass(frozen=True, slots=True)
@@ -648,7 +651,10 @@ def _write_section(
     -------
     str
         The section's content; when the notes do not fit one call, written
-        from each group's condensed facts. A section outside its limits,
+        from each group's condensed facts. In a section covering all
+        documents, a document read without a note for it is represented by
+        its title and its other notes, and must be cited. A section
+        outside its limits,
         citing documents wrongly (``citation_problem``), citing a document
         that does not mention what it is cited for (``support_problem``),
         calling one document's view an agreement or disagreement
@@ -664,6 +670,20 @@ def _write_section(
         for number, found in sorted(notes.items())
         if section.name in found.notes
     ]
+    if section.all_documents:
+        # Every document read belongs here: one without a note for this
+        # section (a paper says nothing of "the collection's scope") is
+        # represented by its title and its other notes.
+        titles_by_number = {d.number: d.title for d in documents}
+        noted_numbers = {number for number, _ in lines}
+        for number, found in sorted(notes.items()):
+            if found.failure or number in noted_numbers:
+                continue
+            other = " ".join(found.notes.values())[:_FALLBACK_NOTE]
+            lines.append((number, (
+                f"{titles_by_number.get(number, '')}. {other}".strip()
+            )))
+        lines.sort()
     groups = note_groups(lines, _config.GROUP_TOKENS)
     if len(groups) > 1:
         condensed = [
@@ -875,6 +895,7 @@ def run(
             line = next((x.strip() for x in strip_thinking(reply)
                          .splitlines() if x.strip()), "")
             line = line.lstrip("# ").strip().rstrip(".")
+            line = re.sub(r"\s*\[[^\[\]]*\]", "", line)  # No citations.
             limit = template.headline_characters
             if len(line) > limit:
                 shorter = next((x.strip() for x in strip_thinking(

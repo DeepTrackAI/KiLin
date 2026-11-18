@@ -253,9 +253,11 @@ def map_prompt(
     notes = topics(template)
     if notes:
         parts.append(
-            "Topics: for each, write the document's facts about it in one "
-            "or two short sentences, or NONE when the excerpt says nothing "
-            "about it.\n" + "\n".join(
+            "Topics: for each, write what this document contributes to it, "
+            "in one or two short sentences of its facts; for a topic about "
+            "the collection as a whole, what this document is about. Write "
+            "NONE only when the excerpt says nothing about it.\n"
+            + "\n".join(
                 f"{index}. {s.name}: {s.guidance}".rstrip(": ")
                 for index, s in enumerate(notes, start=1)
             )

@@ -51,7 +51,7 @@ Module Structure
 
     Whether each citation's document mentions what it is cited for, each
     agreement or disagreement cites two documents, and a section marked
-    ``all documents`` cites every document with a note on it.
+    ``all documents`` cites every document read.
 
 - ``headline_fix_prompt`` and ``fitted_headline``
 
@@ -707,13 +707,13 @@ def coverage_problem(content: str, noted: Sequence[int]) -> str:
     content: str
         A section marked ``all documents``.
     noted: Sequence[int]
-        The documents with a note for it.
+        The documents it must cover: every document read.
 
     Returns
     -------
     str
-        A problem naming the documents with a note that the section does
-        not cite; ``""`` when it cites them all.
+        A problem naming the documents the section does not cite; ``""``
+        when it cites them all.
 
     """
 
