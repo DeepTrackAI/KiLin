@@ -897,22 +897,29 @@ def run(
             parts.append(f"## {section.name}\n\n{text}")
     report = "\n\n".join(parts)
     check = check_report(report, template, _config.TEMPLATE_RULES)
-    final = f"{report}\n\n---\n\n{documents_list(documents)}\n"
-    saved = save_output_file(
-        context.project_root, f"{template.name}_project_report.md", final
-    )
     problems = [*check.lengths, *failures]
     if failed:
         problems.append(
             "Not read: " + ", ".join(f"[{n}]" for n in failed) + "."
         )
+    # What the checks still found is kept with the report, for whoever
+    # reads the file later.
+    checked = (
+        "**Check**\n\n"
+        + "\n".join(f"- {problem}" for problem in problems) + "\n\n"
+        if problems else ""
+    )
+    final = (
+        f"{report}\n\n---\n\n{checked}{documents_list(documents)}\n"
+    )
+    saved = save_output_file(
+        context.project_root, f"{template.name}_project_report.md", final
+    )
     summary.update({
         "report": saved.as_posix(), "valid": check.valid and not failures,
         "estimated_tokens": estimate_tokens(final),
     })
     note = f"\n\n*Saved to `{saved.as_posix()}`.*"
-    if problems:
-        note += "\n\n*Check:* " + " ".join(problems)
     evidence = tuple(
         {
             "citation": document.number,

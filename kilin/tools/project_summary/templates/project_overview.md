@@ -1,7 +1,7 @@
 ---
 title: Project Overview
-description: What all the documents of a project say together, their themes, methods, findings, disagreements and open questions.
-max_words: 1200
+description: What all the documents of a project say together, their themes, methods, findings and open questions.
+max_words: 1050
 reference: KíLín project report; check claims against the cited documents.
 scope: project
 ---
@@ -32,11 +32,6 @@ how they differ between groups of documents.
 
 The most important results, with the documents that report each, noting
 numbers and conditions where the notes give them.
-
-## Agreements and Disagreements (120-180 words)
-
-Where the documents agree, where they conflict or differ in their results
-or interpretations, and possible reasons given in the notes.
 
 ## Gaps and Open Questions (100-160 words)
 

@@ -196,6 +196,7 @@ class TestRun(_Project):
             "**Documents**\n\n[1] Study A (`a.md`)  \n[2] b.md  \n[3] c.md"
         ))
         self.assertTrue(result.summary["valid"])
+        self.assertNotIn("**Check**", report)
         self.assertEqual([e["citation"] for e in result.evidence],
                          [1, 2, 3])
         self.assertEqual(result.evidence[0]["path"], Path("a.md"))
@@ -246,6 +247,13 @@ class TestRun(_Project):
                       "[2].", report)
         self.assertIn("Themes: 1 citation(s) of no document removed.",
                       result.answer)
+        # The check is saved with the report, before the documents.
+        self.assertIn(
+            "---\n\n**Check**\n\n- Themes: 1 citation(s) of no document "
+            "removed.\n- Themes: It names documents in the text", report,
+        )
+        self.assertLess(report.index("**Check**"),
+                        report.index("**Documents**"))
         self.assertIn("names documents in the text", result.answer)
         self.assertFalse(result.summary["valid"])
 
@@ -421,6 +429,8 @@ class TestReduce(unittest.TestCase):
             ("Shown [6].", True, "[6]"),
             ("Document 4 and Documents 1 and 2 agree.", False,
              "names documents in the text"),
+            ("Documents [1] and [4] both emphasize networks [1, 4].", True,
+             "names documents in the text"),
             ("Shown without citations.", True, "cites no document"),
             ("Shown without citations.", False, ""),
         ):
@@ -460,6 +470,17 @@ class TestReduce(unittest.TestCase):
         )
         self.assertEqual(
             support_problem(overview.replace("[4]", "[5]"), texts), ""
+        )
+        # A long clause before the citation: its last part is judged.
+        self.assertIn(
+            "“reservoir computing” cites [1], whose notes do not mention "
+            "it; it may be [2]",
+            support_problem(
+                "The main differences lie in their focus areas—brain "
+                "connectivity, memory capacity and psychiatric disorders—"
+                "and their methods, such as reservoir computing [1], and "
+                "genomic data [5].", texts,
+            ),
         )
         # Too few distinctive words to judge, or no better document.
         self.assertEqual(support_problem("As shown [4].", texts), "")

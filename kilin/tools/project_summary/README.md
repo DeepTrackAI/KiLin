@@ -24,9 +24,10 @@ For "write a project overview", the tool:
    template (`TEMPLATE_VALIDATION`), and saves it to
    `outputs/<template>_project_report.md`, closed by the numbered list of
    the documents. The chat answer is the report; each document's first
-   passage is its evidence `[n]`. Sections still outside their limits,
-   sections that could not be written and documents that could not be
-   read are listed under the report.
+   passage is its evidence `[n]`. What the checks still found (sections
+   outside their limits or citing doubtfully, sections that could not be
+   written, documents that could not be read) is saved in the report, in
+   a **Check** list before the documents.
 
 ## Project templates
 
@@ -45,8 +46,7 @@ documents (`## Main Themes (180-260 words)`), it can have:
 
 Two templates are shipped and installed in new projects: **Project
 Overview** (`project_overview.md`: scope, themes, methods, findings,
-agreements and disagreements, gaps, where to start; scope, themes and
-methods cover all documents) and **Literature Table**
+gaps, where to start; scope, themes and methods cover all documents) and **Literature Table**
 (`literature_table.md`: an overview covering all documents, a table row
 per study with its aim, methods, data and main finding, and a line per
 review or other document).
@@ -101,15 +101,18 @@ document whose call fails is reported as not read; the others go on.
   section: every bracket must cite existing documents (`[n1]` or `[7]` of
   five does not), documents must not be named in the text ("Document 4"),
   and a section written from notes must cite at least one document. Each
-  citation must also be supported: when the words it is cited for (since
-  the previous citation) share no distinctive word with the cited
+  citation must also be supported: when the words it is cited for (the
+  clause before it: since the previous citation, from the last comma,
+  dash or "such as" when that is enough to judge) share no distinctive word with the cited
   document's title, notes and entries, while another document shares at
   least two, the section is sent back saying which document it may be
   ("“genomic analysis of psychiatric disorders” cites [4] … it may be
   [5]"); words found in more than half the documents are not
   distinctive, and code never changes a citation itself. A sentence
   saying documents agree, disagree, concur or conflict must cite at least
-  two documents in each citation ("agree on X [1], and on Y [2]" is sent
+  two documents in each citation (the shipped Project Overview has no
+  agreements section: notes taken one document at a time cannot show
+  agreement between documents) ("agree on X [1], and on Y [2]" is sent
   back). A section marked `all documents` in its heading's brackets
   (`## Scope of the Collection (80-120 words, all documents)`) must cite
   every document with a note on it; the repair names those left out. A

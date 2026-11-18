@@ -123,7 +123,12 @@ _SYSTEM: Final[str] = (
 # A bracketed citation, and one naming a document in prose ("Document 4",
 # "Documents 1 and 2").
 _BRACKETS = re.compile(r"\[([^\[\]]{1,40})\]")
-_DOCUMENT_WORDS = re.compile(r"\bDocuments?\s+\d", re.IGNORECASE)
+_DOCUMENT_WORDS = re.compile(r"\bDocuments?\s+\[?\d", re.IGNORECASE)
+# Where the clause a citation supports starts, inside its phrase.
+_CLAUSE = re.compile(
+    r"[,;:(—–]|\s-\s|\b(?:such\s+as|including|like|e\.g\.)\s",
+    re.IGNORECASE,
+)
 # Words compared between a cited phrase and the cited document's notes:
 # four or more letters, compared by their first five ("genomic" and
 # "genome-wide" match), without words that say nothing of a topic.
@@ -494,7 +499,8 @@ def citation_problem(content: str, documents: int, cite: bool) -> str:
     str
         A problem for the repair prompt: brackets that are not citations
         of existing documents ("[n1]", "[7]" of 5); documents named in
-        prose ("Document 4") instead of cited; or no citation at all.
+        prose ("Document 4", "Document [4]") instead of cited; or no
+        citation at all.
         ``""`` when the citations are valid.
 
     """
@@ -511,8 +517,9 @@ def citation_problem(content: str, documents: int, cite: bool) -> str:
         )
     if _DOCUMENT_WORDS.search(content):
         return (
-            "It names documents in the text (\"Document 4\") instead of "
-            "citing them; cite them as [4] after the statement."
+            "It names documents in the text (\"Document 4\", \"Document "
+            "[4]\") instead of citing them; cite them as [4] after the "
+            "statement, without the word Document."
         )
     if cite and not any(
         _cited(marker, documents) for marker in _BRACKETS.findall(content)
@@ -602,8 +609,10 @@ def support_problem(content: str, texts: dict[int, str]) -> str:
     Returns
     -------
     str
-        For the first citation whose phrase (the words since the previous
-        citation or the start of the sentence) has at least
+        For the first citation whose phrase (the clause before it: the
+        words since the previous citation or the start of the sentence,
+        cut after the last comma, semicolon, dash or "such as" when that
+        clause alone has enough distinctive words) has at least
         ``_SUPPORT_WORDS_MIN`` distinctive words, none of them in the cited
         document's text, while another document has at least
         ``_SUPPORT_WORDS_MIN``: a problem naming the phrase, the citation
@@ -626,6 +635,9 @@ def support_problem(content: str, texts: dict[int, str]) -> str:
             phrase = sentence[start:match.start()]
             start = match.end()
             cited = _cited(match.group(1), max(stems, default=0))
+            clause = _CLAUSE.split(phrase)[-1]
+            if len(_stems(clause) - common) >= _SUPPORT_WORDS_MIN:
+                phrase = clause  # "..., such as reservoir computing [1]"
             words = _stems(phrase) - common
             if not cited or len(words) < _SUPPORT_WORDS_MIN:
                 continue
