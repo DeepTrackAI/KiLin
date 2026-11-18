@@ -441,6 +441,12 @@ RETRIEVAL_TEXT_FORMAT: Final[str] = "code-path-and-module-summary-v1"
 # Languages whose passages are searched with their file path; recorded in
 # the index of projects that read JavaScript or R.
 CODE_PATH_LANGUAGES: Final[str] = "python-matlab-js-r"
+# Code-graph semantics are independent of retrieval text and source-unit
+# formats. Invalidate graphs built before qualified cross-language lookup.
+CODE_GRAPH_FORMAT: Final[str] = "qualified-cross-language-v2"
+_GRAPH_SOURCE_EXTENSIONS: Final[frozenset[str]] = frozenset(
+    {".py", ".ipynb", ".m", ".js", ".r"}
+)
 # Longest module summary put in front of a code passage for searching.
 _SUMMARY_MAX_CHARACTERS: Final[int] = 200
 # Opening of a module docstring, after optional comment lines.
@@ -547,42 +553,169 @@ def _model_summary(
     )
 
 
-def _numbered_citations(answer: str) -> str:
-    """Write worded citations as plain numbers, such as "[3]".
+class _CitationNormalizer:
+    """Normalize worded citations outside Markdown code, even when streamed.
 
-    Parameters
-    ----------
-    answer: str
-        Generated answer.
-
-    Returns
-    -------
-    str
-        The answer with "[source 3]" as "[3]" and "[sources 3 and 6]" as
-        "[3, 6]", so clients link them like other citations; everything
-        else is unchanged.
+    Unfinished citation groups and Markdown delimiters are held until a
+    later fragment completes them. Only small pending groups are buffered;
+    ordinary text is forwarded immediately. Inline backtick code and
+    backtick/tilde fenced blocks are preserved verbatim.
 
     """
 
-    def numbers(match: re.Match[str]) -> str:
-        """Return one worded citation as a plain citation group.
+    _MAX_PENDING: Final[int] = 256
+
+    def __init__(self) -> None:
+        """Start in ordinary Markdown text with no pending delimiters.
+
+        """
+
+        self._code_marker: str | None = None
+        self._code_width = 0
+        self._fenced = False
+        self._pending_marker = ""
+        self._marker_at_line_start = False
+        self._pending_citation = ""
+        self._leading_spaces = 0
+
+    def _complete_marker(self, result: list[str]) -> None:
+        """Emit a delimiter run and update Markdown code state.
 
         Parameters
         ----------
-        match: re.Match[str]
-            A worded citation such as "[sources 3 and 6]".
+        result: list[str]
+            Pieces emitted by the current incremental operation.
+
+        """
+
+        marker = self._pending_marker
+        if not marker:
+            return
+        char = marker[0]
+        width = len(marker)
+        at_start = self._marker_at_line_start
+        if self._code_marker is None:
+            if char == "`" or (char == "~" and width >= 3 and at_start):
+                self._code_marker = char
+                self._code_width = width
+                self._fenced = width >= 3 and at_start
+        elif char == self._code_marker:
+            closes = (
+                width >= self._code_width and at_start
+                if self._fenced else width == self._code_width
+            )
+            if closes:
+                self._code_marker = None
+                self._code_width = 0
+                self._fenced = False
+        result.append(marker)
+        self._pending_marker = ""
+
+    def feed(self, fragment: str) -> str:
+        """Normalize another fragment without delaying ordinary text.
+
+        Parameters
+        ----------
+        fragment: str
+            New text from a model or tool, with arbitrary token boundaries.
 
         Returns
         -------
         str
-            Its numbers as one group, such as "[3, 6]".
+            Normalized text safe to forward immediately.
 
         """
 
-        found = re.findall(r"\d+", match.group(1))
-        return f"[{', '.join(found)}]"
+        result: list[str] = []
+        for char in fragment:
+            at_start = self._leading_spaces <= 3
+            if char == "\n":
+                self._leading_spaces = 0
+            elif char == " " and at_start:
+                self._leading_spaces += 1
+            else:
+                self._leading_spaces = 4
 
-    return _WORDED_CITATION.sub(numbers, answer)
+            if self._pending_marker:
+                if char == self._pending_marker[0]:
+                    self._pending_marker += char
+                    continue
+                self._complete_marker(result)
+
+            is_marker = (
+                (char == "`" and self._code_marker != "~")
+                or (
+                    char == "~" and at_start
+                    and self._code_marker != "`"
+                )
+            )
+            if is_marker:
+                if self._pending_citation:
+                    result.append(self._pending_citation)
+                    self._pending_citation = ""
+                self._pending_marker = char
+                self._marker_at_line_start = at_start
+                continue
+
+            if self._code_marker is not None:
+                result.append(char)
+            elif char == "[":
+                if self._pending_citation:
+                    result.append(self._pending_citation)
+                self._pending_citation = "["
+            elif self._pending_citation:
+                self._pending_citation += char
+                if char == "]":
+                    group = self._pending_citation
+                    match = _WORDED_CITATION.fullmatch(group)
+                    if match is not None:
+                        numbers = re.findall(r"\d+", match.group(1))
+                        group = f"[{', '.join(numbers)}]"
+                    result.append(group)
+                    self._pending_citation = ""
+                elif len(self._pending_citation) >= self._MAX_PENDING:
+                    result.append(self._pending_citation)
+                    self._pending_citation = ""
+            else:
+                result.append(char)
+        return "".join(result)
+
+    def finish(self) -> str:
+        """Return unfinished literal text at the end of the answer.
+
+        Returns
+        -------
+        str
+            Unmatched delimiter/citation text, preserved verbatim.
+
+        """
+
+        result: list[str] = []
+        self._complete_marker(result)
+        if self._pending_citation:
+            result.append(self._pending_citation)
+            self._pending_citation = ""
+        return "".join(result)
+
+
+def _numbered_citations(answer: str) -> str:
+    """Write worded citations as plain numbers outside Markdown code.
+
+    Parameters
+    ----------
+    answer: str
+        Generated answer, possibly containing inline or fenced code.
+
+    Returns
+    -------
+    str
+        The answer with prose citations such as ``[source 3]`` rewritten
+        to ``[3]`` while Markdown code examples remain unchanged.
+
+    """
+
+    normalizer = _CitationNormalizer()
+    return normalizer.feed(answer) + normalizer.finish()
 
 
 def _invalid_citations(
@@ -1593,6 +1726,9 @@ class RAGSession:
                     phase_callback(phase, details)
 
         first_stream_piece = False
+        citation_stream = (
+            _CitationNormalizer() if token_callback is not None else None
+        )
 
         def stream_token(text: str) -> None:
             """Report the first output boundary before forwarding a token.
@@ -1612,7 +1748,9 @@ class RAGSession:
                     message="Generating the answer",
                 )
             if token_callback is not None:
-                token_callback(text)
+                normalized = citation_stream.feed(text)
+                if normalized:
+                    token_callback(normalized)
 
         question = question.strip()
         # Every model this answer may call checks the same Stop request.
@@ -2580,9 +2718,14 @@ class RAGSession:
                 if token_callback is not None:
                     stream_token("\n\n" + coverage_notice)
 
-            # Only the citation format is corrected ("[source 3]" -> "[3]").
-            # One fast, deterministic check follows; do not modify or retry
-            # the answer even when the model cites unavailable evidence.
+            # Flush a partial citation/delimiter after the final stream
+            # piece, so streaming and saved citation syntax agree.
+            if citation_stream is not None:
+                remainder = citation_stream.finish()
+                if remainder:
+                    token_callback(remainder)
+            # Only citation formatting is corrected; never modify or retry
+            # the answer when the model cites unavailable evidence.
             answer = _numbered_citations(answer)
             invalid = _invalid_citations(answer, evidence)
             if invalid:
@@ -6097,10 +6240,12 @@ class RAGSession:
 
         Notes
         -----
-        These fields identify configured embedding and chunking choices. The
-        retrieval preparation step additionally records the loaded model's
-        identity and source. Implementation/library versions are not tracked;
-        a selected-source manifest is compared separately.
+        These fields identify configured embedding and chunking choices.
+        A code-graph format marker invalidates indexes after graph-semantic
+        changes only for profiles that can build code relationships. The
+        retrieval preparation step also records the loaded model identity
+        and source; library versions are not tracked. A selected-source
+        manifest is compared separately.
 
         """
 
@@ -6131,8 +6276,16 @@ class RAGSession:
         metadata["retrieval_text"] = RETRIEVAL_TEXT_FORMAT
         # JavaScript and R passages are searched with their file path, as
         # Python and MATLAB ones are; projects reading them re-index once.
-        if {".js", ".r"} & set(profile.extensions):
+        extensions = {suffix.lower() for suffix in profile.extensions}
+        if {".js", ".r"} & extensions:
             metadata["code_path_languages"] = CODE_PATH_LANGUAGES
+        # The graph's resolver and cross-language edges have changed. Old
+        # graph data must not be reused with unchanged source manifests.
+        if self._behavior_config().code_graph is not False and (
+            _GRAPH_SOURCE_EXTENSIONS & extensions
+            or ".html" in extensions and self._reads_as_code()
+        ):
+            metadata["code_graph_format"] = CODE_GRAPH_FORMAT
         # Projects that read PDFs re-index when the PDF text extractor
         # changes; other projects are unaffected.
         if ".pdf" in profile.extensions:

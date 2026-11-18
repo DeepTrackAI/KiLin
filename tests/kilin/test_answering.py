@@ -837,6 +837,37 @@ class TestRouting(unittest.TestCase):
                     self.assertIn("set by the question's wording",
                                   decision.fallback)
 
+    def test_code_routing_cues_preserve_listing_and_generation(
+        self,
+    ) -> None:
+        """Apply code relation cues without hijacking other code intents."""
+
+        code = project_type("code")
+        cases = (
+            ("Which functions call save?", "mention_listing",
+             "code_explanation"),
+            ("What calls save?", "mention_listing", "code_explanation"),
+            ("Find every use of save.", "mention_listing",
+             "mention_listing"),
+            ("List every call to save.", "mention_listing",
+             "mention_listing"),
+            ("Write a function which calls save.", "code_generation",
+             "code_generation"),
+            ("Which functions handle loading?", "topic_listing",
+             "topic_listing"),
+        )
+        for question, routed, expected in cases:
+            with self.subTest(question=question):
+                reply = json.dumps({"intent": routed, "standalone": True})
+                with patch.object(
+                    answering, "side_reply", return_value=reply
+                ) as router:
+                    decision = answering.route_question(
+                        object(), code, [], question
+                    )
+                self.assertEqual(decision.intent, expected)
+                router.assert_called_once()
+
     def test_required_words_rule_out_an_intent(self) -> None:
         """Ask again without an intent whose required words are absent."""
 

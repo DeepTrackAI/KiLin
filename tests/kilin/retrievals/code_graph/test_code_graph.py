@@ -364,6 +364,63 @@ class TestCodeGraphLanguages(unittest.TestCase):
         # A Python package outside the repository stays as written.
         self.assertIn(("run.run", "py.numpy.sum"), calls)
 
+    def test_matlab_qualified_python_calls_do_not_guess_by_leaf(
+        self,
+    ) -> None:
+        """An unrelated Python function is not a prefixed call target."""
+
+        calls = self._calls(
+            [
+                source_file(
+                    "project/real.py", "def smooth(x):\n    return x\n"
+                ),
+                source_file(
+                    "run.m",
+                    "function run(x)\n"
+                    "a = py.project.real.smooth(x);\n"
+                    "b = py.numpy.smooth(x);\n"
+                    "c = py.different.smooth(x);\n"
+                    "d = py.smooth(x);\n"
+                    "end\n",
+                ),
+            ]
+        )
+        self.assertIn(("run.run", "project.real.smooth"), calls)
+        self.assertIn(("run.run", "py.numpy.smooth"), calls)
+        self.assertIn(("run.run", "py.different.smooth"), calls)
+        # An unqualified cross-language call can still use a unique leaf.
+        self.assertNotIn(("run.run", "py.smooth"), calls)
+        self.assertEqual(
+            {target for caller, target in calls if caller == "run.run"},
+            {"project.real.smooth", "py.numpy.smooth",
+             "py.different.smooth"},
+        )
+
+    def test_prefixed_qualified_suffix_requires_unique_target(
+        self,
+    ) -> None:
+        """Qualified suffixes match only one full candidate."""
+
+        known = {
+            ".py": {
+                "smooth": {"pkg.real.smooth", "other.real.smooth"}
+            },
+            ".m": {},
+        }
+        reachable = cg._reachable_names(known, ".m", {"py": ".py"})
+        self.assertEqual(
+            cg._resolve_name("py.pkg.real.smooth", reachable),
+            "pkg.real.smooth",
+        )
+        self.assertEqual(
+            cg._resolve_name("py.real.smooth", reachable),
+            "py.real.smooth",
+        )
+        self.assertEqual(
+            cg._resolve_name("py.numpy.smooth", reachable),
+            "py.numpy.smooth",
+        )
+
     def test_html_handler_reaches_javascript(self) -> None:
         files = [
             source_file("app.js", "function save() {\n  return 1;\n}\n"),

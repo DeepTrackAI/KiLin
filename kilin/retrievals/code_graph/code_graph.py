@@ -506,7 +506,9 @@ def _resolve_name(
     -----
     A reference that starts with a prefix the language uses to call another
     one (``py.helpers.smooth`` in MATLAB) is resolved among that language's
-    names only. Otherwise candidates share the reference's last component,
+    names only. A qualified cross-language reference must match its whole
+    name or a unique qualified suffix; a same-leaf fallback is not enough.
+    Otherwise candidates share the reference's last component,
     and a file named after its function counts as that function. One
     candidate is taken. Otherwise, in order:
 
@@ -526,6 +528,20 @@ def _resolve_name(
     first, _, rest = name.partition(".")
     other = getattr(known, "prefixed", {}).get(first) if rest else None
     if other is not None:
+        if "." in rest:
+            # A qualified cross-language call must not fall back to the
+            # only function with the same leaf in an unrelated module.
+            leaf = rest.rsplit(".", 1)[-1]
+            candidates = {
+                candidate
+                for candidate in other.get(leaf, set())
+                if f"{candidate}.{leaf}" not in other.get(leaf, set())
+            }
+            qualified = {
+                candidate for candidate in candidates
+                if candidate == rest or candidate.endswith(f".{rest}")
+            }
+            return next(iter(qualified)) if len(qualified) == 1 else name
         resolved = _resolve_name(rest, other)
         found = resolved in other.get(resolved.split(".")[-1], set())
         return resolved if found else name

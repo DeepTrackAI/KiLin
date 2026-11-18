@@ -61,6 +61,43 @@ class TestCitationIdentifierValidation(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(rag._numbered_citations(text), expected)
 
+    def test_worded_citations_leave_markdown_code_unchanged(self) -> None:
+        """Treat code examples as literal text, not reference links."""
+
+        answer = (
+            "See [source 3]. Inline `[source 4]` stays.\n"
+            "```python\nexample = '[source 5]'\n```\n"
+            "~~~python\nexample = '[sources 6 and 7]'\n~~~\n"
+            "Afterward [Sources 8 and 9]."
+        )
+        expected = (
+            "See [3]. Inline `[source 4]` stays.\n"
+            "```python\nexample = '[source 5]'\n```\n"
+            "~~~python\nexample = '[sources 6 and 7]'\n~~~\n"
+            "Afterward [8, 9]."
+        )
+        self.assertEqual(rag._numbered_citations(answer), expected)
+
+    def test_citation_stream_handles_arbitrary_token_boundaries(self) -> None:
+        """Normalize split citations without changing literal Markdown."""
+
+        original = (
+            "Look [source 3], code `[source 4]`; "
+            "```python\nx = '[source 5]'\n```\n"
+            "~~~python\nx = '[source 6]'\n~~~\n"
+            "Now [sources 7 and 8], unfinished [source 9"
+        )
+        expected = rag._numbered_citations(original)
+        for size in (1, 2, 3, 7, 53, len(original)):
+            with self.subTest(fragment_size=size):
+                normalizer = rag._CitationNormalizer()
+                emitted = [
+                    normalizer.feed(original[start:start + size])
+                    for start in range(0, len(original), size)
+                ]
+                emitted.append(normalizer.finish())
+                self.assertEqual("".join(emitted), expected)
+
     def test_saved_answer_has_numbered_citations(self) -> None:
         """The saved answer, which clients link, has plain numbers."""
         session = _session()

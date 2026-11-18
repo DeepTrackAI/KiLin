@@ -34,13 +34,18 @@ text, model-specific embedding query format and the original user question.
 The Qwen3 query formatter is applied by the relevant semantic-search path,
 not by modifying original source files.
 
-Indexed text is not always the displayed passage. A Python or MATLAB code
-passage is embedded and lexically indexed with its file path in front and,
-for Python, the first line of its module docstring (`_retrieval_text` in
-`rag.py`), so a function can be found by what its module is about even when
-its own name and code use other words. Evidence, citations and the answering
-model keep the passage text itself. The format is recorded in the index
-settings (`retrieval_text`); changing it rebuilds saved indexes.
+Indexed text is not always the displayed passage. Python, MATLAB,
+JavaScript, and R code passages are embedded and lexically indexed with
+file paths in front and, for Python, the first line of the module docstring
+(`_retrieval_text` in `rag.py`). This helps find functions by module purpose
+even when their names and bodies use different words. Evidence, citations,
+and the answering model retain the original passage text. Prose citations
+such as `[source 3]` are normalized to `[3]` in both streamed and saved
+answers, without rewriting inline or fenced Markdown code examples.
+The search-text format is recorded in index settings (`retrieval_text`);
+changing that format rebuilds saved indexes. The `code_path_languages`
+marker additionally
+invalidates old JavaScript/R text indexes.
 
 In project types with the `document_headers` capability (the packaged
 `literature` type), each document passage is indexed after a short header:
@@ -90,6 +95,21 @@ function, or class (`names_code` in `context_expansion.py`). For ordinary
 prose, it would match common words to identifiers and introduce noise.
 Graph structure and chunk provenance must agree: a stale graph can misdirect
 named-function context even when semantic vectors remain readable.
+The `code_graph_format` index marker invalidates old graphs whenever the
+selected project sources can supply Python, MATLAB, notebook, JavaScript,
+R, or HTML-as-code relationships, unless graph building is disabled. It
+is separate from the JSON chunk format marker (`json_source_units`) and
+does not invalidate literature-only or HTML-as-page-text indexes.
+
+Cross-language calls are explicitly declared by each language extension.
+For example, MATLAB `py.pkg.module.func(...)` resolves to a Python symbol
+only when the qualified name or a unique qualified suffix matches. An
+unrelated function with the same final name is **not** evidence of a call.
+Graph relations currently identify entities by qualified name alone: two
+files such as `pkg/utils.py` and `pkg/utils.js` can therefore share graph
+relation endpoints if they define equally named functions. These graph
+edges do not distinguish the languages; their callers and callees must
+be verified against source paths in that situation.
 
 JavaScript entities (`js_function`, `js_method`, `js_class`) participate in
 explicit-name, caller/callee, and class-method expansion. Retrieved

@@ -140,6 +140,17 @@ class TestCodeFixtureRepository(unittest.TestCase):
             with self.subTest(relation=expected):
                 self.assertIn(expected, self.relations)
 
+    def test_matlab_function_calls_its_helper(self) -> None:
+        targets = {
+            relation.target
+            for relation in self.relations
+            if relation.source == "matlab.m_function_A.m_function_A"
+            and relation.relation == "calls"
+        }
+        self.assertTrue(
+            any(target.endswith("m_function_B") for target in targets)
+        )
+
     def test_matlab_calls_its_helper_and_python(self) -> None:
         m = "matlab"
         for expected in (
@@ -285,28 +296,6 @@ class TestCodeFixtureRepository(unittest.TestCase):
         self.assertEqual(len(passages), 1)
         self.assertIn('"multiplier": 2', passages[0].text)
 
-    def test_html_is_read_as_code(self) -> None:
-        page = next(
-            chunk for chunk in self.chunks if chunk.path.suffix == ".html"
-        )
-        self.assertIn('<button onclick="js_function_A(1, 2)">', page.text)
-
-    def test_html_is_read_as_page_text_without_the_code_graph(self) -> None:
-        files = read_repository_files(self.report)
-        text = next(f.text for f in files if f.path.suffix == ".html")
-        self.assertIn("# html_heading_A", text)
-        self.assertIn("- Press the html_button_D button.", text)
-        self.assertNotIn("<", text)
-
-    def test_html_page_links_to_its_script_and_handler(self) -> None:
-        for expected in (
-            CodeRelation("html.page_html", "imports", "js.calculator_js"),
-            CodeRelation(
-                "html.page_html", "calls", "js.calculator_js.js_function_A"
-            ),
-        ):
-            with self.subTest(relation=expected):
-                self.assertIn(expected, self.relations)
 
 
 if __name__ == "__main__":

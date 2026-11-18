@@ -486,6 +486,47 @@ class TestRAGLifecycle(unittest.TestCase):
                     recorded,
                 )
 
+    def test_code_graph_format_invalidates_only_graph_profiles(
+        self,
+    ) -> None:
+        """Rebuild affected graph indexes without touching prose projects."""
+
+        session = _session()
+        for extensions, setting, recorded in (
+            ((".pdf", ".md"), True, False),
+            ((".json",), True, False),
+            ((".py",), True, True),
+            ((".m",), "auto", True),
+            ((".ipynb",), True, True),
+            ((".js",), True, True),
+            ((".r",), True, True),
+            ((".html",), True, True),
+            ((".html",), "auto", False),
+            ((".py", ".html"), "auto", True),
+            ((".py", ".js"), False, False),
+        ):
+            with self.subTest(extensions=extensions, code_graph=setting):
+                session.project.profile.extensions = extensions
+                with patch.object(rag, "project_type") as lookup:
+                    lookup.return_value.code_graph = setting
+                    metadata = session._index_metadata()
+                self.assertEqual(
+                    "code_graph_format" in metadata, recorded
+                )
+                if recorded:
+                    self.assertEqual(
+                        metadata["code_graph_format"],
+                        rag.CODE_GRAPH_FORMAT,
+                    )
+                    legacy = dict(metadata)
+                    legacy.pop("code_graph_format")
+                    self.assertNotEqual(legacy, metadata)
+                if ".json" in extensions:
+                    self.assertEqual(
+                        metadata["json_source_units"],
+                        rag.JSON_SOURCE_UNITS_FORMAT,
+                    )
+
     def test_js_and_r_passages_are_searched_with_their_path(self) -> None:
         for kind, path in (("js_function", "web/app.js"),
                            ("r_function", "r/calc.R")):
