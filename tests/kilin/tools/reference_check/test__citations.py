@@ -37,7 +37,7 @@ RULES = CitationRules(
     unit_words=frozenset({"cm", "log", "nm"}),
     byline_share=0.5,
 )
-PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
+PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures" / "pdfs"
 
 
 class TestCitedNumbers(unittest.TestCase):

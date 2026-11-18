@@ -195,7 +195,9 @@ class TestTutorials(unittest.TestCase):
             )
             with self.subTest(file=file.name):
                 self.assertIn('root / "_si_article_"', code)
-                self.assertIn('root / "tests" / "fixtures"', code)
+                self.assertIn(
+                    'root / "tests" / "fixtures" / "pdfs"', code
+                )
                 self.assertNotIn('root / "example_repos"', code)
 
     def test_conversation_memory_tutorial_uses_real_local_contracts(
