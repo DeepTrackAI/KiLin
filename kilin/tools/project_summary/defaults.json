@@ -3,7 +3,7 @@
     "TEMPLATE": "choose",
     "DOCUMENT_TOKENS": 2500,
     "MAX_DOCUMENTS": 200,
-    "REPAIR_ATTEMPTS": 1,
+    "REPAIR_ATTEMPTS": 2,
     "CONFIRMATION": "when_large",
     "LARGE_BATCHES": 10
   },

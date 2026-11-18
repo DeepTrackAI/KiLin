@@ -19,7 +19,7 @@
     "repair_attempts": {
       "title": "Section repairs",
       "summary": "Sets how often a section that misses its limits is rewritten.",
-      "description": "A section outside its word or item limits is rewritten up to this many times; the report notes any section still outside them."
+      "description": "A section outside its word or item limits, or citing documents wrongly, is rewritten up to this many times; the report's Check list notes what is still wrong."
     },
     "confirmation": {
       "title": "Confirm large reports",

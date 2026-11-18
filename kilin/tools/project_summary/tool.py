@@ -118,6 +118,7 @@ from kilin.tools.project_summary._reduce import (
     agreement_problem,
     chosen_numbers,
     citation_problem,
+    cite_document_names,
     clean_citations,
     support_problem,
     condense_prompt,
@@ -660,8 +661,9 @@ def _write_section(
         calling one document's view an agreement or disagreement
         (``agreement_problem``) or, when marked ``all documents``, leaving
         out documents with notes (``coverage_problem``) is rewritten up to
-        ``repair_attempts`` times; brackets still citing no document are
-        then removed.
+        ``repair_attempts`` times; then documents still named in the text
+        ("Document 4") are written as citations ("[4]"), and brackets
+        still citing no document are removed.
 
     """
 
@@ -744,6 +746,7 @@ def _write_section(
         content = _clean(context.ask_model(
             *fix_prompt(section, content, problem), None
         ), section) or content
+    content, _ = cite_document_names(content, len(documents))
     content, removed = clean_citations(content, len(documents))
     if removed:
         failures.append(

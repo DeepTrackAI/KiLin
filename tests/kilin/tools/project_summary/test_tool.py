@@ -40,6 +40,7 @@ from kilin.tools.project_summary._reduce import (
     agreement_problem,
     chosen_numbers,
     citation_problem,
+    cite_document_names,
     clean_citations,
     coverage_problem,
     fitted_headline,
@@ -243,18 +244,17 @@ class TestRun(_Project):
             return _model(system, prompt, tokens)
         result, _ = self._run(model=stubborn)
         report = (self.root / result.summary["report"]).read_text()
-        self.assertIn("## Themes\n\nDocument 1 studies networks and plants "
-                      "[2].", report)
+        # "Document 1" is written as a citation; the bad bracket removed.
+        self.assertIn("## Themes\n\n[1] studies networks and plants [2].",
+                      report)
         self.assertIn("Themes: 1 citation(s) of no document removed.",
                       result.answer)
         # The check is saved with the report, before the documents.
         self.assertIn(
             "---\n\n**Check**\n\n- Themes: 1 citation(s) of no document "
-            "removed.\n- Themes: It names documents in the text", report,
+            "removed.\n\n**Documents**", report,
         )
-        self.assertLess(report.index("**Check**"),
-                        report.index("**Documents**"))
-        self.assertIn("names documents in the text", result.answer)
+        self.assertNotIn("names documents in the text", result.answer)
         self.assertFalse(result.summary["valid"])
 
     def test_citation_of_the_wrong_document_is_repaired(self) -> None:
@@ -471,6 +471,18 @@ class TestReduce(unittest.TestCase):
             clean_citations("A [n1], b [2] and c [7].", 5),
             ("A, b [2] and c.", 2),
         )
+        for text, cited in (
+            ("Document 1 and 4 both highlight BRAPH.",
+             "[1] and [4] both highlight BRAPH."),
+            ("Document [4] focuses on tools.", "[4] focuses on tools."),
+            ("Documents 1, 2 and [5] share it.",
+             "[1], [2] and [5] share it."),
+            ("Document 9 is not one of them.",
+             "Document 9 is not one of them."),
+            ("No document is named.", "No document is named."),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(cite_document_names(text, 5)[0], cited)
         # A real report's Overview: [4] is BRAPH 2, the genomics is [5].
         texts = {
             1: "BRAPH: A graph theory software for the analysis of brain "

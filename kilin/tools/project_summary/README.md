@@ -120,8 +120,11 @@ document whose call fails is reported as not read; the others go on.
   says nothing of "the scope of the collection") is represented by its
   title and its other notes, and the repair names those left out. A
   section with such a problem, or outside its limits, is rewritten up to
-  `REPAIR_ATTEMPTS` times; brackets still citing no document are then
-  removed, and what remains wrong is listed under the report.
+  `REPAIR_ATTEMPTS` times. Then code writes documents still named in the
+  text as citations ("Document 1 and 4 both…" becomes "[1] and [4]
+  both…", only when every number is a document), removes brackets still
+  citing no document, and lists what remains wrong in the report's Check
+  list.
 - **Per-document sections**: assembled by code, never by the model: a
   count ("3 of 12 documents."), the unclear documents with why and those
   not read, then one entry or table row per matching document.
@@ -144,8 +147,8 @@ Overridable by a project type (`tool` object of an intent).
 - `DOCUMENT_TOKENS` (default `2500`): tokens read from each document
   (300-16000).
 - `MAX_DOCUMENTS` (default `200`): most documents read (1-2000).
-- `REPAIR_ATTEMPTS` (default `1`): rewrites of a section outside its
-  limits (0-4).
+- `REPAIR_ATTEMPTS` (default `2`): rewrites of a section outside its
+  limits or with a citation problem (0-4).
 - `CONFIRMATION` (default `"when_large"`): `always`, `when_large` or
   `never`.
 - `LARGE_BATCHES` (default `10`): with `when_large`, plans with more model

@@ -42,10 +42,11 @@ Module Structure
 
     The document numbers a reply chooses.
 
-- ``citation_problem`` and ``clean_citations``
+- ``citation_problem``, ``clean_citations`` and ``cite_document_names``
 
-    Whether a section cites documents as it must, and its invalid
-    citations removed.
+    Whether a section cites documents as it must, its invalid citations
+    removed, and documents named in the text ("Document 4") written as
+    citations.
 
 - ``support_problem``, ``agreement_problem`` and ``coverage_problem``
 
@@ -92,6 +93,7 @@ __all__ = [
     "chosen_numbers",
     "agreement_problem",
     "citation_problem",
+    "cite_document_names",
     "clean_citations",
     "coverage_problem",
     "fitted_headline",
@@ -124,6 +126,13 @@ _SYSTEM: Final[str] = (
 # "Documents 1 and 2").
 _BRACKETS = re.compile(r"\[([^\[\]]{1,40})\]")
 _DOCUMENT_WORDS = re.compile(r"\bDocuments?\s+\[?\d", re.IGNORECASE)
+# Documents named in the text: "Document 4", "Document [4]", "Documents
+# 1 and 4", "Documents 1, 2 and [5]".
+_DOCUMENT_NAMES = re.compile(
+    r"\bDocuments?\s+((?:\[?\d+\]?)(?:\s*(?:,\s*(?:and\s+)?|and\s+|&\s*)"
+    r"\[?\d+\]?)*)",
+    re.IGNORECASE,
+)
 # Where the clause a citation supports starts, inside its phrase.
 _CLAUSE = re.compile(
     r"[,;:(—–]|\s-\s|\b(?:such\s+as|including|like|e\.g\.)\s",
@@ -789,6 +798,56 @@ def fitted_headline(text: str, limit: int) -> str:
             break
         cut = shorter
     return cut.rstrip(" ,;:—–-")
+
+
+def cite_document_names(content: str, documents: int) -> tuple[str, int]:
+    """Return a section with documents named in the text written as citations.
+
+    Parameters
+    ----------
+    content: str
+        A section.
+    documents: int
+        How many documents there are.
+
+    Returns
+    -------
+    tuple[str, int]
+        The content with "Document 4" and "Document [4]" written "[4]",
+        and "Documents 1 and 4" written "[1] and [4]", keeping the words
+        between the numbers; a name with a number that is not a document
+        is left as it is. Also how many names were rewritten.
+
+    """
+
+    count = 0
+
+    def cite(match: re.Match[str]) -> str:
+        """Return one name as citations, or unchanged.
+
+        Parameters
+        ----------
+        match: re.Match[str]
+            "Document" and the numbers after it.
+
+        Returns
+        -------
+        str
+            The numbers in brackets with the words between them, or the
+            match when a number is not a document.
+
+        """
+
+        nonlocal count
+        numbers = [int(n) for n in re.findall(r"\d+", match.group(1))]
+        if not all(1 <= number <= documents for number in numbers):
+            return match.group(0)
+        count += 1
+        return re.sub(
+            r"\[?(\d+)\]?", lambda n: f"[{n.group(1)}]", match.group(1)
+        )
+
+    return _DOCUMENT_NAMES.sub(cite, content), count
 
 
 def per_document_markdown(
