@@ -10,7 +10,7 @@ scope: project
 
 **Documents:** {documents}
 
-## Overview (60-100 words, all documents)
+## Overview (40-100 words, all documents)
 
 What kinds of documents the table covers and the main differences between
 them, in a few sentences.
