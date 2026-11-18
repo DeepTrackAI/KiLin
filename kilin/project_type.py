@@ -526,7 +526,13 @@ class ProjectType:
         Default answer instruction applied by the core to all callers
         unless overridden by the caller or selected intent; empty for none.
     welcome_prompts: tuple[str, ...]
-        Headings the desktop app shows in an empty chat.
+        Headings the desktop app shows in an empty chat when there are no
+        headings about the project's own sources.
+    welcome_templates: tuple[str, ...]
+        Fill-in headings, such as "What would you like to know about
+        {topic}?", from which ``kilin.question_suggestions`` writes
+        headings about the project's own sources. Empty when the type has
+        none.
     suggestions: tuple[str, ...]
         Example requests the desktop app shows in an empty chat.
     suggestion_templates: tuple[tuple[str, str], ...]
@@ -567,6 +573,7 @@ class ProjectType:
     intents: dict[str, Intent]
     answer_guidance: str = ""
     welcome_prompts: tuple[str, ...] = ()
+    welcome_templates: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
     suggestion_templates: tuple[tuple[str, str], ...] = ()
     document_headers: bool = False
@@ -741,6 +748,35 @@ def _suggestion_templates(
             _check_template(type_id, f"{field}.{intent_id}", template)
             pairs.append((intent_id, template.strip()))
     return tuple(pairs)
+
+
+def _welcome_templates(type_id: str, data: dict) -> tuple[str, ...]:
+    """Return the fill-in welcome headings, with their placeholders checked.
+
+    Parameters
+    ----------
+    type_id: str
+        Registered project-type identifier to validate.
+    data: dict
+        Project-type JSON object.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Stripped templates, in file order; empty when the field is missing.
+
+    Raises
+    ------
+    ValueError
+        If the field is not a list of nonblank text, or a template has a
+        placeholder other than ``SUGGESTION_PLACEHOLDERS``.
+
+    """
+
+    templates = _texts(type_id, data, "welcome_templates")
+    for position, template in enumerate(templates):
+        _check_template(type_id, f"welcome_templates[{position}]", template)
+    return templates
 
 
 def _check_template(type_id: str, where: str, template: object) -> None:
@@ -1084,6 +1120,7 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             "intents",
             "answer_guidance",
             "welcome_prompts",
+            "welcome_templates",
             "suggestions",
             "suggestion_templates",
         ),
@@ -1292,6 +1329,7 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             type_id, data, "answer_guidance", required=False
         ),
         welcome_prompts=_texts(type_id, data, "welcome_prompts"),
+        welcome_templates=_welcome_templates(type_id, data),
         suggestions=_texts(type_id, data, "suggestions"),
         suggestion_templates=_suggestion_templates(type_id, data, intents),
         document_headers=document_headers,

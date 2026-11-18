@@ -258,6 +258,11 @@
     "Which manuscript, proposal, or supporting source would you like to examine?",
     "What factual information, references, or passages should I check?"
   ],
+  "welcome_templates": [
+    "What would you like to check in {file}?",
+    "Which claims about {topic} should we verify?",
+    "Which references in {file} should we look at?"
+  ],
   "suggestions": [
     "Extract the stated objectives and methods with citations",
     "List the sample sizes and experimental conditions reported",

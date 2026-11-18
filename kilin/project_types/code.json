@@ -296,6 +296,12 @@
     "What behavior would you like to investigate?",
     "Where should we start in this repository?"
   ],
+  "welcome_templates": [
+    "What would you like to understand about {file}?",
+    "Shall we trace how {term} works through the code?",
+    "How would you like to use this code for {topic}?",
+    "Where should we start: {file} or {file2}?"
+  ],
   "suggestions": [
     "Explain how … works",
     "Review the whole … file",

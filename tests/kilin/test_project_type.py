@@ -909,12 +909,38 @@ class TestProjectTypeFields(ProjectTypeFixture):
                 ):
                     self._load(f"badtemplates{index}", data)
 
+    def test_welcome_templates_are_checked(self) -> None:
+        """Keep valid fill-in headings; reject bad text or placeholders."""
+
+        data = _type_data()
+        data["welcome_templates"] = ["  What about {topic}?  ", "Hello."]
+        item = self._load("welcome", data)
+        self.assertEqual(
+            item.welcome_templates, ("What about {topic}?", "Hello.")
+        )
+        self.assertEqual(
+            self._load("no-welcome", _type_data()).welcome_templates, ()
+        )
+        for index, value in enumerate((
+            "What about {topic}?",
+            [" "],
+            [3],
+            ["What about {paper}?"],
+            ["What about {topic?"],
+        )):
+            with self.subTest(value=value):
+                data = _type_data()
+                data["welcome_templates"] = value
+                with self.assertRaisesRegex(ValueError, "welcome_templates"):
+                    self._load(f"badwelcome{index}", data)
+
     def test_packaged_suggestion_templates_name_their_intents(self) -> None:
         """Every packaged type has fill-in questions for its own intents."""
 
         for type_id, item in load_project_types().items():
             with self.subTest(type_id=type_id):
                 self.assertTrue(item.suggestion_templates)
+                self.assertTrue(item.welcome_templates)
                 self.assertLessEqual(
                     {intent for intent, _ in item.suggestion_templates},
                     set(item.intents),

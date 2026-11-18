@@ -1716,11 +1716,12 @@ let projectBehaviorData = null;
 let behaviorSave = { nextId: 0, pending: null };
 let projectPresentation = null;
 // Ready-to-send questions about the open project's sources, as
-// {intent, question}, up to three per intent; empty means none. The
-// question_suggestions event comes just before its project's "opened"
-// event, which takes them from pending, and before each new empty chat
-// of the open project, which uses them at once.
+// {intent, question}, up to three per intent, and welcome headings about
+// them; empty means none. The question_suggestions event comes just before
+// its project's "opened" event, which takes them from pending, and before
+// each new empty chat of the open project, which uses them at once.
 let sourceQuestions = [];
+let sourceWelcome = [];
 let pendingSourceQuestions = null;
 let feedbackData = { project: "", revision: "", entries: {} };
 let feedbackSave = { nextId: 0, pending: null };
@@ -6349,8 +6350,10 @@ function renderConversationEmpty() {
   conversation.replaceChildren();
   const type = projectPresentation && openProjectPath
     ? projectPresentation : projectTypes[activeProjectTypeId] || {};
+  const fixedPrompts = type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts;
   const content = {
-    prompts: type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts,
+    // Headings about the project's own sources replace the fixed ones.
+    prompts: openProjectPath && sourceWelcome.length ? sourceWelcome : fixedPrompts,
     suggestions: type.suggestions?.length ? type.suggestions : genericEmptyChat.suggestions,
   };
   let promptIndex = Math.floor(Math.random() * content.prompts.length);
@@ -7559,8 +7562,10 @@ function onEvent(raw) {
       displayedMemoryProject = "";
       displayedMemoryRevision = "";
     }
-    sourceQuestions = pendingSourceQuestions?.project === data.project
-      ? pendingSourceQuestions.questions : [];
+    const pending = pendingSourceQuestions?.project === data.project
+      ? pendingSourceQuestions : null;
+    sourceQuestions = pending?.questions || [];
+    sourceWelcome = pending?.welcome || [];
     pendingSourceQuestions = null;
     openProjectPath = data.project;
     projectPresentation = data.behavior_presentation || null;
@@ -7607,8 +7612,12 @@ function onEvent(raw) {
     }
   } else if (data.event === "question_suggestions") {
     const questions = (data.questions || []).filter((item) => item?.question);
-    if (data.project === openProjectPath) sourceQuestions = questions;
-    pendingSourceQuestions = { project: data.project, questions };
+    const welcome = (data.welcome || []).filter((text) => typeof text === "string" && text);
+    if (data.project === openProjectPath) {
+      sourceQuestions = questions;
+      sourceWelcome = welcome;
+    }
+    pendingSourceQuestions = { project: data.project, questions, welcome };
   } else if (data.event === "conversation_opened") {
     finishStopping();
     reading = null;
@@ -8416,6 +8425,7 @@ function returnToLaunch() {
   openProjectPath = "";
   projectPresentation = null;
   sourceQuestions = [];
+  sourceWelcome = [];
   pendingSourceQuestions = null;
   projectBehaviorData = null;
   behaviorSave.pending = null;

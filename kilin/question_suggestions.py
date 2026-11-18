@@ -5,7 +5,9 @@ project type lists one fill-in question per intent in
 ``suggestion_templates``, such as "Give me a short summary of {file}.".
 This module fills them with the project's real file names and with topics
 and exact terms that a small model picks from the sources, so each question
-shows what KíLín can do with these sources and can be answered.
+shows what KíLín can do with these sources and can be answered. The
+heading above them is written the same way from ``welcome_templates``, such
+as "What would you like to know about {topic}?".
 
 The work has two steps. Once, when the sources change, the small model
 reads a random mix of the files and picks a pool of up to ten topics and
@@ -79,6 +81,10 @@ Module Structure
 
     Write fresh questions from the pool, with files and words at random.
 
+- ``welcome_prompts``
+
+    Write fresh welcome headings from the pool in the same way.
+
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
 
@@ -121,6 +127,7 @@ __all__ = [
     "question_suggestions",
     "suggestion_files",
     "suggestion_words",
+    "welcome_prompts",
 ]
 
 SUGGESTION_WORDS_FILE: Final[str] = "suggestion_words.json"
@@ -464,18 +471,78 @@ def question_suggestions(
 
     if not chunks or not templates:
         return []
-    rng = rng or _RANDOM
+    files, shuffled = _shuffled_values(chunks, words, rng or _RANDOM)
+    return fill_templates(templates, files, shuffled, _VARIANTS)
+
+
+def welcome_prompts(
+    templates: Sequence[str],
+    chunks: Sequence[Chunk],
+    words: SuggestionWords,
+    rng: random.Random | None = None,
+) -> list[str]:
+    """Write fresh welcome headings from the pool, with words at random.
+
+    Parameters
+    ----------
+    templates: Sequence[str]
+        Fill-in headings of the project's type, as
+        ``ProjectType.welcome_templates``.
+    chunks: Sequence[Chunk]
+        The project's indexed passages.
+    words: SuggestionWords
+        The pool, as from ``suggestion_words``.
+    rng: random.Random | None, optional
+        Picks the files, topics, and terms. Defaults to ``None``, a shared
+        generator.
+
+    Returns
+    -------
+    list[str]
+        One heading per template that could be filled, naming files,
+        topics, and terms chosen anew on every call; empty when the
+        project has no sources or no templates, so the caller shows the
+        type's fixed ``welcome_prompts``. No model is called.
+
+    """
+
+    if not chunks or not templates:
+        return []
+    files, shuffled = _shuffled_values(chunks, words, rng or _RANDOM)
+    filled = fill_templates(
+        tuple(("", template) for template in templates), files, shuffled
+    )
+    return [item.question for item in filled]
+
+
+def _shuffled_values(
+    chunks: Sequence[Chunk], words: SuggestionWords, rng: random.Random
+) -> tuple[list[str], SuggestionWords]:
+    """Return the file names and the pool's words in a random order.
+
+    Parameters
+    ----------
+    chunks: Sequence[Chunk]
+        The project's indexed passages.
+    words: SuggestionWords
+        The pool of topics and terms.
+    rng: random.Random
+        Picks the order.
+
+    Returns
+    -------
+    tuple[list[str], SuggestionWords]
+        Shuffled file names, as from ``suggestion_files``, and shuffled
+        topics and terms.
+
+    """
+
     files = list(suggestion_files(chunks))
     topics = list(words.topics)
     terms = list(words.terms)
     for values in (files, topics, terms):
         rng.shuffle(values)
-    return fill_templates(
-        templates,
-        files,
-        SuggestionWords(tuple(topics), tuple(terms)),
-        _VARIANTS,
-    )
+    return files, SuggestionWords(tuple(topics), tuple(terms))
 
 
 def _descriptions(

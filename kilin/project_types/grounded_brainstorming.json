@@ -215,6 +215,11 @@
     "Which of your indexed papers should inspire our next hypothesis?",
     "What source-supported assumptions should we challenge?"
   ],
+  "welcome_templates": [
+    "Which result on {topic} should we build on?",
+    "Which assumption in {file} should we challenge?",
+    "What new hypothesis could {file} inspire?"
+  ],
   "suggestions": [
     "Brainstorm new hypotheses from the findings in my project sources",
     "Find contradictions between the papers and propose explanations",

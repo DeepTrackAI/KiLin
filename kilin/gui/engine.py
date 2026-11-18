@@ -2216,7 +2216,7 @@ class ChatEngine:
         )
 
     def _send_question_suggestions(self, project: QAProject) -> None:
-        """Send example questions about the open project's own sources.
+        """Send example questions and headings about the project's sources.
 
         Parameters
         ----------
@@ -2227,11 +2227,12 @@ class ChatEngine:
         Notes
         -----
         Sent before ``opened`` and before ``conversation_opened`` of an
-        empty chat; each time the questions are chosen anew, without a
-        model once the project's pool of topics is known. An empty list,
-        sent when there are no sources or writing them fails, tells the
-        page to keep the project type's fixed suggestions. A failure is
-        traced and never stops the project from opening.
+        empty chat; each time the questions and welcome headings are
+        chosen anew, without a model once the project's pool of topics is
+        known. An empty list, sent when there are no sources or writing
+        them fails, tells the page to keep the project type's fixed
+        suggestions or welcome prompts. A failure is traced and never
+        stops the project from opening.
 
         """
 
@@ -2240,6 +2241,7 @@ class ChatEngine:
                 {"intent": item.intent, "question": item.question}
                 for item in self.session.question_suggestions()
             ]
+            welcome = self.session.welcome_prompts()
         except Exception as error:
             self.active_trace.emit(
                 "gui.question_suggestions.failed",
@@ -2247,10 +2249,12 @@ class ChatEngine:
                 data={"error": f"{type(error).__name__}: {error}"},
             )
             questions = []
+            welcome = []
         self._send(
             "question_suggestions",
             project=str(project.root),
             questions=questions,
+            welcome=welcome,
         )
 
     def _use_project_answer_settings(self) -> None:

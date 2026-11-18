@@ -232,6 +232,7 @@ from kilin.question_suggestions import (
     SuggestionWords,
     question_suggestions,
     suggestion_words,
+    welcome_prompts,
 )
 from kilin.workspace import include_explicit_imports
 from kilin.project_type import (
@@ -1048,6 +1049,8 @@ class RAGSession:
         Ask the router model a side question, such as a chat title.
     question_suggestions()
         Return example questions about the project's own sources.
+    welcome_prompts()
+        Return welcome headings about the project's own sources.
     usage_mark()
         Remember the token totals of the loaded model sessions.
     usage_since(mark)
@@ -3462,6 +3465,52 @@ class RAGSession:
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
+        return question_suggestions(
+            self._behavior_config().suggestion_templates,
+            self.chunks,
+            self._suggestion_words(),
+        )
+
+    def welcome_prompts(self: RAGSession) -> list[str]:
+        """Return welcome headings about the project's own sources.
+
+        Returns
+        -------
+        list[str]
+            One heading per fill-in heading of the project type, such as
+            "What would you like to know about variational autoencoders?",
+            chosen anew on every call. Empty without sources, and when the
+            project's own settings replace the type's headings, so the
+            user's headings are shown.
+
+        Notes
+        -----
+        Uses the same pool of topics and terms as
+        ``question_suggestions``; writing the headings calls no model.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        config = self._behavior_config()
+        packaged = project_type(self.project.profile.type_id)
+        if config.welcome_prompts != packaged.welcome_prompts:
+            return []
+        return welcome_prompts(
+            config.welcome_templates, self.chunks, self._suggestion_words()
+        )
+
+    def _suggestion_words(self: RAGSession) -> SuggestionWords:
+        """Return the pool of topics and terms for the current passages.
+
+        Returns
+        -------
+        SuggestionWords
+            The pool, kept in memory until the passages change; loaded from
+            ``indexes/suggestion_words.json`` or picked by the router model.
+
+        """
+
         pool = self._suggestion_pool
         if pool is None or pool[0] is not self.chunks:
             cards = tuple(
@@ -3477,11 +3526,7 @@ class RAGSession:
                 self.router_model,
             )
             pool = self._suggestion_pool = (self.chunks, words)
-        return question_suggestions(
-            self._behavior_config().suggestion_templates,
-            self.chunks,
-            pool[1],
-        )
+        return pool[1]
 
     def usage_mark(self: RAGSession) -> dict[int, tuple[int, int]]:
         """Remember the token totals of the loaded model sessions.

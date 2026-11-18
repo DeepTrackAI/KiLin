@@ -204,6 +204,11 @@
     "Which established assumption should we overturn today?",
     "Shall we invent ideas unconstrained by current methods or literature?"
   ],
+  "welcome_templates": [
+    "What if we approached {topic} in a completely unconventional way?",
+    "Which assumption about {topic} should we overturn today?",
+    "What unexpected idea could grow out of {file}?"
+  ],
   "suggestions": [
     "Invent five wildly different hypotheses about ...",
     "Give me your most audacious, out-of-the-box explanation for ...",

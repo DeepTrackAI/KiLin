@@ -218,6 +218,11 @@
     "Would you like to write, revise, draft from sources, research, or verify a passage?",
     "Paste a passage for editing, or ask a question about your sources."
   ],
+  "welcome_templates": [
+    "Which part of {file} would you like to work on?",
+    "Shall we write about {topic} from your sources?",
+    "Which claims in {file} should we check against your sources?"
+  ],
   "suggestions": [
     "Rewrite this abstract for clarity",
     "Draft an introduction from my notes",

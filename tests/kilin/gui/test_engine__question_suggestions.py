@@ -1,8 +1,8 @@
 """Test the event that sends suggested questions to the page.
 
-The engine sends the project's questions just before ``opened``. A failure
-must not stop the project from opening: the page then keeps the project
-type's fixed suggestions.
+The engine sends the project's questions and welcome headings just before
+``opened``. A failure must not stop the project from opening: the page then
+keeps the project type's fixed suggestions and welcome prompts.
 
 """
 
@@ -44,6 +44,7 @@ class TestQuestionSuggestionsEvent(unittest.TestCase):
         session.question_suggestions.return_value = [
             Suggestion("paper_overview", "Give me a short summary of a.pdf.")
         ]
+        session.welcome_prompts.return_value = ["What about sleep?"]
         engine = _engine(session)
         ChatEngine._send_question_suggestions(engine, PROJECT)
         self.assertEqual(
@@ -58,6 +59,7 @@ class TestQuestionSuggestionsEvent(unittest.TestCase):
                             "question": "Give me a short summary of a.pdf.",
                         }
                     ],
+                    "welcome": ["What about sleep?"],
                 }
             ],
         )
@@ -76,6 +78,7 @@ class TestQuestionSuggestionsEvent(unittest.TestCase):
                     "event": "question_suggestions",
                     "project": "/projects/demo",
                     "questions": [],
+                    "welcome": [],
                 }
             ],
         )

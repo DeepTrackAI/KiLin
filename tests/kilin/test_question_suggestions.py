@@ -33,6 +33,7 @@ from kilin.question_suggestions import (
     question_suggestions,
     suggestion_files,
     suggestion_words,
+    welcome_prompts,
 )
 from tests.kilin.tools._shared._support import chunk
 
@@ -329,6 +330,56 @@ class TestFreshQuestions(unittest.TestCase):
         self.assertEqual(question_suggestions((), CHUNKS, self.WORDS), [])
 
 
+class TestWelcomePrompts(unittest.TestCase):
+    """Write welcome headings from the same pool, without a model."""
+
+    WELCOME = (
+        "What would you like to know about {topic}?",
+        "Which finding in {file} should we look at first?",
+        "Where should we start: {file} or {file2}?",
+    )
+
+    def test_headings_name_the_sources(self) -> None:
+        """Fill one heading per template with the project's values."""
+
+        words = SuggestionWords(("sleep quality",), ())
+        headings = welcome_prompts(self.WELCOME, CHUNKS, words)
+        self.assertEqual(len(headings), 3)
+        self.assertIn(
+            "What would you like to know about sleep quality?", headings
+        )
+        self.assertTrue(all("{" not in text for text in headings))
+
+    def test_headings_change_between_calls(self) -> None:
+        """Name other topics from one call to the next."""
+
+        words = SuggestionWords(("sleep", "memory", "attention"), ())
+        rng = random.Random(0)
+        seen = {
+            welcome_prompts(self.WELCOME[:1], CHUNKS, words, rng)[0]
+            for _ in range(20)
+        }
+        self.assertEqual(len(seen), 3)
+
+    def test_unfillable_headings_are_left_out(self) -> None:
+        """Without words or sources, leave the fixed headings to the caller."""
+
+        headings = welcome_prompts(
+            self.WELCOME, CHUNKS, SuggestionWords((), ())
+        )
+        self.assertNotIn(
+            "What would you like to know about {topic}?", headings
+        )
+        self.assertEqual(len(headings), 2)
+        self.assertEqual(
+            welcome_prompts(self.WELCOME, (), SuggestionWords(("x",), ())),
+            [],
+        )
+        self.assertEqual(
+            welcome_prompts((), CHUNKS, SuggestionWords((), ())), []
+        )
+
+
 class TestSessionPool(unittest.TestCase):
     """Keep the pool in memory until the session's passages change."""
 
@@ -349,6 +400,9 @@ class TestSessionPool(unittest.TestCase):
                 suggestion_templates=TEMPLATES
             ),
         )
+        session._suggestion_words = lambda: rag.RAGSession._suggestion_words(
+            session
+        )
         words = SuggestionWords(("sleep quality",), ("MRI",))
         with unittest.mock.patch.object(
             rag, "suggestion_words", return_value=words
@@ -363,6 +417,51 @@ class TestSessionPool(unittest.TestCase):
             "What do the papers say about sleep quality?",
             [item.question for item in first],
         )
+
+    def test_welcome_uses_the_pool_unless_the_user_set_headings(self) -> None:
+        """Share the pool, and keep headings the user wrote in Settings."""
+
+        from kilin import rag
+
+        packaged = SimpleNamespace(welcome_prompts=("Fixed heading?",))
+        config = SimpleNamespace(
+            welcome_prompts=("Fixed heading?",),
+            welcome_templates=("What about {topic}?",),
+            suggestion_templates=TEMPLATES,
+        )
+        session = SimpleNamespace(
+            _closed=False,
+            _suggestion_pool=None,
+            chunks=list(CHUNKS),
+            source_cards=None,
+            project=SimpleNamespace(
+                indexes=Path("/unused"),
+                profile=SimpleNamespace(type_id="literature"),
+            ),
+            _ask_router=Mock(),
+            router_model="small",
+            _behavior_config=lambda: config,
+        )
+        session._suggestion_words = lambda: rag.RAGSession._suggestion_words(
+            session
+        )
+        words = SuggestionWords(("sleep quality",), ())
+        with (
+            unittest.mock.patch.object(
+                rag, "suggestion_words", return_value=words
+            ) as pick,
+            unittest.mock.patch.object(
+                rag, "project_type", return_value=packaged
+            ),
+        ):
+            self.assertEqual(
+                rag.RAGSession.welcome_prompts(session),
+                ["What about sleep quality?"],
+            )
+            rag.RAGSession.question_suggestions(session)
+            self.assertEqual(pick.call_count, 1)
+            config.welcome_prompts = ("My own heading?",)
+            self.assertEqual(rag.RAGSession.welcome_prompts(session), [])
 
 
 if __name__ == "__main__":

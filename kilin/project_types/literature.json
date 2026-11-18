@@ -519,6 +519,12 @@
     "What would you like to compare in the literature?",
     "Which finding should we investigate?"
   ],
+  "welcome_templates": [
+    "What would you like to know about {topic}?",
+    "Which finding in {file} should we look at first?",
+    "Shall we compare what these papers say about {topic}?",
+    "Which evidence on {topic} are you looking for?"
+  ],
   "suggestions": [
     "Turn a paper into a Nature research briefing",
     "Summarize what the papers say about …",

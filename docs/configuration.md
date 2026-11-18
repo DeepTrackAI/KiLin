@@ -352,6 +352,16 @@ The empty chat picks three intents and one of their questions at random;
 clicking one fills the question box, so Enter sends it. Without sources,
 or with fewer than three questions, the fixed `suggestions` fill the rest.
 
+`welcome_templates` is a list of fill-in headings for the top of an empty
+chat, such as `"What would you like to know about {topic}?"`, with the same
+placeholders. They are filled from the same pool, one heading per
+template, and the empty chat shows one of them at random. The fixed
+`welcome_prompts` are shown instead when the project has no sources, when
+no template can be filled, or when the project's own settings change the
+welcome prompts, so a user's own headings always win. In short, the fixed
+`welcome_prompts` and `suggestions` are the generic examples of a type,
+and the templates turn them into prompts about one project's sources.
+
 Every packaged type also has an `assistant_help` intent, routed by
 shortcuts such as "What can you do for me?" and "help". Its
 `assistant_guide` tool answers with one of these questions per intent, so
