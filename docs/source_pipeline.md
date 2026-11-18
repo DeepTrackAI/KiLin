@@ -125,11 +125,19 @@ It does **not execute source files or notebook cells**.
 | `sources_pdf.py` | Page-oriented selectable PDF text; page/section coordinates |
 | `sources_docx.py` | Word body text in reading order; Markdown heading sections |
 | `sources_doc.py` | Old Word 97-2003 body text in reading order; no headings |
-| `sources_js.py` | JavaScript top-level functions and classes, class methods as children, comments kept with their declaration |
+| `sources_js.py` | JavaScript line-leading functions, classes, and direct methods; lexical masking and balanced braces prevent spurious declarations and scope crossings |
 | `sources_tex.py` | LaTeX front matter and sections at `\part` to `\subsubsection`; setup before `\begin{document}` left out |
 | `sources_bib.py` | BibTeX entries and macros as independently indexed units with citation keys |
 | `sources_bbl.py` | Compiled LaTeX `\bibitem` references with original line and key provenance |
 | `sources_txt.py` | Nonblank paragraph text units |
+
+JavaScript extraction uses the internal `_js_lex.py` scanner to keep
+comments, strings, template literals, and likely regex literals out of
+structural matching. It preserves source offsets and balances braces to
+separate declarations from unrelated statements. This is a conservative
+heuristic, not an ECMAScript parser: inline/mixed-line declarations,
+dynamic code, and executable template interpolations are not fully
+analyzed. Unrecognized text remains searchable as source context.
 
 Word title and author properties are read separately for literature
 search headers and the paper-summary tool. The property reader handles OLE

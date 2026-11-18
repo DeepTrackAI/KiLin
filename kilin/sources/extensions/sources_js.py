@@ -1,23 +1,24 @@
-"""Partition JavaScript text at top-level declarations.
+"""Partition JavaScript text into declarations and surrounding context.
 
-The extractor recognizes functions, classes and functions assigned to
-``const``, ``let`` or ``var`` that start a line, with or without
-``export`` or ``async``, and the methods of a class. A comment block right
-above a declaration stays with it. Text between declarations is kept as
-context. Like the MATLAB reader, this is a line-pattern reader, not a
-JavaScript parser: a declaration that does not start a line, or code that
-builds functions at run time, is kept as context. No code is executed.
+The extractor recognizes line-leading top-level functions, classes, and
+functions assigned to variables, including class methods. A lightweight
+lexical scan distinguishes code from comments, strings, templates, and
+regular-expression literals, and matches balanced braces to avoid assigning
+unrelated statements to declarations. Comments above declarations remain
+attached. This is not a JavaScript parser: dynamic constructs, declarations
+embedded in expressions, and methods on the declaration line of a class
+may remain context. No source code is executed.
 
 Key Features
 ------------
 
 - **Declarations**
 
-    Label top-level functions and classes, and the methods of a class.
+    Label functions, classes and class methods at recognizable boundaries.
 
-- **Comments stay attached**
+- **Conservative boundaries**
 
-    Keep the comment block above a declaration in the same unit.
+    Preserve source order and text without inventing code inside literals.
 
 Module Structure
 ----------------
@@ -25,9 +26,6 @@ Module Structure
 - ``extract_source_units``
 
     Return natural units from one JavaScript source file.
-
-Private helpers implement the normalization, validation, and bookkeeping
-used by these operations; they are not added to the package-level API.
 
 Examples
 --------
@@ -39,19 +37,15 @@ Examples
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from pathlib import Path
 import re
 from typing import Final
 
-from kilin.sources.sources import (
-    SourceFile,
-    SourceUnit,
-    _source_unit,
-)
+from kilin.sources.extensions._js_lex import mask_non_code
+from kilin.sources.sources import SourceFile, SourceUnit, _source_unit
 
-__all__ = [
-    "extract_source_units",
-]
+__all__ = ["extract_source_units"]
 
 _NAME: Final[str] = r"([A-Za-z_$][\w$]*)"
 _EXPORT: Final[str] = r"^(?:export\s+(?:default\s+)?)?"
@@ -59,39 +53,32 @@ JS_FUNCTION: Final[re.Pattern[str]] = re.compile(
     _EXPORT + r"(?:async\s+)?function\s*\*?\s*" + _NAME + r"\s*\("
 )
 JS_CLASS: Final[re.Pattern[str]] = re.compile(_EXPORT + r"class\s+" + _NAME)
-# A function stored in a variable: "const f = function", "= (a) =>",
-# "= a =>", or "= (" whose parameters continue on the next lines.
 JS_ASSIGNED_FUNCTION: Final[re.Pattern[str]] = re.compile(
     r"^(?:export\s+)?(?:const|let|var)\s+" + _NAME + r"\s*=\s*(?:async\s+)?"
     r"(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>|\([^)]*$)"
 )
-# A method line inside a class body, such as "  async save(name) {".
 JS_METHOD: Final[re.Pattern[str]] = re.compile(
-    r"^\s+(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?\*?"
+    r"^\s*(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?\*?"
     r"(#?[A-Za-z_$][\w$]*)\s*\([^;]*\)\s*\{"
 )
-# Statements that look like a method line.
 _KEYWORDS: Final[frozenset[str]] = frozenset(
     {"if", "for", "while", "switch", "catch", "function", "return", "with"}
 )
 _COMMENT: Final[re.Pattern[str]] = re.compile(r"^\s*(?://|/\*|\*)")
-# The closing brace of a top-level block starts its line.
-_TOP_LEVEL_END: Final[re.Pattern[str]] = re.compile(r"^[}\]]")
 
 
 def _declaration(line: str) -> tuple[str, str] | None:
-    """Return the kind and name of a top-level declaration line.
+    """Recognize a top-level declaration in a masked source line.
 
     Parameters
     ----------
     line: str
-        One source line.
+        JavaScript line outside comments and literal text.
 
     Returns
     -------
     tuple[str, str] | None
-        ``("js_function", name)`` or ``("js_class", name)``; None for other
-        lines.
+        Source-unit kind and symbol, or None for unrecognized syntax.
 
     """
 
@@ -106,176 +93,316 @@ def _declaration(line: str) -> tuple[str, str] | None:
     return None
 
 
-def _with_comment(lines: list[str], line_number: int, first: int) -> int:
-    """Move a declaration's start up over the comment block right above it.
+def _line_offsets(lines: list[str]) -> list[int]:
+    """Return each source line's starting character offset.
 
     Parameters
     ----------
     lines: list[str]
-        Source lines.
-    line_number: int
-        One-based line of the declaration.
+        Source lines retaining their endings.
+
+    Returns
+    -------
+    list[int]
+        Zero-based offsets aligned with line numbers.
+
+    """
+
+    starts: list[int] = []
+    offset = 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line)
+    return starts
+
+
+def _line_depths(lines: list[str]) -> list[tuple[int, int]]:
+    """Return brace and parenthesis/bracket depths before each line.
+
+    Parameters
+    ----------
+    lines: list[str]
+        Lexically masked source lines.
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        Brace depth and nonbrace nesting depth for each line.
+
+    """
+
+    depths: list[tuple[int, int]] = []
+    braces = 0
+    other = 0
+    for line in lines:
+        depths.append((braces, other))
+        for char in line:
+            if char == "{":
+                braces += 1
+            elif char == "}":
+                braces -= 1
+            elif char in "([":
+                other += 1
+            elif char in ")]":
+                other -= 1
+    return depths
+
+
+def _matching_brace(text: str, opening: int) -> int | None:
+    """Find the matching closing brace in masked JavaScript code.
+
+    Parameters
+    ----------
+    text: str
+        Masked JavaScript source.
+    opening: int
+        Offset of an opening brace.
+
+    Returns
+    -------
+    int | None
+        Matching closing-brace offset or None for incomplete code.
+
+    """
+
+    depth = 0
+    for position in range(opening, len(text)):
+        if text[position] == "{":
+            depth += 1
+        elif text[position] == "}":
+            depth -= 1
+            if depth == 0:
+                return position
+    return None
+
+
+def _declaration_end(
+    text: str, offsets: list[int], line: int, assigned: bool
+) -> int | None:
+    """Find the line closing a declaration without crossing its scope.
+
+    Parameters
+    ----------
+    text: str
+        Offset-preserving masked source.
+    offsets: list[int]
+        Start of each line in the source.
+    line: int
+        One-based declaration line.
+    assigned: bool
+        Whether the declaration begins with a variable assignment.
+
+    Returns
+    -------
+    int | None
+        One-based closing line, or None if the construct is incomplete.
+
+    """
+
+    position = offsets[line - 1]
+    parens = 0
+    brackets = 0
+    arrow = False
+    expression = False
+    while position < len(text):
+        char = text[position]
+        if char == "(":
+            parens += 1
+        elif char == ")":
+            parens -= 1
+        elif char == "[":
+            brackets += 1
+        elif char == "]":
+            brackets -= 1
+        elif parens == 0 and brackets == 0:
+            if char == "=" and text[position:position + 2] == "=>":
+                arrow = True
+                position += 2
+                continue
+            if arrow and not char.isspace():
+                expression = char != "{"
+                arrow = False
+            if char == "{" and not expression:
+                # Parenthesized arrow expressions can contain object
+                # literals; they are handled by the semicolon boundary.
+                closing = _matching_brace(text, position)
+                if closing is None:
+                    return None
+                return bisect_right(offsets, closing)
+            if char == ";" and assigned:
+                return bisect_right(offsets, position)
+            if char == "\n" and assigned and expression:
+                # Without a block or semicolon, let the next declaration
+                # bound the expression instead of guessing its grammar.
+                return None
+        position += 1
+    return None
+
+
+def _with_comment(lines: list[str], line: int, first: int) -> int:
+    """Include immediately preceding line comments or JSDoc lines.
+
+    Parameters
+    ----------
+    lines: list[str]
+        Original source lines.
+    line: int
+        One-based declaration line.
     first: int
-        One-based line the comment may not start before.
+        Earliest line allowed for this partition.
 
     Returns
     -------
     int
-        One-based first line of the comment, or ``line_number`` when there
-        is none.
+        First line of attached comments, or the declaration line.
 
     """
 
-    start = line_number
-    while start - 1 >= first and _COMMENT.match(lines[start - 2]):
-        start -= 1
+    start = line
+    while start - 1 >= first:
+        previous = lines[start - 2].lstrip()
+        if previous.startswith("//") or previous.startswith("/*"):
+            start -= 1
+            continue
+        if previous.startswith("*/"):
+            start -= 1
+            while start - 1 >= first:
+                start -= 1
+                if lines[start - 1].lstrip().startswith("/*"):
+                    break
+            continue
+        if _COMMENT.match(lines[start - 2]):
+            start -= 1
+            continue
+        break
     return start
 
 
-def _block_end(lines: list[str], line_number: int, last: int) -> int:
-    """Return the last line of a top-level declaration.
-
-    Parameters
-    ----------
-    lines: list[str]
-        Source lines.
-    line_number: int
-        One-based line of the declaration.
-    last: int
-        Last one-based line it may reach.
-
-    Returns
-    -------
-    int
-        The line of its closing brace at the start of a line, the
-        declaration line itself when it ends with ``;``, or ``last``.
-
-    """
-
-    if lines[line_number - 1].rstrip().endswith(";"):
-        return line_number
-    for number in range(line_number + 1, last + 1):
-        if _TOP_LEVEL_END.match(lines[number - 1]):
-            return number
-    return last
-
-
 def _partition(
-    path: Path,
     lines: list[str],
-    starts: list[tuple[int, str, str]],
+    starts: list[tuple[int, str, str, int | None]],
     first: int,
     last: int,
     context_kind: str,
-    *,
-    top_level: bool = False,
-) -> list[tuple[int, int, str | None, str | None]]:
-    """Split a line range at declarations, keeping the text between them.
+) -> list[tuple[int, int, str, str | None]]:
+    """Partition whole source lines into declaration and context units.
 
     Parameters
     ----------
-    path: pathlib.Path
-        Relative source path; not used, kept for symmetry with callers.
     lines: list[str]
-        Source lines.
-    starts: list[tuple[int, str, str]]
-        Declaration lines with their kind and name, in order.
+        Original source lines.
+    starts: list[tuple[int, str, str, int | None]]
+        Declaration lines, kinds, names and structural closing lines.
     first: int
-        First one-based line of the range.
+        First source line in this scope.
     last: int
-        Last one-based line of the range.
+        Last source line in this scope.
     context_kind: str
-        Kind of the text between declarations.
-    top_level: bool, optional
-        End each declaration at its closing brace, so code after it is
-        context. Defaults to ``False`` (a method runs to the next one).
+        Kind assigned to intervening code.
 
     Returns
     -------
-    list[tuple[int, int, str | None, str | None]]
-        ``(start, end, kind, name)`` per part, covering the whole range.
+    list[tuple[int, int, str, str | None]]
+        Ordered line ranges covering the scope without overlaps.
 
     """
 
-    del path
-    parts: list[tuple[int, int, str | None, str | None]] = []
+    parts: list[tuple[int, int, str, str | None]] = []
     position = first
-    for index, (line_number, kind, name) in enumerate(starts):
-        start = _with_comment(lines, line_number, position)
+    for index, (line, kind, name, closing) in enumerate(starts):
+        start = _with_comment(lines, line, position)
         if start > position:
             parts.append((position, start - 1, context_kind, None))
-        end = (
-            _with_comment(lines, starts[index + 1][0], line_number + 1) - 1
+        next_line = (
+            _with_comment(lines, starts[index + 1][0], line + 1)
             if index + 1 < len(starts)
-            else last
+            else last + 1
         )
-        closed = _block_end(lines, line_number, end) if top_level else end
-        parts.append((start, closed, kind, name))
-        if closed < end:
-            parts.append((closed + 1, end, context_kind, None))
-        position = end + 1
+        boundary = next_line - 1
+        end = min(closing if closing is not None else boundary, boundary)
+        parts.append((start, end, kind, name))
+        if end < boundary:
+            parts.append((end + 1, boundary, context_kind, None))
+        position = boundary + 1
     if position <= last:
         parts.append((position, last, context_kind, None))
     return parts
 
 
 def _class_unit(
-    path: Path, lines: list[str], start: int, end: int, name: str
+    path: Path,
+    lines: list[str],
+    safe_lines: list[str],
+    depths: list[tuple[int, int]],
+    masked: str,
+    offsets: list[int],
+    first: int,
+    last: int,
+    name: str,
 ) -> SourceUnit | None:
-    """Return a class unit whose children are its methods.
+    """Create a class unit whose direct methods are children.
 
     Parameters
     ----------
     path: pathlib.Path
-        Relative source path.
+        Source path.
     lines: list[str]
-        Source lines.
-    start: int
-        First one-based line of the class, comment included.
-    end: int
-        Last one-based line of the class.
+        Original text lines.
+    safe_lines: list[str]
+        Masked lines with code delimiters preserved.
+    depths: list[tuple[int, int]]
+        Brace and parenthesis/bracket depth at each line start.
+    masked: str
+        Full masked source for matching method braces.
+    offsets: list[int]
+        Source line offsets.
+    first: int
+        First one-based line of this class's unit.
+    last: int
+        Last one-based line of the class unit.
     name: str
-        Class name.
+        Declared class name.
 
     Returns
     -------
     SourceUnit | None
-        The class with one child per method and its other lines as context;
-        None when the range is blank.
+        Class unit with immediate methods and intervening context.
 
     """
 
-    methods = [
-        (number, "js_method", match.group(1))
-        for number in range(start + 1, end + 1)
-        if (match := JS_METHOD.match(lines[number - 1])) is not None
-        and match.group(1) not in _KEYWORDS
-    ]
+    methods = []
+    for number in range(first + 1, last + 1):
+        if depths[number - 1] != (1, 0):
+            continue
+        match = JS_METHOD.match(safe_lines[number - 1])
+        if match is None or match.group(1) in _KEYWORDS:
+            continue
+        end = _declaration_end(masked, offsets, number, False)
+        methods.append((number, "js_method", match.group(1), end))
+
+    if methods:
+        number, kind, method, end = methods[-1]
+        if end is not None and all(
+            line.strip() in {"", "}", "};"}
+            for line in safe_lines[end:last]
+        ):
+            methods[-1] = (number, kind, method, last)
+
     children = tuple(
         unit
-        for first, last, kind, method in _partition(
-            path, lines, methods, start, end, "js_class_context"
+        for start, end, kind, method in _partition(
+            lines, methods, first, last, "js_class_context"
         )
         if (
             unit := _source_unit(
-                path,
-                lines,
-                first,
-                last,
-                kind=str(kind),
+                path, lines, start, end, kind=kind,
                 symbol=None if method is None else f"{name}.{method}",
             )
-        )
-        is not None
+        ) is not None
     )
     return _source_unit(
-        path,
-        lines,
-        start,
-        end,
-        kind="js_class",
-        symbol=name,
-        children=children if len(children) > 1 else (),
+        path, lines, first, last, kind="js_class", symbol=name,
+        children=children if methods else (),
     )
 
 
@@ -285,40 +412,47 @@ def extract_source_units(source_file: SourceFile) -> list[SourceUnit]:
     Parameters
     ----------
     source_file: SourceFile
-        Source file read as text.
+        JavaScript source file read as text.
 
     Returns
     -------
     list[SourceUnit]
-        Top-level functions, classes with their methods, and the context
-        between them, in source order.
+        Declarations and context, covering source lines in order.
 
     """
 
     lines = source_file.text.splitlines(keepends=True)
     if not lines:
         return []
-    path = source_file.path
-    starts = [
-        (number, *found)
-        for number, line in enumerate(lines, start=1)
-        if (found := _declaration(line)) is not None
-    ]
+    masked = mask_non_code(source_file.text)
+    safe_lines = masked.splitlines(keepends=True)
+    offsets = _line_offsets(lines)
+    depths = _line_depths(safe_lines)
+    declarations: list[tuple[int, str, str, int | None]] = []
+    for number, line in enumerate(safe_lines, start=1):
+        if depths[number - 1] != (0, 0):
+            continue
+        found = _declaration(line)
+        if found is None:
+            continue
+        kind, name = found
+        assigned = JS_ASSIGNED_FUNCTION.match(line) is not None
+        end = _declaration_end(masked, offsets, number, assigned)
+        declarations.append((number, kind, name, end))
+
     units: list[SourceUnit] = []
     for first, last, kind, name in _partition(
-        path,
-        lines,
-        starts,
-        1,
-        len(lines),
-        "js_module_context",
-        top_level=True,
+        lines, declarations, 1, len(lines), "js_module_context"
     ):
         if kind == "js_class" and name is not None:
-            unit = _class_unit(path, lines, first, last, name)
+            unit = _class_unit(
+                source_file.path, lines, safe_lines, depths, masked,
+                offsets, first, last, name,
+            )
         else:
             unit = _source_unit(
-                path, lines, first, last, kind=str(kind), symbol=name
+                source_file.path, lines, first, last,
+                kind=kind, symbol=name,
             )
         if unit is not None:
             units.append(unit)

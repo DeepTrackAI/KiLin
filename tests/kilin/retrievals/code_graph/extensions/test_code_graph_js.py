@@ -73,5 +73,69 @@ class TestJavaScriptCodeGraphExtension(unittest.TestCase):
         self.assertEqual(relations, {cg.CodeRelation("a.a", "calls", "b")})
 
 
+    def test_one_line_function_does_not_own_module_call(self) -> None:
+        text = (
+            "function first() { return 1; }\n"
+            "second();\n"
+            "function second() { return 2; }\n"
+        )
+        file = source_file("mini.js", text)
+        graph = cg.build_code_graph([file], extract_source_units([file]))
+        self.assertIn(
+            cg.CodeRelation("mini", "calls", "mini.second"),
+            graph.relations,
+        )
+        self.assertNotIn(
+            cg.CodeRelation("mini.first", "calls", "mini.second"),
+            graph.relations,
+        )
+
+    def test_regex_literals_do_not_invent_calls(self) -> None:
+        text = (
+            "const pattern = /helper(foo)/;\n"
+            "function helper(x) { return x; }\n"
+            "function real() { return /helper(bar)/.test(1); }\n"
+        )
+        file = source_file("mini.js", text)
+        graph = cg.build_code_graph([file], extract_source_units([file]))
+        self.assertFalse(
+            any(
+                relation.relation == "calls"
+                and relation.target.endswith("helper")
+                for relation in graph.relations
+            )
+        )
+
+    def test_nested_object_signature_is_not_a_call(self) -> None:
+        text = (
+            "class Handler {\n"
+            "  run() {\n"
+            "    const item = {\n"
+            "      fake() { return helper(); }\n"
+            "    };\n"
+            "    return item;\n"
+            "  }\n"
+            "}\n"
+            "function helper() {}\n"
+        )
+        file = source_file("mini.js", text)
+        graph = cg.build_code_graph([file], extract_source_units([file]))
+        self.assertIn(
+            cg.CodeRelation("mini.Handler.run", "calls", "mini.helper"),
+            graph.relations,
+        )
+        self.assertFalse(
+            any(
+                relation.relation == "calls"
+                and relation.target.endswith("fake")
+                for relation in graph.relations
+            )
+        )
+        self.assertFalse(
+            any(entity.name.endswith("Handler.fake")
+                for entity in graph.entities)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

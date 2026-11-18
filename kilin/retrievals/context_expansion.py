@@ -111,6 +111,8 @@ _FUNCTION_KINDS = {
     "matlab_function",
     "python_function",
     "python_method",
+    "js_function",
+    "js_method",
 }
 
 # Relationship phrases influence deterministic graph-context expansion.
@@ -182,7 +184,9 @@ SOURCE_SEARCH_RESULTS = require_default_nonnegative_int(
 _SOURCE_SEARCH_OTHERS = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_OTHERS", "RETRIEVAL"
 )
-_MODULE_CONTEXT_KINDS = {"python_module_context", "matlab_file_context"}
+_MODULE_CONTEXT_KINDS = {
+    "python_module_context", "matlab_file_context", "js_module_context"
+}
 # Dotted code references in prose ("lexical_terms", "kilin.lexical_search").
 _CODE_REFERENCE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_]\w*)*")
 # Words that ask about documentation rather than how the code works.
@@ -192,7 +196,7 @@ _DOCUMENTATION_WORDS = require_default_lowercase_words(
 # Chunk kinds of prose and notebooks: Markdown files, notebook cells
 # (tutorial examples rather than the implementation), plain text, and PDFs.
 _DOCUMENTATION_KIND_PREFIXES = ("markdown_", "notebook_", "text_", "pdf_")
-_CLASS_KINDS = {"matlab_class", "python_class"}
+_CLASS_KINDS = {"matlab_class", "python_class", "js_class"}
 _WORD = re.compile(r"[A-Za-z0-9]+")
 # Words used in plain prose that introduce a code name ("the reply method").
 _CODE_NOUNS = ("function", "method", "class")
@@ -668,7 +672,7 @@ def _explicit_functions(
         # A plain word names a function only when it is unambiguous: one
         # top-level function, not a method, and longer than two letters.
         plain_word_ok = (
-            entity.kind != "python_method"
+            entity.kind not in {"python_method", "js_method"}
             and leaf_counts[leaf] == 1
             and len(leaf) > 2
         )

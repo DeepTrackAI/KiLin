@@ -68,9 +68,10 @@ semantic score as though they represented the same scale.
 
 `code_graph/code_graph.py` represents code entities/relations and constructs
 an indexed graph from source units. The Python extension uses AST-oriented
-heuristics for definitions, references and imports; the MATLAB extension
-uses text patterns. These are useful structured hints, **not complete
-semantic call graphs** and not a code execution or static type checker.
+heuristics for definitions, references and imports; MATLAB uses text
+patterns. JavaScript uses lexical masking and source-unit boundaries for
+plain calls and inheritance. These are useful structured hints, **not
+complete semantic call graphs** or code execution or static type checking.
 
 `retrieval_code.py` resolves likely code entities in a question and finds
 related chunks. The channel runs only when the question names a file,
@@ -78,6 +79,13 @@ function, or class (`names_code` in `context_expansion.py`). For ordinary
 prose, it would match common words to identifiers and introduce noise.
 Graph structure and chunk provenance must agree: a stale graph can misdirect
 named-function context even when semantic vectors remain readable.
+
+JavaScript entities (`js_function`, `js_method`, `js_class`) participate in
+explicit-name, caller/callee, and class-method expansion. Retrieved
+`js_module_context` passages can bridge to the file's top-level functions.
+Graph extraction does not resolve object calls, dynamic dispatch, or
+executable template interpolations; such relationships require source
+inspection rather than an inferred graph edge.
 
 Expansion also follows retrieved documentation, module headers, and test
 calls to implementing functions. Exact qualified names and uniquely resolved

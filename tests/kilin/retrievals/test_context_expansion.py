@@ -49,6 +49,43 @@ class TestContextExpansionPlanning(unittest.TestCase):
             ),
         )
 
+    def test_javascript_method_uses_the_same_word_guard_as_python(
+        self,
+    ) -> None:
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("web.App.reply", "js_method", Path("web/app.js")),
+            ),
+            relations=(),
+        )
+        ordinary = context_expansion.plan_context_expansion(
+            "I need a reply to the user.", graph
+        )
+        named = context_expansion.plan_context_expansion(
+            "Explain the reply method.", graph
+        )
+        self.assertEqual(ordinary.functions, ())
+        self.assertEqual(named.functions, ("web.App.reply",))
+
+    def test_javascript_module_context_bridges_to_functions(self) -> None:
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("web.app", "source_file", Path("web/app.js")),
+                CodeEntity(
+                    "web.app.start", "js_function", Path("web/app.js")
+                ),
+            ),
+            relations=(),
+        )
+        header = ranked(
+            chunk("header", path="web/app.js", kind="js_module_context")
+        )
+        plan = context_expansion.plan_context_expansion(
+            "What does the source module provide?", graph, (header,)
+        )
+        self.assertIn("web.app.start", plan.related_functions)
+        self.assertIn("module functions", plan.signals)
+
     def test_no_explicit_match_gives_none_signal(self) -> None:
         """Unrecognized prose must not invent a file or function reference.
 

@@ -109,6 +109,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/sources/extensions/sources_doc.py`](../kilin/sources/extensions/sources_doc.py) | Read the body text of old binary Word `.doc` files. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_docx.py`](../kilin/sources/extensions/sources_docx.py) | Read Word `.docx` files as Markdown-style text with heading sections. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_ipynb.py`](../kilin/sources/extensions/sources_ipynb.py) | Extract code and Markdown cell text from notebook JSON. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
+| [`kilin/sources/extensions/_js_lex.py`](../kilin/sources/extensions/_js_lex.py) | Mask JavaScript comments and literals while preserving source offsets. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_js.py`](../kilin/sources/extensions/sources_js.py) | Partition JavaScript text at top-level declarations. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_m.py`](../kilin/sources/extensions/sources_m.py) | Partition MATLAB text using recognizable declaration boundaries. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_md.py`](../kilin/sources/extensions/sources_md.py) | Partition Markdown text at ATX-style heading lines. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
@@ -212,12 +213,12 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Per-tool README | 50 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 30 |
-| Source pipeline | 19 |
+| Source pipeline | 20 |
 | Tool extension contracts | 25 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 175.**
+**Total production Python modules: 176.**
 
 ## Non-Python resources and UI assets
 

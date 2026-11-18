@@ -22,6 +22,10 @@ from kilin.chunking import chunk_source_units
 from kilin.project_type import project_type
 from kilin.repository import scan_repository
 from kilin.retrievals.code_graph import CodeRelation, build_code_graph
+from kilin.retrievals.context_expansion import (
+    names_code,
+    plan_context_expansion,
+)
 from kilin.sources import extract_source_units, read_repository_files
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "code_repo"
@@ -43,7 +47,8 @@ class TestCodeFixtureRepository(unittest.TestCase):
         cls.files = read_repository_files(report)
         cls.units = extract_source_units(cls.files)
         cls.chunks = chunk_source_units(cls.units, count_tokens=_words)
-        cls.relations = set(build_code_graph(cls.files, cls.units).relations)
+        cls.graph = build_code_graph(cls.files, cls.units)
+        cls.relations = set(cls.graph.relations)
 
     def test_every_file_is_selected_and_read(self) -> None:
         on_disk = {
@@ -137,6 +142,32 @@ class TestCodeFixtureRepository(unittest.TestCase):
                 self.assertFalse(
                     any(target.endswith(name) for target in targets)
                 )
+
+
+    def test_javascript_functions_expand_to_callers_and_callees(self) -> None:
+        js = "js.calculator_js"
+        plan = plan_context_expansion(
+            "Which functions call js_function_A?", self.graph
+        )
+        self.assertTrue(names_code("Explain js_function_A", self.graph))
+        self.assertEqual(plan.functions, (f"{js}.js_function_A",))
+        self.assertTrue(plan.relationship)
+        self.assertIn(
+            f"{js}.JsChildClass.js_method_C", plan.related_functions
+        )
+        plain = plan_context_expansion("Explain js_function_A", self.graph)
+        self.assertIn(f"{js}.js_function_B", plain.related_functions)
+
+    def test_javascript_class_expands_to_its_methods(self) -> None:
+        plan = plan_context_expansion(
+            "Which methods belong to JsChildClass?", self.graph
+        )
+        self.assertEqual(plan.functions, ())
+        self.assertIn("exact class", plan.signals)
+        self.assertIn(
+            "js.calculator_js.JsChildClass.js_method_C",
+            plan.related_functions,
+        )
 
 
 if __name__ == "__main__":

@@ -2,11 +2,11 @@
 
 This extension finds which functions a JavaScript function or method calls
 and which class a class extends. It reuses the units of the JavaScript
-reader, so a call belongs to the function, method or top-level code it
-appears in. Comments and string literals are skipped. It uses regular
-expressions and known entity names, not a JavaScript parser: calls through
-an object (``store.save()``), callbacks passed by name and code built at
-run time are not followed. The source is never executed by this hook.
+reader, so calls belong to the functions, methods or module context in
+which they appear. Shared lexical masking excludes comments, strings,
+templates and likely regex literals. Patterns are not a JavaScript parser:
+calls through objects (``store.save()``), callbacks passed by name, and
+code constructed at runtime are not followed. No source is executed.
 
 Key Features
 ------------
@@ -46,18 +46,13 @@ from kilin.retrievals.code_graph.code_graph import (
     _resolve_name,
 )
 from kilin.sources.extensions import sources_js
+from kilin.sources.extensions._js_lex import mask_non_code
 from kilin.sources.sources import SourceFile, SourceUnit
 
 __all__ = [
     "extract_code_relations",
 ]
 
-# Comments and string literals, removed before looking for calls.
-_SKIPPED: Final[re.Pattern[str]] = re.compile(
-    r"//[^\n]*|/\*.*?\*/"
-    r"|\"(?:\\.|[^\"\\\n])*\"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`",
-    re.DOTALL,
-)
 # A plain call, not one through an object such as "console.log(".
 _CALL: Final[re.Pattern[str]] = re.compile(
     r"(?<![\w$.#])([A-Za-z_$][\w$]*)\s*\("
@@ -92,6 +87,38 @@ _KEYWORDS: Final[frozenset[str]] = frozenset(
 )
 
 
+def _opens_declaration_body(text: str, start: int) -> bool:
+    """Distinguish a method signature from an ordinary call.
+
+    Parameters
+    ----------
+    text: str
+        Lexically masked source-unit text.
+    start: int
+        Offset immediately after a candidate call's opening parenthesis.
+
+    Returns
+    -------
+    bool
+        Whether its matching parenthesis precedes a declaration body.
+
+    """
+
+    depth = 1
+    position = start
+    while position < len(text) and depth:
+        if text[position] == "(":
+            depth += 1
+        elif text[position] == ")":
+            depth -= 1
+        position += 1
+    if depth:
+        return False
+    while position < len(text) and text[position].isspace():
+        position += 1
+    return position < len(text) and text[position] == "{"
+
+
 def extract_code_relations(
     source_file: SourceFile,
     known: dict[str, set[str]],
@@ -120,6 +147,7 @@ def extract_code_relations(
 
     relations: set[CodeRelation] = set()
     module = _module_name(source_file.path)
+    masked_lines = mask_non_code(source_file.text).splitlines(keepends=True)
     # Each unit with the graph name of the code around it: a class line
     # or field belongs to its class, other code between declarations to
     # the file.
@@ -130,8 +158,9 @@ def extract_code_relations(
         unit, around = pending.pop()
         # Graph names: module.function, module.Class, module.Class.method.
         owner = around if unit.symbol is None else f"{module}.{unit.symbol}"
+        text = "".join(masked_lines[unit.start_line - 1:unit.end_line])
         if unit.kind == "js_class":
-            base = _EXTENDS.search(_SKIPPED.sub(" ", unit.text))
+            base = _EXTENDS.search(text)
             if base is not None:
                 relations.add(
                     CodeRelation(
@@ -140,11 +169,15 @@ def extract_code_relations(
                 )
             if unit.children:
                 pending.extend((child, owner) for child in unit.children)
-                continue
+            # A class declaration is not a call. Only recognized class
+            # context children can contribute initializer calls.
+            continue
         own_name = owner.rsplit(".", 1)[-1]
-        for call in _CALL.finditer(_SKIPPED.sub(" ", unit.text)):
+        for call in _CALL.finditer(text):
             target = call.group(1)
             if target in _KEYWORDS or target == own_name:
+                continue
+            if _opens_declaration_body(text, call.end()):
                 continue
             relations.add(
                 CodeRelation(
