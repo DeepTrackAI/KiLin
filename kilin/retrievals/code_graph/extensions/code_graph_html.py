@@ -1,12 +1,13 @@
 """Link an HTML page to the scripts it loads and the functions it calls.
 
 In a project that reads HTML as code, a page's ``<script src="...">``
-tags become ``imports`` of those script files, and inline event handlers
-such as ``onclick="save()"`` become ``calls`` of those functions, so a
+tags become ``imports`` of those script files, and leading direct calls
+in inline event handlers, such as ``onclick="save()"``, become ``calls``, so a
 question about a JavaScript function also finds the page that uses it.
 Handlers attached from JavaScript (``addEventListener``) are found by the
-JavaScript extension instead. HTML read as page text has no tags, so this
-hook then finds nothing. The page is never rendered or run.
+JavaScript extension instead. Actual HTML tags are distinguished from
+comments, script contents and inert templates. The page is never rendered
+or run. This hook does not analyze arbitrary JavaScript handler expressions.
 
 Key Features
 ------------
@@ -39,6 +40,7 @@ Examples
 
 from __future__ import annotations
 
+from html.parser import HTMLParser
 from pathlib import PurePosixPath
 import posixpath
 import re
@@ -55,15 +57,73 @@ __all__ = [
     "extract_code_relations",
 ]
 
-_SCRIPT: Final[re.Pattern[str]] = re.compile(
-    r"<script\b[^>]*\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE
+# Recognize only the leading direct call in an inline event handler.
+_HANDLER_CALL: Final[re.Pattern[str]] = re.compile(
+    r"^\s*(?:return\s+)?([A-Za-z_$][\w$]*)\s*\("
 )
-_HANDLER: Final[re.Pattern[str]] = re.compile(
-    r"\bon[a-z]+\s*=\s*[\"']\s*(?:return\s+)?([A-Za-z_$][\w$]*)\s*\(",
-    re.IGNORECASE,
-)
-# A script from another site or a packaged resource is not in the project.
+# External script references are not local repository paths.
 _EXTERNAL: Final[re.Pattern[str]] = re.compile(r"^(?:[a-z][\w+.-]*:|//)", re.I)
+_INERT: Final[frozenset[str]] = frozenset({"template", "noscript"})
+
+
+class _MarkupLinks(HTMLParser):
+    """Collect real HTML script tags and inline event-handler attributes.
+
+    HTMLParser distinguishes actual tags from comments and script text.
+    Template contents are inert and therefore do not load scripts or
+    attach event handlers until separately instantiated.
+
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty collection of links."""
+
+        super().__init__(convert_charrefs=True)
+        self.scripts: list[str] = []
+        self.handlers: list[str] = []
+        self.inert: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        """Collect links from a non-inert element.
+
+        Parameters
+        ----------
+        tag: str
+            Lowercase HTML element name.
+        attrs: list[tuple[str, str | None]]
+            Parsed attributes, with character references resolved.
+
+        """
+
+        if tag in _INERT:
+            self.inert.append(tag)
+            return
+        if self.inert:
+            return
+        for name, value in attrs:
+            if value is None:
+                continue
+            if tag == "script" and name == "src":
+                self.scripts.append(value)
+            elif name.startswith("on") and name[2:].isalpha():
+                match = _HANDLER_CALL.match(value)
+                if match is not None:
+                    self.handlers.append(match.group(1))
+
+    def handle_endtag(self, tag: str) -> None:
+        """Close an inert element without processing its descendants.
+
+        Parameters
+        ----------
+        tag: str
+            Lowercase HTML element name.
+
+        """
+
+        if tag in self.inert:
+            del self.inert[len(self.inert) - 1 - self.inert[::-1].index(tag)]
 
 
 def extract_code_relations(
@@ -90,8 +150,11 @@ def extract_code_relations(
     relations: set[CodeRelation] = set()
     page = _module_name(source_file.path)
     folder = PurePosixPath(source_file.path.as_posix()).parent
-    for script in _SCRIPT.finditer(source_file.text):
-        location = script.group(1).split("?", 1)[0].split("#", 1)[0]
+    markup = _MarkupLinks()
+    markup.feed(source_file.text)
+    markup.close()
+    for location in markup.scripts:
+        location = location.split("?", 1)[0].split("#", 1)[0]
         if not location or _EXTERNAL.match(location):
             continue
         path = posixpath.normpath(
@@ -104,8 +167,8 @@ def extract_code_relations(
         relations.add(
             CodeRelation(page, "imports", _module_name(PurePosixPath(path)))
         )
-    for handler in _HANDLER.finditer(source_file.text):
+    for handler in markup.handlers:
         relations.add(
-            CodeRelation(page, "calls", _resolve_name(handler.group(1), known))
+            CodeRelation(page, "calls", _resolve_name(handler, known))
         )
     return relations

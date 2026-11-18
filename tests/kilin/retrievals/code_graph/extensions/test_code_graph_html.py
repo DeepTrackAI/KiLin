@@ -39,6 +39,39 @@ class TestHtmlCodeGraphExtension(unittest.TestCase):
             },
         )
 
+    def test_comments_templates_and_script_literals_are_not_links(
+        self,
+    ) -> None:
+        page = source_file(
+            "web/index.html",
+            '<!-- <script src="ghost.js"></script> -->\n'
+            '<!-- <button onclick="ghost()">x</button> -->\n'
+            '<template><script src="inert.js"></script>'
+            '<button onclick="inert()">x</button></template>\n'
+            '<script>const html = `<script src="fake.js"></script>`;'
+            'const handler = `onclick="fake()"`;</script>\n'
+            '<button data-onclick="fake()">x</button>\n'
+            '<button onclick="return save()">Save</button>\n',
+        )
+        self.assertEqual(
+            html.extract_code_relations(page, {"save": {"web.save"}}),
+            {cg.CodeRelation("web.index", "calls", "web.save")},
+        )
+
+    def test_unquoted_src_and_handler_entities(self) -> None:
+        page = source_file(
+            "web/index.html",
+            '<script src=app.js></script>'
+            '<button onclick="save&#40;1&#41;">Save</button>',
+        )
+        self.assertEqual(
+            html.extract_code_relations(page, {}),
+            {
+                cg.CodeRelation("web.index", "imports", "web.app"),
+                cg.CodeRelation("web.index", "calls", "save"),
+            },
+        )
+
     def test_page_text_has_no_relations(self) -> None:
         page = source_file("notes.html", "# Notes\n\nSave the file.\n")
         self.assertEqual(html.extract_code_relations(page, {}), set())

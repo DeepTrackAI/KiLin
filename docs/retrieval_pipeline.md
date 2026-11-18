@@ -80,13 +80,6 @@ prose, it would match common words to identifiers and introduce noise.
 Graph structure and chunk provenance must agree: a stale graph can misdirect
 named-function context even when semantic vectors remain readable.
 
-JavaScript entities (`js_function`, `js_method`, `js_class`) participate in
-explicit-name, caller/callee, and class-method expansion. Retrieved
-`js_module_context` passages can bridge to the file's top-level functions.
-Graph extraction does not resolve object calls, dynamic dispatch, or
-executable template interpolations; such relationships require source
-inspection rather than an inferred graph edge.
-
 Expansion also follows retrieved documentation, module headers, and test
 calls to implementing functions. Exact qualified names and uniquely resolved
 suffixes are preferred. An unresolved qualified name can still suggest a
