@@ -216,6 +216,46 @@ class TestReferenceEntries(unittest.TestCase):
         self.assertTrue(entries[1].startswith("Smith, J. A., & Lee"))
         self.assertTrue(entries[2].startswith("van den Heuvel"))
 
+    def test_short_author_year_list_keeps_titles_with_authors(self) -> None:
+        # A date at the end of the author line must not end an eLife
+        # entry, even when there are fewer than five references.
+        text = (
+            "References\n"
+            "Bates AS, Costa M. 2020.\n"
+            "A long article on brain science in eLife volume 9.\n"
+            "Claudi F, Petrucco L. 2019.\n"
+            "A research tool for neuroscience atlases in JOSS.\n"
+            "Hunter JD. 2007.\n"
+            "Matplotlib for scientific graphics in CiSE volume 9.\n"
+        )
+        entries = numbered_reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual([(e.number, e.printed) for e in entries],
+                         [(1, False), (2, False), (3, False)])
+        self.assertIn("A long article", entries[0].text)
+        self.assertNotIn("Claudi", entries[0].text)
+        self.assertIn("A research tool", entries[1].text)
+        self.assertIn("Matplotlib", entries[2].text)
+
+        # A two-entry author-year list needs the same protection.
+        two = "References\n" + "\n".join(text.splitlines()[1:5])
+        self.assertEqual(
+            len(numbered_reference_entries((chunk("a", two),), LAYOUT)),
+            2,
+        )
+
+    def test_year_in_title_is_not_author_year_header(self) -> None:
+        # A year after the title is a standard reference-list end, not
+        # evidence that all entries should be split only at their heads.
+        text = (
+            "References\n"
+            "Smith, J. A study of cells. Nature 1, 2-3 (2019).\n"
+            "Lee, K. A study of tissue. Science 4, 5-6 (2020).\n"
+            "Short fragment (2021).\n"
+        )
+        entries = reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual(len(entries), 2)
+        self.assertTrue(entries[1].endswith("(2020)."))
+
     def test_elife_list(self) -> None:
         # eLife: "Surname II, ... YEAR." heads, the year ending a line of
         # authors, numbers broken off PMIDs, DOIs and page ranges, a page

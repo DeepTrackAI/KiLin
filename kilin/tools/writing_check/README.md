@@ -156,7 +156,8 @@ A suggested change is dropped, not reported, when its original
 words are not in the paragraph, when nothing changes, or when it changes
 numbers, negations, citation placeholders (`[cite]`, `(ref)`, ...) or
 author-year citations ("(Smith et al., 2020)", compared by the works they
-cite, so moving one into the sentence is allowed), hedges
+cite, so moving one into the sentence is allowed; distinct organization
+names are preserved), hedges
 or modal verbs ("virtually", "approximately", "would", "may", ...), removes
 a defined acronym or preferred term, or writes a term form the document
 does not use, or when it quotes the surrounding sentences instead of the

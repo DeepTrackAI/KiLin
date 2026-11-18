@@ -49,8 +49,10 @@ For "check the references of the Smith paper", the tool:
    "(Smith et al., 2020; Lee and Wu 2019a, b)", with "e.g.", "see" or a
    page) and in the sentence ("Smith and Lee (2020)", "Smith et al.
    (2020a, 2021)"). Each cited work is resolved to the entry with the same
-   first author (last word of the surname, without accents or case) and
-   year, then narrowed by the second author and the number of authors;
+   first author (last word of a personal surname, without accents or
+   case; full normalized name for an organization) and year. Known second
+   authors and author counts must agree; incomplete entries remain
+   candidates rather than overriding contradictory author information;
    entries of the same first author and year without a printed suffix are
    given "a", "b", ... in list order, as these styles print them. This
    style is used when more author-year citations resolve than numbered

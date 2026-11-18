@@ -223,6 +223,23 @@ class TestAuthorYear(unittest.TestCase):
         scan = find_citations(passages, 7, None, RULES)
         self.assertEqual(scan.style, STYLE_NONE)
 
+    def test_incompatible_author_lists_are_not_cited(self) -> None:
+        entries = (
+            (1, "Brown, A. (2018). A network study. J 1, 2."),
+            (2, "Smith, J., & Wu, C. (2020). A different study. J 2, 3."),
+        )
+        passages = (chunk(
+            "a",
+            "Brown (2018) identified networks.\n"
+            "Smith and Lee (2020) investigated them too.\n",
+        ),)
+        scan = find_citations(passages, 2, None, RULES, entries)
+        self.assertEqual(scan.style, STYLE_AUTHOR_YEAR)
+        self.assertEqual([citation.numbers for citation in scan.citations],
+                         [(1,)])
+        self.assertEqual(scan.unresolved, ("Smith and Lee, 2020",))
+        self.assertEqual(scan.uncited, (2,))
+
 
 class TestSuperscripts(unittest.TestCase):
     """Superscripts count only when the PDF prints them small."""

@@ -190,8 +190,13 @@ _SURNAME: Final[str] = (
     r"(?:(?i:van|von|der|den|de|del|di|da|du|la|le)\s+)*"
     r"[^\W\d_a-zß-ÿ][\w'’\-]*(?:\s+[^\W\d_a-zß-ÿ][\w'’\-]*)?"
 )
+# The year must follow a sequence of surnames and initials, not a title
+# with a parenthesized year near its end ("Smith, J. Title ... (2020)").
+_APA_INITIALS: Final[str] = r"[A-Z]\.(?:\s*-?\s*[A-Z]\.)*"
+_APA_AUTHOR: Final[str] = rf"{_SURNAME},\s+{_APA_INITIALS}"
 _AUTHOR_YEAR_HEAD: Final[re.Pattern[str]] = re.compile(
-    rf"^{_SURNAME},\s+[A-Z][a-z]?\.[^()]{{0,200}}\((?:19|20)\d\d[a-z]?\)"
+    rf"^{_APA_AUTHOR}(?:,?\s*(?:,|and\s+|&\s+)?{_APA_AUTHOR})*"
+    r"\s*\((?:19|20)\d\d[a-z]?\)"
     rf"|^{_SURNAME}\s+[A-Z]{{1,3}}(?:-[A-Z]{{1,2}})?(?:,\s+{_SURNAME}\s+[A-Z]"
     r"|\.\s+(?:19|20)\d\d[a-z]?\.)"
     r"|^(?:The\s+)?[A-Z][\w-]*(?:\s+[\w-]+){0,4}\.\s+(?:19|20)\d\d[a-z]?\.\s"
@@ -650,9 +655,11 @@ def numbered_reference_entries(
         DOI broken over lines is joined without a space), and at a
         line that starts like an author-year entry ("Smith, J. A., ...
         (2020)", "Smith JA, Lee B, ...", "Hunter JD. 2007.") once the entry
-        before has its year; in a list that prints no numbers and has at
-        least ``layout.numbered_entries_min`` such lines, only there. Numbers
-        broken off a PMID, DOI or page range are joined back, and accents
+        before has its year. In an unnumbered author-year list, a single
+        recognizable entry head is enough to keep following title lines
+        with that entry; ``numbered_entries_min`` applies only to numbered
+        lists. Numbers broken off a PMID, DOI or page range are joined
+        back, and accents
         printed apart from their letters ("Fu¨ rth") are joined. A number
         that does not follow the previous entry's (more than
         ``_NUMBER_STEP_MAX`` ahead, or back) starts no entry: it is part
@@ -690,12 +697,12 @@ def numbered_reference_entries(
     numbered = sum(bool(_ENTRY_START.match(line)) for line in lines)
     lone_numbers = any(_LONE_NUMBER.match(line) for line in lines)
     by_number = numbered >= layout.numbered_entries_min and not lone_numbers
-    # An author-year list (no numbers at all): entries start at their
-    # heads, not after lines that look like ends ("..., et al. 2007." ends
-    # the authors).
-    by_head = not numbered and not lone_numbers and sum(
-        bool(_AUTHOR_YEAR_HEAD.match(line.strip())) for line in lines
-    ) >= layout.numbered_entries_min
+    # Author-year lists need head-based splitting even when short: a
+    # standalone "Hunter JD. 2007." line ends its authors, not its entry.
+    # Keep the numeric threshold for numbered lists only.
+    by_head = not numbered and not lone_numbers and any(
+        _AUTHOR_YEAR_HEAD.match(line.strip()) for line in lines
+    )
 
     # The list in order: entries (printed number or None, lines) and the
     # numbers printed alone, which belong to entries without a number.

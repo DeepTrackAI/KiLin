@@ -14,10 +14,13 @@ unnumbered, alphabetical reference list. This module, shared by
 3. ``resolve`` returns the entries a cited work can be: one when it is
    resolved, several when ambiguous, none when not in the list.
 
-Names are compared by their last word, without accents and case, so
-"(van den Heuvel 2020)", "(Van den Heuvel, 2020)" and "van den Heuvel MP"
-agree. Anything that only looks like a citation ("(Phase 2020)") is found
-too: callers count only markers that resolve.
+Personal names are compared by their last word, without accents and
+case, so "(van den Heuvel 2020)" and "van den Heuvel MP" agree. Known
+author counts and second authors must also agree; an incomplete entry
+may remain a candidate, but a conflicting one cannot. Organization
+names retain all their words, so two development teams remain distinct.
+Anything that only looks like a citation ("(Phase 2020)") may be found:
+callers count only markers that resolve.
 
 Key Features
 ------------
@@ -148,6 +151,15 @@ _ORGANIZATION: Final[re.Pattern[str]] = re.compile(
     rf"\s*(?P<authors>(?:The\s+)?{_UPPER}[\w-]*(?:\s+[\w-]+){{1,5}}),?\s+"
     rf"(?P<years>{_YEARS})\s*"
 )
+# Narrative organizations are recognized before single-name narratives.
+# Require "The ..." or at least three title-case words to avoid treating
+# an ordinary two-author surname group as an organization.
+_ORGANIZATION_NARRATIVE: Final[re.Pattern[str]] = re.compile(
+    rf"(?<![\w(])(?P<authors>"
+    rf"The\s+[\w-]+(?:\s+[\w-]+){{1,5}}"
+    rf"|{_WORD}(?:\s+{_WORD}){{2,5}})\s+"
+    rf"\((?P<years>{_YEARS})(?:{_LOCATOR})?\)"
+)
 _PARENTHESES: Final[re.Pattern[str]] = re.compile(
     r"\((?P<inner>[^()]{4,400})\)"
 )
@@ -202,6 +214,12 @@ _NAME_BEFORE_YEAR: Final[re.Pattern[str]] = re.compile(
     r"(?P<name>[^.,()]{2,80}?)\.?\s+\(?(?:1[89]\d{2}|20\d{2})[a-z]?[).]"
 )
 _ENTRY_ET_AL: Final[re.Pattern[str]] = re.compile(r"\bet\s+al\b", re.I)
+# Dates immediately following a parsed author list precede dates quoted
+# inside a title, regardless of the latter's parentheses.
+_ENTRY_DATE_AFTER_AUTHORS: Final[re.Pattern[str]] = re.compile(
+    r"\s*[.,]?\s*\(?(?P<year>1[89]\d{2}|20\d{2})"
+    r"(?P<suffix>[a-z]?)\)?(?=[.;,\s]|$)"
+)
 _AUTHORS_MANY: Final[int] = 3
 
 
@@ -212,7 +230,8 @@ class CitedWork:
     Attributes
     ----------
     first: str
-        The first author's surname as compared (``normalized_name``).
+        The first author's normalized surname, or the complete normalized
+        name of an organization.
     second: str
         The second author's, when two are cited ("Smith and Lee"); else
         ``""``.
@@ -272,7 +291,7 @@ class EntryKey:
     number: int
         The entry's number (printed or inferred).
     first: str
-        The first author's surname as compared.
+        The first author's normalized surname, or an organization's name.
     second: str
         The second author's, or ``""`` (one author, or not read).
     authors: int | None
@@ -322,6 +341,53 @@ def normalized_name(name: str) -> str:
     return re.sub(r"['’.]", "", plain).casefold()
 
 
+def _normalized_organization(name: str) -> str:
+    """Compare every word of an organization's name, not just its last.
+
+    Parameters
+    ----------
+    name: str
+        The organization as printed, including optional leading "The".
+
+    Returns
+    -------
+    str
+        Its complete normalized name, with collapsed whitespace.
+
+    """
+
+    return " ".join(normalized_name(word) for word in name.split())
+
+
+def _organization_name(name: str) -> bool:
+    """Distinguish an organization from an ordinary author group.
+
+    Parameters
+    ----------
+    name: str
+        A candidate organization from a parenthetical marker.
+
+    Returns
+    -------
+    bool
+        Whether the name has a leading "The" or at least three
+        capitalized words, excluding author groups joined with "and".
+
+    """
+
+    words = name.split()
+    return (
+        len(words) >= 3
+        and (
+            words[0] == "The"
+            or (
+                all(word[0].isupper() for word in words)
+                and "and" not in name.casefold().split()
+            )
+        )
+    )
+
+
 def find_markers(text: str) -> list[AuthorYearMarker]:
     """Return the author-year markers in a text.
 
@@ -343,7 +409,17 @@ def find_markers(text: str) -> list[AuthorYearMarker]:
     """
 
     found: list[AuthorYearMarker] = []
+    for match in _ORGANIZATION_NARRATIVE.finditer(text):
+        works = _works(match["authors"], match["years"], organization=True)
+        if works:
+            found.append(AuthorYearMarker(
+                match.start(), match.end(), match.group(), works, True
+            ))
+    taken = [(marker.start, marker.end) for marker in found]
     for match in _NARRATIVE.finditer(text):
+        if any(start < match.end() and match.start() < end
+               for start, end in taken):
+            continue
         authors = match["authors"]
         # "However, Smith and Lee (2020)": the opener is not an author.
         while (opener := re.match(r"(\S+?)\s*,\s+", authors)) and (
@@ -394,6 +470,13 @@ def _parenthetical(inner: str) -> tuple[CitedWork, ...]:
 
     works: list[CitedWork] = []
     for group in inner.split(";"):
+        organization = _ORGANIZATION.fullmatch(group)
+        if organization and _organization_name(organization["authors"]):
+            works.extend(_works(
+                organization["authors"], organization["years"],
+                organization=True,
+            ))
+            continue
         found = list(_GROUP_WORK.finditer(group))
         for match in found:
             works.extend(_works(match["authors"], match["years"]))
@@ -402,7 +485,9 @@ def _parenthetical(inner: str) -> tuple[CitedWork, ...]:
     return tuple(works)
 
 
-def _works(authors: str, years: str) -> tuple[CitedWork, ...]:
+def _works(
+    authors: str, years: str, *, organization: bool = False
+) -> tuple[CitedWork, ...]:
     """Return the works an author group and its years cite.
 
     Parameters
@@ -411,6 +496,9 @@ def _works(authors: str, years: str) -> tuple[CitedWork, ...]:
         The names as printed ("Smith et al.", "Smith and Lee").
     years: str
         The years as printed ("2020a, b, 2021").
+    organization: bool, optional
+        Treat the full author name as an organization, rather than as a
+        personal surname. Defaults to False.
 
     Returns
     -------
@@ -420,22 +508,27 @@ def _works(authors: str, years: str) -> tuple[CitedWork, ...]:
 
     """
 
-    et_al = bool(re.search(_ET_AL + "$", authors))
-    names = [
-        name for name in _NAME_SPLIT.split(re.sub(_ET_AL + "$", "", authors))
-        if name.strip()
-    ]
-    if names and len(names[0].split()) > 1 and (
-        names[0].split()[0].casefold() in _NOT_NAMES
-    ):
-        names[0] = names[0].split(maxsplit=1)[1]  # "In Tyson et al."
-    if not names or names[0].split()[0].casefold() in _NOT_NAMES or any(
-        name.split()[-1].casefold() in _NOT_NAMES for name in names
-    ):
-        return ()
-    count = _AUTHORS_MANY if et_al else min(len(names), _AUTHORS_MANY)
-    first = normalized_name(names[0])
-    second = normalized_name(names[1]) if count == 2 else ""
+    if organization:
+        first = _normalized_organization(authors)
+        second, count = "", 1
+    else:
+        et_al = bool(re.search(_ET_AL + "$", authors))
+        names = [
+            name for name in _NAME_SPLIT.split(
+                re.sub(_ET_AL + "$", "", authors)
+            ) if name.strip()
+        ]
+        if names and len(names[0].split()) > 1 and (
+            names[0].split()[0].casefold() in _NOT_NAMES
+        ):
+            names[0] = names[0].split(maxsplit=1)[1]
+        if not names or names[0].split()[0].casefold() in _NOT_NAMES or any(
+            name.split()[-1].casefold() in _NOT_NAMES for name in names
+        ):
+            return ()
+        count = _AUTHORS_MANY if et_al else min(len(names), _AUTHORS_MANY)
+        first = normalized_name(names[0])
+        second = normalized_name(names[1]) if count == 2 else ""
     works: list[CitedWork] = []
     year = ""
     for item in re.split(r"\s*,\s*", years.strip()):
@@ -468,23 +561,13 @@ def entry_key(number: int, entry: str) -> EntryKey | None:
         Its first and second surnames and number of authors (from
         "Smith, J. A., Lee, B., & Wu, C.", "Smith JA, Lee B, Wu C." or, for
         other styles, the name before the first comma), year and printed
-        suffix; for an organisation, its name's last word ("The pandas
-        development team. 2020." is cited as "team"); None without a year
-        or a first author.
+        suffix; an organization's complete normalized name ("The pandas
+        development team. 2020."); None without a year or a first author.
 
     """
 
-    year = suffix = ""
-    for pattern in _ENTRY_YEAR:
-        match = pattern.search(entry)
-        if match:
-            year = " ".join(match["year"].split()).casefold()
-            year = {"n. d.": "n.d."}.get(year, year)
-            suffix = match.groupdict().get("suffix") or ""
-            break
-    if not year:
-        return None
     names: list[str] = []
+    position = 0
     for pattern in (_COMMA_AUTHOR, _SPACE_AUTHOR):
         position = 0
         while match := pattern.match(entry, position):
@@ -493,6 +576,7 @@ def entry_key(number: int, entry: str) -> EntryKey | None:
         if names:
             break
     authors: int | None
+    before_year = None
     if names:
         many = len(names) >= _AUTHORS_MANY or bool(
             _ENTRY_ET_AL.search(entry[:position + 12])
@@ -507,7 +591,26 @@ def entry_key(number: int, entry: str) -> EntryKey | None:
         if not head or len(head.split()) > 6:
             return None
         names, authors = [head], None
-    first = normalized_name(names[0])
+    match = _ENTRY_DATE_AFTER_AUTHORS.match(
+        entry, position if authors is not None else (
+            before_year.end("name") if before_year else 0
+        )
+    )
+    if match is None:
+        for pattern in _ENTRY_YEAR:
+            match = pattern.search(entry)
+            if match:
+                break
+    if match is None:
+        return None
+    year = " ".join(match["year"].split()).casefold()
+    year = {"n. d.": "n.d."}.get(year, year)
+    suffix = match.groupdict().get("suffix") or ""
+    first = (
+        _normalized_organization(names[0])
+        if before_year and _organization_name(names[0])
+        else normalized_name(names[0])
+    )
     if not first:
         return None
     second = normalized_name(names[1]) if authors == 2 else ""
@@ -559,11 +662,10 @@ def resolve(work: CitedWork, keys: Sequence[EntryKey]) -> tuple[int, ...]:
     Returns
     -------
     tuple[int, ...]
-        The numbers of the entries with the work's first author and year
-        (and suffix, when the work has one), narrowed when that leaves
-        any to those with the same second author and number of authors:
-        one when resolved, several when ambiguous, none when the list has
-        no such entry.
+        The numbers of entries with the same first author, year and
+        suffix (when printed). Known author counts and second authors
+        must agree; unknown author counts remain possible candidates.
+        Empty when no entry is compatible with the citation.
 
     """
 
@@ -571,13 +673,7 @@ def resolve(work: CitedWork, keys: Sequence[EntryKey]) -> tuple[int, ...]:
         key for key in keys
         if key.first == work.first and key.year == work.year
         and (not work.suffix or key.suffix == work.suffix)
+        and (key.authors is None or key.authors == work.authors)
+        and (not work.second or not key.second or key.second == work.second)
     ]
-    if work.second:
-        found = [
-            key for key in found if key.second == work.second
-        ] or found
-    known = [key for key in found if key.authors is not None]
-    if known:
-        same = [key for key in known if key.authors == work.authors]
-        found = same or found
     return tuple(key.number for key in found)

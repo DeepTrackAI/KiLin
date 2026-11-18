@@ -82,7 +82,8 @@ class TestMarkers(unittest.TestCase):
              [("tyson", "", 3, "2020", "a"), ("furth", "", 3, "2018", "")]),
             ("(In Tyson et al., 2020a)", [("tyson", "", 3, "2020", "a")]),
             ("(Hunter, 2007; The pandas development team, 2020)",
-             [("hunter", "", 1, "2007", ""), ("team", "", 1, "2020", "")]),
+             [("hunter", "", 1, "2007", ""),
+              ("the pandas development team", "", 1, "2020", "")]),
         ):
             with self.subTest(text=text):
                 self.assertEqual(_cited(text), cited)
@@ -118,6 +119,25 @@ class TestMarkers(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(find_markers(text), [])
 
+    def test_organizational_authors_keep_their_identity(self) -> None:
+        for text, expected in (
+            ("(The pandas development team, 2020)",
+             "the pandas development team"),
+            ("(The PyTorch development team, 2020)",
+             "the pytorch development team"),
+            ("The pandas development team (2020) reported",
+             "the pandas development team"),
+            ("World Health Organization (2020) reported",
+             "world health organization"),
+            ("(World Health Organization 2020)",
+             "world health organization"),
+        ):
+            with self.subTest(text=text):
+                markers = find_markers(text)
+                self.assertEqual(len(markers), 1)
+                self.assertEqual(markers[0].works[0].first, expected)
+                self.assertEqual(markers[0].works[0].authors, 1)
+
 
 class TestEntries(unittest.TestCase):
 
@@ -146,7 +166,21 @@ class TestEntries(unittest.TestCase):
             ("Tyson AL, Rousseau CV. 2020b. brainreg. Zenodo.",
              ("tyson", "rousseau", 2, "2020", "b")),
             ("The pandas development team. 2020. Pandas. Zenodo. 1.2.3.",
-             ("team", "", None, "2020", "")),
+             ("the pandas development team", "", None, "2020", "")),
+            ("The PyTorch development team. 2020. PyTorch. Zenodo.",
+             ("the pytorch development team", "", None, "2020", "")),
+            ("World Health Organization. 2020. Global health. Geneva.",
+             ("world health organization", "", None, "2020", "")),
+            ("van den Heuvel. 2020. Rich clubs in brain networks.",
+             ("heuvel", "", None, "2020", "")),
+            ("García López. 2015. A study of brain systems.",
+             ("lopez", "", None, "2015", "")),
+            ("Smith JA. 2020. A comment on (2018) findings. J Biol.",
+             ("smith", "", 1, "2020", "")),
+            ("Smith, J. (2020). A comment on (2018) findings.",
+             ("smith", "", 1, "2020", "")),
+            ("Tyson AL, Rousseau CV. 2020b. Notes on (2018) methods.",
+             ("tyson", "rousseau", 2, "2020", "b")),
         ):
             with self.subTest(entry=entry):
                 found = entry_key(7, entry)
@@ -197,12 +231,52 @@ class TestResolve(unittest.TestCase):
             (self._work("lee", "", 1, "2019"), (1, 2)),
             (self._work("smith", "wu", 2, "2020"), (5,)),
             (self._work("smith", "", 3, "2020"), (4,)),
-            (self._work("smith", "", 1, "2020"), (3, 4, 5)),
+            # A single-author work cannot match multi-author entries.
+            (self._work("smith", "", 1, "2020"), ()),
             (self._work("smith", "", 1, "2021"), ()),
             (self._work("brown", "", 1, "2019"), ()),
         ):
             with self.subTest(work=work):
                 self.assertEqual(resolve(work, self.keys), numbers)
+
+    def test_author_disagreements_do_not_resolve(self) -> None:
+        keys = entry_keys([
+            (1, "Smith, J., & Wu, C. (2020). A study."),
+            (2, "Smith, J. (2021). A single-author study."),
+            (3, "Lee, B., Wu, C., & Ode, D. (2020). A study."),
+        ])
+        for work in (
+            self._work("smith", "lee", 2, "2020"),
+            self._work("smith", "", 3, "2020"),
+            self._work("smith", "", 1, "2020"),
+            self._work("lee", "", 2, "2020"),
+        ):
+            with self.subTest(work=work):
+                self.assertEqual(resolve(work, keys), ())
+
+    def test_unknown_author_count_is_not_a_contradiction(self) -> None:
+        keys = entry_keys([
+            (1, "Smith, John A., and Bo Lee. 2020. A study. J 1:2."),
+            (2, "Smith, J., & Wu, C. (2020). Another study."),
+        ])
+        self.assertEqual(
+            resolve(self._work("smith", "lee", 2, "2020"), keys),
+            (1,),
+        )
+
+    def test_same_year_organizations_resolve_separately(self) -> None:
+        keys = entry_keys([
+            (1, "The pandas development team. 2020. Pandas. Zenodo."),
+            (2, "The PyTorch development team. 2020. PyTorch. Zenodo."),
+        ])
+        for text, number in (
+            ("(The pandas development team, 2020)", 1),
+            ("(The PyTorch development team, 2020)", 2),
+            ("The pandas development team (2020) found", 1),
+        ):
+            with self.subTest(text=text):
+                work = find_markers(text)[0].works[0]
+                self.assertEqual(resolve(work, keys), (number,))
 
 
 if __name__ == "__main__":

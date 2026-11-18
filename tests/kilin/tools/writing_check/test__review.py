@@ -363,6 +363,14 @@ class TestScientificClaimSafety(unittest.TestCase):
              "as shown (Smith and Lee, 2020b).", "it changes citations"),
             ("as shown (Smith et al., 2020; Lee 2019).",
              "as shown (Lee 2019).", "it changes citations"),
+            ("as shown (The pandas development team, 2020).",
+             "as shown (The PyTorch development team, 2020).",
+             "it changes citations"),
+            ("The pandas development team (2020) reported results.",
+             "The PyTorch development team (2020) reported results.",
+             "it changes citations"),
+            ("as shown (The pandas development team, 2020).",
+             "The pandas development team (2020) showed this.", ""),
         ):
             with self.subTest(after=after):
                 self.assertEqual(
