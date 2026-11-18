@@ -46,7 +46,6 @@ from kilin.retrievals.code_graph.code_graph import (
     _resolve_name,
 )
 from kilin.sources.extensions import sources_js
-from kilin.sources.extensions._js_lex import mask_non_code
 from kilin.sources.sources import SourceFile, SourceUnit
 
 __all__ = [
@@ -147,7 +146,9 @@ def extract_code_relations(
 
     relations: set[CodeRelation] = set()
     module = _module_name(source_file.path)
-    masked_lines = mask_non_code(source_file.text).splitlines(keepends=True)
+    masked_lines = sources_js._mask_non_code(
+        source_file.text
+    ).splitlines(keepends=True)
     # Each unit with the graph name of the code around it: a class line
     # or field belongs to its class, other code between declarations to
     # the file.

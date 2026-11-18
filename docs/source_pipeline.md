@@ -131,7 +131,7 @@ It does **not execute source files or notebook cells**.
 | `sources_bbl.py` | Compiled LaTeX `\bibitem` references with original line and key provenance |
 | `sources_txt.py` | Nonblank paragraph text units |
 
-JavaScript extraction uses the internal `_js_lex.py` scanner to keep
+JavaScript extraction uses lexical masking within `sources_js.py` to keep
 comments, strings, template literals, and likely regex literals out of
 structural matching. It preserves source offsets and balances braces to
 separate declarations from unrelated statements. This is a conservative
