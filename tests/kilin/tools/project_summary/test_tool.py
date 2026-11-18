@@ -37,9 +37,12 @@ from kilin.tools.project_summary import (
 from kilin.tools.project_summary._documents import ProjectDocument
 from kilin.tools.project_summary._mapping import Check, DocumentNotes
 from kilin.tools.project_summary._reduce import (
+    agreement_problem,
     chosen_numbers,
     citation_problem,
     clean_citations,
+    coverage_problem,
+    fitted_headline,
     support_problem,
     documents_line,
     documents_list,
@@ -263,6 +266,35 @@ class TestRun(_Project):
         report = (self.root / result.summary["report"]).read_text()
         self.assertIn("classify cells [3].", report)
 
+    def test_headline_and_coverage(self) -> None:
+        (self.templates / "lab_overview.md").write_text(LAB.replace(
+            "## Themes (3-40 words)", "## Themes (3-40 words, all documents)"
+        ).replace("(max 80 characters)", "(max 40 characters)"))
+
+        def model(system, prompt, tokens):
+            if "Section: Themes" in prompt:
+                return "Nuclei are segmented with deep learning [1]."
+            if "has a problem" in prompt:
+                return "Nuclei are segmented [1], cells classified [3], " \
+                    "and methods reviewed [2]."
+            if "Write the headline" in prompt:
+                return "Deep learning dominates the segmentation of nuclei " \
+                    "in our papers"
+            if "shorter headline" in prompt:
+                return "Deep learning segments nuclei and the cells we study"
+            return _model(system, prompt, tokens)
+        result, context = self._run(model=model)
+        fix = next(c.args[1] for c in context.ask_model.call_args_list
+                   if "has a problem" in c.args[1])
+        self.assertIn("leaves out [2], [3]", fix)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertIn("and methods reviewed [2].", report)
+        # Still too long after asking: cut at a word, without a final
+        # "and the".
+        self.assertTrue(report.startswith(
+            "# Deep learning segments nuclei\n"
+        ))
+
     def test_cancel_and_quick(self) -> None:
         result, context = self._run(confirm=Mock(return_value="cancel"),
                                     confirmation="always")
@@ -435,6 +467,36 @@ class TestReduce(unittest.TestCase):
             support_problem("Quantum chromodynamics lattices [4].", texts),
             "",
         )
+        # A real report's "Agreements and Disagreements".
+        self.assertIn(
+            "cites only [1]",
+            agreement_problem(
+                "The documents agree on the use of non-parametric "
+                "permutation tests [1], and on memory capacity [2]."
+            ),
+        )
+        self.assertIn("cites only [4]", agreement_problem(
+            "They agree that X [1, 2]. However, they disagree on the "
+            "applications of BRAPH 2 [4]."
+        ))
+        for text in ("They agree that thresholds matter [1, 4].",
+                     "They concur on reproducibility [2-4].",
+                     "BRAPH 2 differs from BRAPH [1] in its GUI [4].",
+                     "No document disagrees with another."):
+            with self.subTest(text=text):
+                self.assertEqual(agreement_problem(text), "")
+        self.assertEqual(coverage_problem("A [1, 3] and [2].", [1, 2, 3]),
+                         "")
+        self.assertIn("leaves out [3], [5]",
+                      coverage_problem("A [1, 4] and [2].", [1, 2, 3, 4, 5]))
+        self.assertEqual(
+            fitted_headline("BRAPH tools enable network analysis of brain "
+                            "connectivity in neurological conditions "
+                            "through graph theory and statistics", 110),
+            "BRAPH tools enable network analysis of brain connectivity in "
+            "neurological conditions through graph theory",
+        )
+        self.assertEqual(fitted_headline("Short.", 20), "Short")
         groups = note_groups([(1, "a " * 30), (2, "b"), (3, "c")], 10)
         self.assertEqual([[n for n, _ in g] for g in groups], [[1], [2, 3]])
 

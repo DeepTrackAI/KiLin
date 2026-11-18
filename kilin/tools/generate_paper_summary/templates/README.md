@@ -117,6 +117,12 @@ Its sections can be:
   KíLín found words in it that show it meets the condition; the others are
   counted as unclear.
 
+A section that must speak of every document, such as an overview of
+the collection, says so in its brackets: `## Scope of the Collection
+(80-120 words, all documents)`. KíLín then has it rewritten until it
+cites every document with something on it. Leave it out where only some
+documents belong, such as agreements between documents.
+
 Project templates use `**Documents:** {documents}` (the number of
 documents, written by code) and `{key_documents}` in a section's
 instruction (documents chosen from the project, with an item limit), not

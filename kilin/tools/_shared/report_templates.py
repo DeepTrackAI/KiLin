@@ -69,6 +69,11 @@ Key Features
     document, assembled by code. ``(per document, table)`` with ``Do: |
     Dataset | Size |`` gives one table row per document instead.
 
+- **Sections covering every document (project templates)**
+
+    ``## Scope (80-120 words, all documents)``: the section must cite
+    every document that has something on it.
+
 - **Checks in Python**
 
     Count words and list items, and report missing, repeated, empty,
@@ -231,6 +236,7 @@ _PLACEHOLDER_NAMES: Final[dict[str, frozenset[str]]] = {
 # Words in a heading's brackets marking a per-document section.
 _PER_DOCUMENT: Final[str] = "per document"
 _TABLE: Final[str] = "table"
+_ALL_DOCUMENTS: Final[str] = "all documents"
 # "When:" and "Do:" lines of a per-document section; a "Do:" line's
 # optional word limit for each entry: "(max 40 words)", "(20-40 words)".
 _WHEN = re.compile(r"^when\s*:\s*(.*)$", re.I)
@@ -316,6 +322,9 @@ class TemplateSection:
     columns: tuple[str, ...]
         A per-document table's column names, or empty. For a
         per-document section, ``words`` limits each entry.
+    all_documents: bool
+        Whether a project report's section must cite every document with
+        a note on it (``all documents`` in its heading's brackets).
 
     """
 
@@ -328,6 +337,7 @@ class TemplateSection:
     when: str = ""
     do: str = ""
     columns: tuple[str, ...] = ()
+    all_documents: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -597,7 +607,8 @@ def parse_template(
         else:
             guidance = " ".join(" ".join(body).split())
             sections.append(
-                _section(name, scope, line, label, limits, guidance)
+                _section(name, scope, line, label, limits, guidance,
+                         marks=marks)
             )
 
     for number, raw in enumerate(lines[body_start:], start=body_start + 1):
@@ -762,8 +773,8 @@ def _limits(
         The name with single spaces, the limits by unit (``words``,
         ``items``, or ``characters``) as ``(low, high)`` (``max N`` gives
         ``(0, N)`` and ``N`` gives ``(N, N)``), and the marks written with
-        them (``per document``, ``table``). A heading without brackets has
-        none.
+        them (``per document``, ``table``, ``all documents``). A heading
+        without brackets has none.
 
     Raises
     ------
@@ -781,7 +792,7 @@ def _limits(
     marks: set[str] = set()
     for part in match.group(2).split(","):
         word = " ".join(part.split()).casefold()
-        if word in (_PER_DOCUMENT, _TABLE):
+        if word in (_PER_DOCUMENT, _TABLE, _ALL_DOCUMENTS):
             marks.add(word)
             continue
         found = _RANGE.match(" ".join(part.split()))
@@ -811,6 +822,11 @@ def _limits(
             f"{name}, line {number}: a table section is written (per "
             "document, table)."
         )
+    if _ALL_DOCUMENTS in marks and _PER_DOCUMENT in marks:
+        raise ValueError(
+            f"{name}, line {number}: a per-document section already covers "
+            "every document; leave out (all documents)."
+        )
     return " ".join(match.group(1).split()), limits, frozenset(marks)
 
 
@@ -823,6 +839,7 @@ def _section(
     guidance: str,
     *,
     inline: bool = False,
+    marks: frozenset[str] = frozenset(),
 ) -> TemplateSection:
     """Build one section, checking its limits and placeholders.
 
@@ -842,6 +859,9 @@ def _section(
         The instruction for the section, or a labelled line's content.
     inline: bool, optional
         Whether this is a labelled line. Defaults to ``False``.
+    marks: frozenset[str], optional
+        Marks from the heading's brackets; ``all documents`` is allowed on
+        a project template's section written from notes. Defaults to none.
 
     Returns
     -------
@@ -915,6 +935,13 @@ def _section(
             + ("{citation}." if scope == SCOPE_DOCUMENT else "{documents}.")
         )
 
+    if _ALL_DOCUMENTS in marks and (
+        scope != SCOPE_PROJECT or source != SECTION_SOURCE_NOTES
+    ):
+        raise ValueError(
+            f"{name}, line {number}: (all documents) is for sections of "
+            "project templates written from the documents' notes."
+        )
     return TemplateSection(
         name=label,
         guidance=guidance,
@@ -922,6 +949,7 @@ def _section(
         items=limits.get("items"),
         source=source,
         inline=inline,
+        all_documents=_ALL_DOCUMENTS in marks,
     )
 
 

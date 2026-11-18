@@ -45,9 +45,11 @@ documents (`## Main Themes (180-260 words)`), it can have:
 
 Two templates are shipped and installed in new projects: **Project
 Overview** (`project_overview.md`: scope, themes, methods, findings,
-agreements and disagreements, gaps, where to start) and **Literature
-Table** (`literature_table.md`: a table row per study with its aim,
-methods, data and main finding, and a line per review or other document).
+agreements and disagreements, gaps, where to start; scope, themes and
+methods cover all documents) and **Literature Table**
+(`literature_table.md`: an overview covering all documents, a table row
+per study with its aim, methods, data and main finding, and a line per
+review or other document).
 Templates for one document are left to `generate_paper_summary`, which
 also lists the project templates when asked "which templates do I have?".
 
@@ -105,7 +107,12 @@ document whose call fails is reported as not read; the others go on.
   least two, the section is sent back saying which document it may be
   ("“genomic analysis of psychiatric disorders” cites [4] … it may be
   [5]"); words found in more than half the documents are not
-  distinctive, and code never changes a citation itself. A
+  distinctive, and code never changes a citation itself. A sentence
+  saying documents agree, disagree, concur or conflict must cite at least
+  two documents in each citation ("agree on X [1], and on Y [2]" is sent
+  back). A section marked `all documents` in its heading's brackets
+  (`## Scope of the Collection (80-120 words, all documents)`) must cite
+  every document with a note on it; the repair names those left out. A
   section with such a problem, or outside its limits, is rewritten up to
   `REPAIR_ATTEMPTS` times; brackets still citing no document are then
   removed, and what remains wrong is listed under the report.
@@ -114,7 +121,9 @@ document whose call fails is reported as not read; the others go on.
   not read, then one entry or table row per matching document.
 - **`{documents}`** and **`{key_documents}`**: the count, and the chosen
   documents' titles, written by code.
-- **The headline**, when the template asks for one, in one call.
+- **The headline**, when the template asks for one, in one call; a
+  headline over its limit is asked for again, shorter, and if still too
+  long cut at a word, without a final "and" or "of".
 
 ## Defaults (`defaults.json`)
 

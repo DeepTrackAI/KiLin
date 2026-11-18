@@ -115,14 +115,18 @@ from kilin.tools.project_summary._mapping import (
     topics,
 )
 from kilin.tools.project_summary._reduce import (
+    agreement_problem,
     chosen_numbers,
     citation_problem,
     clean_citations,
     support_problem,
     condense_prompt,
+    coverage_problem,
     documents_line,
     documents_list,
     fix_prompt,
+    fitted_headline,
+    headline_fix_prompt,
     headline_prompt,
     key_documents_prompt,
     note_groups,
@@ -645,10 +649,13 @@ def _write_section(
     str
         The section's content; when the notes do not fit one call, written
         from each group's condensed facts. A section outside its limits,
-        citing documents wrongly (``citation_problem``) or citing a document
-        that does not mention what it is cited for (``support_problem``) is
-        rewritten up to ``repair_attempts`` times; brackets still citing no
-        document are then removed.
+        citing documents wrongly (``citation_problem``), citing a document
+        that does not mention what it is cited for (``support_problem``),
+        calling one document's view an agreement or disagreement
+        (``agreement_problem``) or, when marked ``all documents``, leaving
+        out documents with notes (``coverage_problem``) is rewritten up to
+        ``repair_attempts`` times; brackets still citing no document are
+        then removed.
 
     """
 
@@ -672,6 +679,7 @@ def _write_section(
         *section_prompt(template, section, text, len(documents)), None
     ), section)
     cite = bool(lines) and not section.inline
+    noted = [number for number, _ in lines]
     titles = {document.number: document.title for document in documents}
     texts = {
         number: " ".join((
@@ -693,14 +701,18 @@ def _write_section(
         -------
         str
             Its citation problem, else a citation of a document that does
-            not mention what it is cited for, else its length or form
-            problem.
+            not mention what it is cited for, else an agreement citing one
+            document, else documents a section covering all of them leaves
+            out, else its length or form problem.
 
         """
 
         return (
             citation_problem(text, len(documents), cite)
             or support_problem(text, texts)
+            or agreement_problem(text)
+            or (coverage_problem(text, noted) if section.all_documents
+                else "")
             or section_problem(section, text, _config.TEMPLATE_RULES)
             or ""
         )
@@ -717,8 +729,12 @@ def _write_section(
         failures.append(
             f"{section.name}: {removed} citation(s) of no document removed."
         )
-    left = citation_problem(content, len(documents), cite) or (
-        support_problem(content, texts)
+    left = (
+        citation_problem(content, len(documents), cite)
+        or support_problem(content, texts)
+        or agreement_problem(content)
+        or (coverage_problem(content, noted) if section.all_documents
+            else "")
     )
     if left:
         failures.append(f"{section.name}: {left}")
@@ -859,8 +875,16 @@ def run(
             line = next((x.strip() for x in strip_thinking(reply)
                          .splitlines() if x.strip()), "")
             line = line.lstrip("# ").strip().rstrip(".")
+            limit = template.headline_characters
+            if len(line) > limit:
+                shorter = next((x.strip() for x in strip_thinking(
+                    context.ask_model(
+                        *headline_fix_prompt(template, line), None
+                    )
+                ).splitlines() if x.strip()), "")
+                line = shorter.lstrip("# ").strip().rstrip(".") or line
             if line:
-                headline = line[:template.headline_characters]
+                headline = fitted_headline(line, limit)
         except Exception as error:  # The title stands in.
             failures.append(f"headline: {error}")
 

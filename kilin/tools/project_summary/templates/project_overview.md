@@ -13,17 +13,17 @@ use a full stop at the end.
 
 **Documents:** {documents}
 
-## Scope of the Collection (80-120 words)
+## Scope of the Collection (80-120 words, all documents)
 
 What the documents are about as a whole: the questions, systems and kinds
 of work they cover, and what they leave out.
 
-## Main Themes (180-260 words)
+## Main Themes (180-260 words, all documents)
 
 The themes the documents share, grouping the documents that address each
 one and saying how they relate.
 
-## Methods Landscape (150-220 words)
+## Methods Landscape (150-220 words, all documents)
 
 The main approaches, techniques, data and tools across the documents, and
 how they differ between groups of documents.

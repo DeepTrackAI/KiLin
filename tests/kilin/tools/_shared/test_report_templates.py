@@ -106,6 +106,13 @@ class TestProjectTemplates(unittest.TestCase):
         self.assertEqual(datasets.columns, ("Dataset", "Size", "Licence"))
         self.assertEqual(template.sections[4].items, (2, 3))
 
+    def test_all_documents(self) -> None:
+        template = _template("## A (10-20 words, all documents)\n\nT.\n"
+                             "\n## B (10-20 words)\n\nT.\n")
+        self.assertEqual([s.all_documents for s in template.sections],
+                         [True, False])
+        self.assertEqual(template.sections[0].words, (10, 20))
+
     def test_document_templates_are_unchanged(self) -> None:
         template = _template(
             "**Source:** {citation}\n\n## A (10-20 words)\n\nText.\n",
@@ -139,6 +146,12 @@ class TestProjectTemplates(unittest.TestCase):
             ("## A\n\nFrom {key_documents}.\n", "project",
              "{key_documents} needs an item limit"),
             ("## A\n\nText.\n", "folder", "scope must be document"),
+            ("## A (10-20 words, all documents)\n\nText.\n", "document",
+             "(all documents) is for sections of project templates"),
+            ("## A (per document, all documents)\n\nWhen: x\nDo: y\n",
+             "project", "already covers every document"),
+            ("## A (2 items, all documents)\n\nFrom {key_documents}.\n",
+             "project", "(all documents) is for sections of project"),
         ):
             with self.subTest(body=body, scope=scope):
                 with self.assertRaisesRegex(ValueError, message.replace(

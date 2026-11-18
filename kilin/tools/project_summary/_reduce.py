@@ -47,9 +47,15 @@ Module Structure
     Whether a section cites documents as it must, and its invalid
     citations removed.
 
-- ``support_problem``
+- ``support_problem``, ``agreement_problem`` and ``coverage_problem``
 
-    Whether each citation's document mentions what it is cited for.
+    Whether each citation's document mentions what it is cited for, each
+    agreement or disagreement cites two documents, and a section marked
+    ``all documents`` cites every document with a note on it.
+
+- ``headline_fix_prompt`` and ``fitted_headline``
+
+    A headline shortened by the model, or cut at a word.
 
 - ``per_document_markdown``, ``documents_line`` and ``documents_list``
 
@@ -84,8 +90,12 @@ from kilin.tools.project_summary._mapping import (
 
 __all__ = [
     "chosen_numbers",
+    "agreement_problem",
     "citation_problem",
     "clean_citations",
+    "coverage_problem",
+    "fitted_headline",
+    "headline_fix_prompt",
     "support_problem",
     "condense_prompt",
     "documents_line",
@@ -127,6 +137,19 @@ _PLAIN_WORDS: Final[frozenset[str]] = frozenset({
     "document", "documents", "paper", "papers", "study", "studies",
     "focus", "focuses", "main", "different", "differences", "several",
 })
+# Sentences saying documents agree or disagree, which need two documents
+# in each citation.
+_AGREEMENT = re.compile(
+    r"\b(?:agree\w*|disagree\w*|concur\w*|consensus|conflict\w*|"
+    r"contradict\w*)\b",
+    re.IGNORECASE,
+)
+# Words a cut headline must not end with.
+_DANGLING = re.compile(
+    r"\s+(?:and|or|of|in|on|for|with|to|the|a|an|by|from|through|via|"
+    r"as|at)\s*$",
+    re.IGNORECASE,
+)
 # A cited phrase is checked when it has this many distinctive words; it
 # is flagged when another document shares this many of them.
 _SUPPORT_WORDS_MIN: Final[int] = 2
@@ -280,6 +303,10 @@ def section_prompt(
         'anything about this)'}\n\nWrite only the section's content, "
         "without its heading. When the notes say nothing about it, say so "
         "in one sentence."
+        + (
+            " Cover every document that has a note here, citing each."
+            if section.all_documents else ""
+        )
     )
     return _SYSTEM, user
 
@@ -621,6 +648,135 @@ def support_problem(content: str, texts: dict[int, str]) -> str:
                     "each statement comes from."
                 )
     return ""
+
+
+def agreement_problem(content: str) -> str:
+    """Return an agreement or disagreement citing one document, or ``""``.
+
+    Parameters
+    ----------
+    content: str
+        A section.
+
+    Returns
+    -------
+    str
+        For the first sentence saying documents agree, disagree, concur
+        or conflict whose citation names a single document ("agree on X
+        [1], and on Y [2]"): a problem asking for two documents in each, or
+        for the claim to be dropped. ``""`` otherwise.
+
+    """
+
+    for sentence in re.split(r"(?<=[.!?])\s+", content):
+        if not _AGREEMENT.search(sentence):
+            continue
+        for match in _BRACKETS.finditer(sentence):
+            cited = re.findall(r"\d+", match.group(1))
+            if len(set(cited)) == 1 and not re.search(
+                r"\d\s*[–-]\s*\d", match.group(1)
+            ):
+                shown = " ".join(sentence.split()[:12])
+                return (
+                    f"“{shown}…” says documents agree or disagree but cites "
+                    f"only [{cited[0]}]. An agreement or disagreement needs "
+                    "at least two documents in its citation, such as "
+                    "[1, 4]; describe what one document says without "
+                    "calling it an agreement, or leave it out."
+                )
+    return ""
+
+
+def coverage_problem(content: str, noted: Sequence[int]) -> str:
+    """Return the documents a section covering all of them leaves out.
+
+    Parameters
+    ----------
+    content: str
+        A section marked ``all documents``.
+    noted: Sequence[int]
+        The documents with a note for it.
+
+    Returns
+    -------
+    str
+        A problem naming the documents with a note that the section does
+        not cite; ``""`` when it cites them all.
+
+    """
+
+    cited = {
+        int(number)
+        for marker in _BRACKETS.findall(content)
+        for number in (_cited(marker, max(noted, default=0)) or ())
+    }
+    missing = [number for number in noted if number not in cited]
+    if not missing:
+        return ""
+    return (
+        "It must cover every document, but leaves out "
+        + ", ".join(f"[{number}]" for number in missing)
+        + "; include what their notes say, citing them."
+    )
+
+
+def headline_fix_prompt(
+    template: ReportTemplate, headline: str
+) -> tuple[str, str]:
+    """Return the prompts shortening a headline that is too long.
+
+    Parameters
+    ----------
+    template: ReportTemplate
+        The template, with its headline limit.
+    headline: str
+        The headline as written.
+
+    Returns
+    -------
+    tuple[str, str]
+        System and user prompt asking for the same headline in at most
+        ``template.headline_characters`` characters.
+
+    """
+
+    user = (
+        f"This report headline has {len(headline)} characters; it may have "
+        f"at most {template.headline_characters}:\n{headline}\n\nWrite a "
+        "shorter headline saying the same, on one line, no full stop."
+    )
+    return _SYSTEM, user
+
+
+def fitted_headline(text: str, limit: int) -> str:
+    """Return a headline cut to its limit at a word.
+
+    Parameters
+    ----------
+    text: str
+        A headline, possibly too long.
+    limit: int
+        Most characters.
+
+    Returns
+    -------
+    str
+        ``text`` when it fits; otherwise cut at the last space within the
+        limit, without a final "and", "of", "the" or similar word, and
+        without trailing punctuation.
+
+    """
+
+    text = " ".join(text.split()).rstrip(".")
+    if len(text) <= limit:
+        return text
+    cut = text[:limit + 1].rsplit(" ", 1)[0]
+    while True:
+        shorter = _DANGLING.sub("", cut)
+        if shorter == cut:
+            break
+        cut = shorter
+    return cut.rstrip(" ,;:—–-")
 
 
 def per_document_markdown(
