@@ -42,6 +42,7 @@ from kilin.tools.project_summary._reduce import (
     agreement_problem,
     chosen_numbers,
     citation_problem,
+    statement_citation_problem,
     cite_document_names,
     clean_citations,
     coverage_problem,
@@ -181,10 +182,14 @@ class TestRun(_Project):
                          "outputs/lab_overview_project_report.md")
         self.assertTrue(report.startswith(
             "# Deep learning dominates our microscopy papers\n\n"
+            "> **Partial report:** Evidence, validation, or document "
+        ))
+        self.assertIn(
             "**Documents:** 3 documents, listed at the end of the report "
             "[1–3].\n\n## Themes\n\nDeep learning for nuclei and cells "
-            "[1, 3], reviewed in [2]."
-        ))
+            "[1, 3], reviewed in [2].",
+            report,
+        )
         self.assertIn(
             "## Models\n\n1 of 3 documents. Unclear: [2] (no explicit "
             "source-backed negative evidence), [3] (the quoted words "
@@ -216,6 +221,65 @@ class TestRun(_Project):
         # Three documents, one section, one choice, one headline.
         # Source-grounding repairs use the existing bounded repair policy.
         self.assertEqual(context.ask_model.call_count, 8)
+
+    def test_complete_requires_source_supported_statements(self) -> None:
+        report_template = """---
+title: Lab Overview
+description: A verified project report.
+max_words: 200
+scope: project
+---
+
+**Documents:** {documents}
+
+## Findings (3-60 words)
+
+What the documents report.
+"""
+        (self.templates / "lab_overview.md").write_text(report_template)
+        self.chunks = [chunk(
+            "a", "The measured change was -5%. The sample had 40 images.",
+            path="a.md",
+        )]
+
+        for statement, complete, problem in (
+            ("The measured change was -5% [1].", True, ""),
+            ("The measured change was +5% [1].", False, "Value +5%"),
+            (
+                "The sample had 40 images [1]. The secret dataset "
+                "contained 999 million samples.",
+                False, "Uncited statement",
+            ),
+            (
+                "The sample had 40 images [1]; the secret dataset "
+                "contained 999 million samples.",
+                False, "Uncited statement",
+            ),
+        ):
+            with self.subTest(statement=statement):
+                def model(system, prompt, tokens):
+                    if "Document [1]" in prompt:
+                        return "NOTE 1: The sample had 40 images."
+                    if "Section: Findings" in prompt:
+                        return statement
+                    raise AssertionError(prompt)
+
+                result, _ = self._run(
+                    model=model, repair_attempts=0
+                )
+                saved = (self.root / result.summary["report"]).read_text()
+                self.assertIs(result.summary["valid"], complete)
+                self.assertEqual(
+                    result.summary["status"],
+                    "complete" if complete else "partial",
+                )
+                if problem:
+                    self.assertIn(problem, saved)
+                    self.assertIn("**Check**", saved)
+                    self.assertIn("> **Partial report:**", saved)
+                else:
+                    self.assertNotIn("**Check**", saved)
+                    self.assertNotIn("> **Partial report:**", saved)
 
     def test_failed_document_and_groups(self) -> None:
         def model(system, prompt, tokens):
@@ -858,6 +922,74 @@ class TestReduce(unittest.TestCase):
             "The effect is significant (p≤0.05) [1].",
             {1: "The effect had p <= 0.05"},
         ), "")
+        # Signs, exponent notation, and inequality directions remain
+        # part of an independently checked literal fact.
+        self.assertIn("Value +5%", numeric_support_problem(
+            "The measured change was +5% [1].",
+            {1: "The measured change was -5%."},
+        ))
+        self.assertEqual(numeric_support_problem(
+            "The measured change was -5% [1].",
+            {1: "The measured change was \u22125%."},
+        ), "")
+        self.assertIn("Value -5%", numeric_support_problem(
+            "The measured change was -5% [1].",
+            {1: "The measured change was +5%."},
+        ))
+        self.assertIn("Value \u00b15%", numeric_support_problem(
+            "The uncertainty was \u00b15% [1].",
+            {1: "The uncertainty was 5%."},
+        ))
+        self.assertEqual(numeric_support_problem(
+            "The uncertainty was \u00b15% [1].",
+            {1: "The uncertainty was \u00b15%."},
+        ), "")
+        self.assertEqual(numeric_support_problem(
+            "The threshold was 5e-3 [1].",
+            {1: "The threshold was 5e-3."},
+        ), "")
+        self.assertIn("Value 5e+3", numeric_support_problem(
+            "The threshold was 5e+3 [1].",
+            {1: "The threshold was 5e-3."},
+        ))
+        self.assertEqual(numeric_support_problem(
+            "The effect had p<=5e-3 [1].",
+            {1: "The effect had p \u2264 5e\u22123."},
+        ), "")
+        self.assertIn("Comparison p > 5e-3", numeric_support_problem(
+            "The effect had p > 5e-3 [1].",
+            {1: "The effect had p < 5e-3."},
+        ))
+        for text, problem in (
+            ("BBBC contains 40 images [1].", ""),
+            (
+                "BBBC contains 40 images [1]. The secret dataset "
+                "includes 999 million samples.",
+                "Uncited statement",
+            ),
+            (
+                "BBBC contains 40 images [1]; the secret dataset "
+                "includes 999 million samples.",
+                "Uncited statement",
+            ),
+            (
+                "BBBC contains 40 images [1] and 999 million samples.",
+                "Uncited claim after a citation",
+            ),
+            ("BBBC contains 40 images [1]. ResNet is evaluated [2].", ""),
+            ("- BBBC contains 40 images [1]\n- Uncited new result",
+             "Uncited statement"),
+            (
+                "The systems, e.g. U-Net models, use BBBC [1].",
+                "",
+            ),
+        ):
+            with self.subTest(text=text):
+                found = statement_citation_problem(text, 2)
+                if problem:
+                    self.assertIn(problem, found)
+                else:
+                    self.assertEqual(found, "")
         groups = note_groups([(1, "a " * 30), (2, "b"), (3, "c")], 10)
         self.assertEqual([[n for n, _ in g] for g in groups], [[1], [2, 3]])
 

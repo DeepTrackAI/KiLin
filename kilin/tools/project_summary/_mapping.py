@@ -103,6 +103,13 @@ _NEGATION = re.compile(
     r"\b(?:no|not|never|without|neither|none|lack\w*|absen\w*|"
     r"didn.?t|doesn.?t)\b", re.IGNORECASE,
 )
+# These constructions do not establish absence of the named activity.
+# A quote with an equivocal negation is left unresolved conservatively.
+_EQUIVOCAL_NEGATION = re.compile(
+    r"\bnot\s+(?:only|just|merely|solely|exclusively|necessarily|"
+    r"always|without|unlike|uncommon)\b|\bno\s+(?:less|more)\s+than\b",
+    re.IGNORECASE,
+)
 _TOPIC_IGNORED: Final[frozenset[str]] = frozenset({
     "this", "that", "with", "from", "into", "when", "where",
     "document", "documents", "does", "have", "used", "uses",
@@ -440,13 +447,15 @@ def _explicit_negative(quote: str, condition: str) -> bool:
     Returns
     -------
     bool
-        True only for explicit negation with a shared topic stem. This is
-        not a semantic proof that the condition is absent elsewhere.
+        True only for explicit, unambiguous lexical negation sharing a
+        topic stem with the condition in its negated clause. Constructions
+        such as "not only" do not establish absence elsewhere.
 
     """
 
-    if not _NEGATION.search(quote):
+    if not _NEGATION.search(quote) or _EQUIVOCAL_NEGATION.search(quote):
         return False
+
     def topic_stems(text: str) -> set[str]:
         """Return distinctive stems of a negative or its condition.
 
@@ -467,7 +476,19 @@ def _explicit_negative(quote: str, condition: str) -> bool:
             if word not in _TOPIC_IGNORED
         }
 
-    return bool(topic_stems(quote) & topic_stems(condition))
+    # Topic words elsewhere in the quote do not establish what was
+    # negated. For example, "trained a model without labeled data" is
+    # not evidence that no model was trained.
+    required = topic_stems(condition)
+    for match in _NEGATION.finditer(quote):
+        clause = re.split(
+            r"[;:,.!?]|\b(?:but|however|although|whereas)\b",
+            quote[match.start():], maxsplit=1, flags=re.IGNORECASE,
+        )[0]
+        local = " ".join(clause.split()[:12])
+        if topic_stems(local) & required:
+            return True
+    return False
 
 
 def _value_found(value: str, source: str) -> bool:

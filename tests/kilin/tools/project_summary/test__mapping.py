@@ -349,5 +349,34 @@ class TestEvidenceValidation(unittest.TestCase):
             self.assertEqual(result.checks["Models"].answer, CHECK_UNCLEAR)
 
 
+    def test_equivocal_negation_cannot_prove_absence(self) -> None:
+        for quote in (
+            "We did not only train a deep-learning model",
+            "We did not just train a deep-learning model",
+            "It was not necessarily a deep-learning model",
+            "We did not merely train a deep-learning model",
+            "We trained a deep-learning model without labeled data",
+            "We trained a deep-learning model but did not evaluate it",
+        ):
+            with self.subTest(quote=quote):
+                result = parse_notes(
+                    f"CHECK A: NO\nQUOTE A: {quote}",
+                    TEMPLATE, 1, quote, source_passages=(quote,),
+                )
+                self.assertEqual(
+                    result.checks["Models"].answer, CHECK_UNCLEAR
+                )
+                self.assertIn(
+                    "no explicit source-backed negative evidence",
+                    result.checks["Models"].why,
+                )
+        explicit = "We did not train a deep-learning model."
+        result = parse_notes(
+            f"CHECK A: NO\nQUOTE A: {explicit}",
+            TEMPLATE, 1, explicit, source_passages=(explicit,),
+        )
+        self.assertEqual(result.checks["Models"].answer, CHECK_NO)
+
+
 if __name__ == "__main__":
     unittest.main()

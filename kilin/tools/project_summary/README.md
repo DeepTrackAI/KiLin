@@ -37,7 +37,9 @@ For "write a project overview", the tool:
    evidence. What the checks still found (sections
    outside their limits or citing doubtfully, sections that could not be
    written, documents that could not be read) is saved in the report, in
-   a **Check** list before the documents. The result metadata
+   a **Check** list before the documents. In any partial result, a
+   prominent notice immediately below the headline identifies the report
+   as incomplete even before the reader reaches the checks. The metadata
    reports `status: partial` and `valid: false` when a document failed,
    a document was omitted, a per-document evidence check is unresolved,
    or validation found a problem. `uncertain_checks` records every such
@@ -120,9 +122,12 @@ separately from source cards and model-generated notes:
   also remain unclear.
 - `CHECK ...: NO` is **not** established by silence or by a general quote.
   A negative result requires an exact quotation with explicit negation
-  and at least one topic term overlapping the template's `When:` clause.
-  This is a lexical check, not proof that the conclusion applies to the
-  entire document. Without such evidence, the result is **unclear**.
+  and a topic term overlapping the template's `When:` clause in the
+  *negated clause*. Ambiguous constructions such as "not only", "not
+  necessarily" and "without labeled data" (when the condition asks
+  whether a model was trained) cannot establish absence. This is a
+  lexical check, not proof that the conclusion applies to the entire
+  document. Without clear evidence, the result is **unclear**.
 - Missing or invalid answers remain unclear. The model is instructed to
   copy quotations, entries and table values without inventing or silently
   normalizing them. Source validation is deterministic. It may trigger
@@ -150,22 +155,28 @@ other documents continue.
   section: every bracket must cite existing documents (`[n1]` or `[7]` of
   five does not), documents must not be named in the text ("Document 4"),
   and a section written from notes must cite at least one document. Each
+  substantive sentence, independent list item and semicolon-separated
+  assertion must also carry its own citation; a citation in a preceding
+  sentence cannot validate an uncited claim. Text following the final
+  citation must not introduce another unsupported assertion. Each
   citation is additionally checked against **original indexed source
   passages**, not the mapping model's notes or table entries. Numerical
   values, value-unit pairs and statistical inequalities must have
-  matching literal anchors
-  in their cited source, including the comparison direction. The existing
+  matching literal anchors in their cited source, including signs,
+  scientific exponents (`5e-3`) and comparison direction. The existing
   word-overlap check uses the clause preceding each citation and
   compares distinctive word stems against the original indexed passages,
   ignoring vocabulary common to most documents. If the cited document
   shares no distinctive term while another matches at least two, the
   model is asked to reconsider the citation; it is never silently changed
   by code. In strict mode, a cited phrase with no recognizable source
-  anchor is flagged even without a better alternative. Literal checks
-  identify absent numbers and reversed statistical inequalities, but
-  lexical overlap cannot prove that an interpretation is scientifically
-  correct. A sentence saying documents agree, disagree, concur or conflict
-  must cite at least
+  anchor is flagged even without a better alternative. These checks do
+  not prove semantic entailment; statements can remain unsupported even
+  when some vocabulary overlaps the source. Literal checks identify
+  absent numbers, reversed signs and inequalities, and uncited
+  substantive assertions, but cannot prove scientific correctness. Short nonnumerical
+  fragments may not constitute separate claims. A sentence saying
+  documents agree, disagree, concur or conflict must cite at least
   two documents in each citation (the shipped Project Overview has no
   agreements section: notes taken one document at a time cannot show
   agreement between documents) ("agree on X [1], and on Y [2]" is sent

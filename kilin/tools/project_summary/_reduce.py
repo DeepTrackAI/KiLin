@@ -93,6 +93,7 @@ __all__ = [
     "chosen_numbers",
     "agreement_problem",
     "citation_problem",
+    "statement_citation_problem",
     "cite_document_names",
     "clean_citations",
     "coverage_problem",
@@ -170,15 +171,28 @@ _DANGLING = re.compile(
 _SUPPORT_WORDS_MIN: Final[int] = 2
 _NUMBERS = re.compile(r"\d+")
 # Numerical assertions are checked against source passages, not notes.
-_FACT_NUMBER = re.compile(r"(?<![\w])\d+(?:[.,]\d+)*(?:%)?(?![\w])")
+# Signs and exponents are part of a number: -5%, +5%, and 5e-3 differ.
+_NUMBER_TEXT: Final[str] = (
+    r"[+\-\u2212\u00b1\u2213]?(?:\d+(?:[.,]\d+)*|\.\d+)"
+    r"(?:[eE][+\-\u2212]?\d+)?%?"
+)
+_FACT_NUMBER = re.compile(rf"(?<![\w.]){_NUMBER_TEXT}(?!\w)")
 # Statistical comparisons must preserve the reported inequality direction.
 _COMPARISON = re.compile(
-    r"(?<!\w)([a-z][a-z0-9_]*)\s*(<=|>=|<|>|=)\s*"
-    r"(\d+(?:\.\d+)?%?)(?!\w)", re.IGNORECASE,
+    rf"(?<!\w)([a-z][a-z0-9_]*)\s*(<=|>=|<|>|=)\s*"
+    rf"({_NUMBER_TEXT})(?!\w)", re.IGNORECASE,
 )
 # A value alone cannot verify a differently scaled amount (40 vs 40 million).
 _QUANTITY = re.compile(
-    r"(?<!\w)(\d+(?:[.,]\d+)*(?:%)?)\s+([a-z][a-z0-9-]*)",
+    rf"(?<!\w)({_NUMBER_TEXT})\s+([a-z][a-z0-9-]*)",
+    re.IGNORECASE,
+)
+# Break assertions at paragraph, list-item, sentence and semicolon boundaries.
+_STATEMENT_END = re.compile(r"(?<=[.!?])\s+(?=\S)|;\s*(?=\S)")
+_LIST_LINE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+|\|)")
+# Periods in common scientific abbreviations are not sentence boundaries.
+_ABBREVIATION = re.compile(
+    r"\b(?:e\.g|i\.e|et\s+al|vs|fig|dr|prof|etc)\.",
     re.IGNORECASE,
 )
 _UNIT_IGNORED: Final[frozenset[str]] = frozenset({
@@ -555,6 +569,111 @@ def citation_problem(content: str, documents: int, cite: bool) -> str:
     return ""
 
 
+def _statements(content: str) -> list[str]:
+    """Separate assertions without splitting wrapped Markdown paragraphs.
+
+    Parameters
+    ----------
+    content: str
+        Model-written section, possibly with lists and wrapped lines.
+
+    Returns
+    -------
+    list[str]
+        Clauses in order. Each list item is separate, and ordinary line
+        wrapping is not treated as a new assertion.
+
+    """
+
+    paragraphs: list[str] = []
+    current: list[str] = []
+    for line in content.splitlines() + [""]:
+        line = line.strip()
+        if not line or line.startswith("#") or _LIST_LINE.match(line):
+            if current:
+                paragraphs.append(" ".join(current))
+                current = []
+            if line and not line.startswith("#"):
+                paragraphs.append(line)
+        else:
+            current.append(line)
+    result: list[str] = []
+    for paragraph in paragraphs:
+        guarded = _ABBREVIATION.sub(
+            lambda match: match.group(0).replace(".", "\x00"), paragraph
+        )
+        result.extend(
+            part.replace("\x00", ".").strip()
+            for part in _STATEMENT_END.split(guarded)
+            if part.strip()
+        )
+    return result
+
+
+def _substantive(text: str) -> bool:
+    """Whether a clause contains a factual assertion needing a citation.
+
+    Parameters
+    ----------
+    text: str
+        A clause with any citations already removed.
+
+    Returns
+    -------
+    bool
+        Numeric facts and clauses with at least two distinctive topic
+        stems are treated as substantive; isolated transition words are
+        not. This is a syntactic check, not semantic fact verification.
+
+    """
+
+    text = re.sub(r"^\s*(?:[-*+]\s+|\d+[.)]\s+|\|)", "", text)
+    return bool(_FACT_NUMBER.search(text)) or len(_stems(text)) >= 2
+
+
+def statement_citation_problem(content: str, documents: int) -> str:
+    """Find an uncited substantive assertion in a model-written section.
+
+    Parameters
+    ----------
+    content: str
+        The text to check, with document citations in ``[n]`` form.
+    documents: int
+        Number of indexed documents included in the report.
+
+    Returns
+    -------
+    str
+        A diagnostic for the first uncited sentence, independent list
+        item, or substantive text after the last citation; ``""`` if
+        every such assertion has a valid citation. Citation validity
+        itself is checked by ``citation_problem`` first.
+
+    """
+
+    for statement in _statements(content):
+        citations = [
+            match for match in _BRACKETS.finditer(statement)
+            if _cited(match.group(1), documents) is not None
+        ]
+        uncited = _BRACKETS.sub("", statement)
+        if not citations and _substantive(uncited):
+            shown = " ".join(uncited.split())[:100].rstrip(".!? ")
+            return (
+                f"Uncited statement: “{shown}”. Cite the source "
+                "after each substantive statement, or remove it."
+            )
+        if citations:
+            tail = statement[citations[-1].end():].strip(" .,;:!?)]}")
+            if _substantive(tail):
+                shown = " ".join(tail.split())[:100]
+                return (
+                    f"Uncited claim after a citation: “{shown}”. "
+                    "Cite that claim explicitly or remove it."
+                )
+    return ""
+
+
 def clean_citations(content: str, documents: int) -> tuple[str, int]:
     """Return a section with brackets that cite no document removed.
 
@@ -705,6 +824,25 @@ def support_problem(
     return ""
 
 
+def _number(value: str) -> str:
+    """Normalize one numeric literal without discarding its sign.
+
+    Parameters
+    ----------
+    value: str
+        A signed number, possibly with an exponent or percentage sign.
+
+    Returns
+    -------
+    str
+        Case-folded literal with Unicode minus normalized and grouping
+        commas removed. Unwritten signs are never inferred.
+
+    """
+
+    return value.casefold().replace("\u2212", "-").replace(",", "")
+
+
 def _comparisons(text: str) -> set[tuple[str, str, str]]:
     """Extract comparison operators and values from source text.
 
@@ -716,14 +854,14 @@ def _comparisons(text: str) -> set[tuple[str, str, str]]:
     Returns
     -------
     set[tuple[str, str, str]]
-        Variable, operator, and numerical value, with Unicode comparison
-        signs normalized to their ASCII equivalents.
+        Variable, operator, and signed numerical value, with Unicode
+        comparison signs and scientific notation normalized.
 
     """
 
     normalized = text.replace("≤", "<=").replace("≥", ">=")
     return {
-        (key.casefold(), operator, value)
+        (key.casefold(), operator, _number(value))
         for key, operator, value in _COMPARISON.findall(normalized)
     }
 
@@ -743,23 +881,24 @@ def numeric_support_problem(
     Returns
     -------
     str
-        A warning identifying an absent value, value-unit pair or
-        mismatched statistical comparison, or ``""`` when those literal
-        anchors occur in the cited source. This is not a semantic proof.
+        A warning identifying an absent signed value, exponent, value-
+        unit pair or statistical comparison; ``""`` when the source
+        contains the same literal anchors. This is not a semantic proof.
 
     """
 
     source_numbers = {
-        number: set(_FACT_NUMBER.findall(text.replace(",", "")))
+        number: {_number(value) for value in _FACT_NUMBER.findall(text)}
         for number, text in texts.items()
     }
     source_comparisons = {
         number: _comparisons(text) for number, text in texts.items()
     }
-    source_phrases = {
-        number: " " + " ".join(re.findall(
-            r"[a-z0-9]+", text.replace(",", "").casefold()
-        )) + " "
+    source_quantities = {
+        number: {
+            (_number(value), unit.casefold())
+            for value, unit in _QUANTITY.findall(text)
+        }
         for number, text in texts.items()
     }
     for sentence in re.split(r"(?<=[.!?])\s+", content):
@@ -767,7 +906,7 @@ def numeric_support_problem(
         for match in _BRACKETS.finditer(sentence):
             clause = sentence[start:match.start()]
             start = match.end()
-            numbers = _FACT_NUMBER.findall(clause.replace(",", ""))
+            numbers = _FACT_NUMBER.findall(clause)
             cited = _cited(match.group(1), max(texts, default=0))
             if not cited:
                 continue
@@ -783,7 +922,9 @@ def numeric_support_problem(
                             "document's original source passages."
                         )
                 for value in numbers:
-                    if value not in source_numbers.get(number, set()):
+                    if _number(value) not in source_numbers.get(
+                        number, set()
+                    ):
                         return (
                             f"Value {value} cited as [{number}] was not "
                             "found in that document's original source "
@@ -792,13 +933,8 @@ def numeric_support_problem(
                 for value, unit in _QUANTITY.findall(clause):
                     if unit.casefold() in _UNIT_IGNORED:
                         continue
-                    normalized = (
-                        value.replace(",", "").casefold() + " "
-                        + unit.casefold().replace("-", " ")
-                    )
-                    if (f" {normalized} " not in source_phrases.get(
-                        number, ""
-                    )):
+                    normalized = (_number(value), unit.casefold())
+                    if normalized not in source_quantities.get(number, set()):
                         return (
                             f"Quantity {value} {unit} cited as [{number}] "
                             "was not found in that document's original "

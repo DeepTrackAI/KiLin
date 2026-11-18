@@ -126,6 +126,7 @@ from kilin.tools.project_summary._reduce import (
     agreement_problem,
     chosen_numbers,
     citation_problem,
+    statement_citation_problem,
     cite_document_names,
     clean_citations,
     support_problem,
@@ -844,6 +845,7 @@ def _write_section(
 
         return (
             citation_problem(text, len(documents), cite)
+            or statement_citation_problem(text, len(documents))
             or agreement_problem(text)
             or (coverage_problem(text, noted) if section.all_documents
                 else "")
@@ -868,6 +870,7 @@ def _write_section(
         )
     left = (
         citation_problem(content, len(documents), cite)
+        or statement_citation_problem(content, len(documents))
         or agreement_problem(content)
         or (coverage_problem(content, noted) if section.all_documents
             else "")
@@ -1133,16 +1136,26 @@ def run(
         + "\n".join(f"- {problem}" for problem in problems) + "\n\n"
         if problems else ""
     )
+    valid = (
+        check.valid and not failures and not failed and not omitted
+        and not uncertain
+    )
+    # The saved artifact must disclose its status without requiring the
+    # reader to find the checks at the end or inspect result metadata.
+    if not valid:
+        parts.insert(
+            1,
+            "> **Partial report:** Evidence, validation, or document "
+            "coverage remains unresolved. Review the **Check** and "
+            "**Coverage** sections below where present.",
+        )
+        report = "\n\n".join(parts)
     final = (
         f"{report}\n\n---\n\n"
         f"{checked}{coverage}{documents_list(documents)}\n"
     )
     saved = save_output_file(
         context.project_root, f"{template.name}_project_report.md", final
-    )
-    valid = (
-        check.valid and not failures and not failed and not omitted
-        and not uncertain
     )
     summary.update({
         "report": saved.as_posix(),
