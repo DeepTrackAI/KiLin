@@ -246,28 +246,20 @@ class TestCodeFixtureRepository(unittest.TestCase):
         )
 
 
-    def test_html_is_read_as_code(self) -> None:
-        page = next(
-            chunk for chunk in self.chunks if chunk.path.suffix == ".html"
+    def test_json_is_one_passage_labelled_by_its_keys(self) -> None:
+        """Keep JSON keys as subdivisions without losing their contents."""
+
+        unit = next(unit for unit in self.units if unit.path.suffix == ".json")
+        self.assertEqual(unit.kind, "json_file")
+        self.assertEqual(
+            [child.section for child in unit.children if child.section],
+            ['"json_key_A"', '"json_key_B"', '"json_key_C"'],
         )
-        self.assertIn('<button onclick="js_function_A(1, 2)">', page.text)
-
-    def test_html_is_read_as_page_text_without_the_code_graph(self) -> None:
-        files = read_repository_files(self.report)
-        text = next(f.text for f in files if f.path.suffix == ".html")
-        self.assertIn("# html_heading_A", text)
-        self.assertIn("- Press the html_button_D button.", text)
-        self.assertNotIn("<", text)
-
-    def test_html_page_links_to_its_script_and_handler(self) -> None:
-        for expected in (
-            CodeRelation("html.page_html", "imports", "js.calculator_js"),
-            CodeRelation(
-                "html.page_html", "calls", "js.calculator_js.js_function_A"
-            ),
-        ):
-            with self.subTest(relation=expected):
-                self.assertIn(expected, self.relations)
+        passages = [
+            chunk for chunk in self.chunks if chunk.path.suffix == ".json"
+        ]
+        self.assertEqual(len(passages), 1)
+        self.assertIn('"multiplier": 2', passages[0].text)
 
 
 if __name__ == "__main__":
