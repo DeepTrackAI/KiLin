@@ -478,6 +478,11 @@ class TestRAGLifecycle(unittest.TestCase):
         self.assertEqual(
             metadata["json_source_units"], rag.JSON_SOURCE_UNITS_FORMAT
         )
+        self.assertEqual(metadata["json_source_units"], "top-level-keys-v2")
+        # Pre-fix indexes still have the earlier format version.
+        prior = dict(metadata)
+        prior["json_source_units"] = "top-level-keys-v1"
+        self.assertNotEqual(prior, metadata)
         # Older indexes have the same configured options, but no version.
         legacy = dict(metadata)
         legacy.pop("json_source_units")

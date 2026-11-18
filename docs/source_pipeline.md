@@ -154,9 +154,11 @@ Large top-level objects can be divided into child units at their
 keys, while arrays and single-line objects remain whole. The reader
 is a structural scan, not JSON validation; malformed JSON can still
 be searched. Projects selecting `.json` record `json_source_units`
-(`top-level-keys-v1`) in index metadata. Existing JSON indexes without
-this version are rebuilt once to replace obsolete chunk boundaries.
-Profiles not selecting `.json` retain their previous index identity.
+(`top-level-keys-v2`) in index metadata. Key line coordinates follow
+Python's `splitlines` boundaries, including Unicode separators inside JSON
+strings. Existing JSON indexes with an older version (or no version) are
+rebuilt once to correct section provenance. Profiles not selecting `.json`
+retain their previous index identity.
 
 Word title and author properties are read separately for literature
 search headers and the paper-summary tool. The property reader handles OLE

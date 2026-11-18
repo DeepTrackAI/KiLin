@@ -6,10 +6,13 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from kilin.chunking import chunk_source_units
+from kilin.sources import extract_source_units, read_repository_files
 from kilin.sources.extensions import sources_json
 from kilin.sources.sources import SourceFile
 
@@ -75,6 +78,89 @@ class TestJsonExtraction(unittest.TestCase):
         self.assertEqual(
             [child.section for child in unit.children], [None, '"a"']
         )
+
+    def test_unicode_separators_preserve_key_coordinates(self) -> None:
+        """Attribute literal Unicode separators to the preceding value."""
+
+        text = (
+            '{\n  "alpha": "first\u2028second\u2029third",\n'
+            '  "beta": 2,\n  "gamma": 3\n}\n'
+        )
+        self.assertEqual(
+            json.loads(text)["alpha"], "first\u2028second\u2029third"
+        )
+        [unit] = _units(text)
+        self.assertEqual(
+            [
+                (child.section, child.start_line, child.end_line)
+                for child in unit.children
+            ],
+            [
+                (None, 1, 1),
+                ('"alpha"', 2, 4),
+                ('"beta"', 5, 5),
+                ('"gamma"', 6, 7),
+            ],
+        )
+        self.assertEqual(
+            unit.children[1].text,
+            '  "alpha": "first\u2028second\u2029third",\n',
+        )
+        self.assertEqual(unit.children[2].text, '  "beta": 2,\n')
+        self.assertEqual("".join(c.text for c in unit.children), text)
+        chunks = chunk_source_units(
+            [unit],
+            count_tokens=len,
+            target_tokens=30,
+            max_tokens=50,
+            overlap_tokens=0,
+        )
+        self.assertEqual(
+            [
+                (c.section, c.start_line, c.end_line)
+                for c in chunks if c.section is not None
+            ],
+            [
+                ('"alpha"', 2, 4),
+                ('"beta"', 5, 5),
+                ('"gamma"', 6, 7),
+            ],
+        )
+
+    def test_source_reader_preserves_unicode_section_lines(self) -> None:
+        """Keep coordinates correct after real UTF-8 source reading."""
+
+        text = '{\n  "alpha": "A\u0085B",\n  "beta": 2\n}\n'
+        with TemporaryDirectory() as folder:
+            file = Path(folder, "settings.json")
+            file.write_text(text, encoding="utf-8")
+            report = {
+                "repository": folder,
+                "selected_files": ["settings.json"],
+            }
+            [source] = read_repository_files(report)
+            [unit] = extract_source_units([source])
+        self.assertEqual(json.loads(source.text)["alpha"], "A\u0085B")
+        self.assertEqual(
+            [(c.section, c.start_line, c.end_line) for c in unit.children],
+            [(None, 1, 1), ('"alpha"', 2, 3), ('"beta"', 4, 5)],
+        )
+        self.assertEqual(unit.children[2].text, '  "beta": 2\n}\n')
+
+    def test_escaped_separators_and_crlf_coordinates(self) -> None:
+        """Count source lines, not escaped characters or newline bytes."""
+
+        text = (
+            '{\r\n  "alpha": "escaped \\u2028",\r\n'
+            '  "beta": 2\r\n}\r\n'
+        )
+        self.assertEqual(json.loads(text)["alpha"], "escaped \u2028")
+        [unit] = _units(text)
+        self.assertEqual(
+            [(c.section, c.start_line, c.end_line) for c in unit.children],
+            [(None, 1, 1), ('"alpha"', 2, 2), ('"beta"', 3, 4)],
+        )
+        self.assertEqual("".join(c.text for c in unit.children), text)
 
     def test_empty_file(self) -> None:
         self.assertEqual(_units(""), [])

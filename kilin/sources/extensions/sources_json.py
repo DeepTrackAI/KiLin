@@ -38,6 +38,8 @@ Examples
 
 from __future__ import annotations
 
+from bisect import bisect_right
+from itertools import accumulate
 from typing import Final
 
 from kilin.sources.sources import (
@@ -52,16 +54,18 @@ __all__ = [
 
 
 # Changing this version reindexes profiles that select JSON files.
-JSON_SOURCE_UNITS_FORMAT: Final[str] = "top-level-keys-v1"
+JSON_SOURCE_UNITS_FORMAT: Final[str] = "top-level-keys-v2"
 
 
-def _top_level_keys(text: str) -> list[tuple[int, str]]:
+def _top_level_keys(text: str, lines: list[str]) -> list[tuple[int, str]]:
     """Find where each key of the top-level object starts.
 
     Parameters
     ----------
     text: str
         JSON text.
+    lines: list[str]
+        Source lines, using the same line boundaries as source units.
 
     Returns
     -------
@@ -73,23 +77,18 @@ def _top_level_keys(text: str) -> list[tuple[int, str]]:
 
     keys: list[tuple[int, str]] = []
     depth = 0
-    line = 1
     expecting_key = False
     index = 0
     started = False
     while index < len(text):
         character = text[index]
-        if character == "\n":
-            line += 1
-        elif character == '"':
-            start_line = line
+        if character == '"':
             end = index + 1
             while end < len(text) and text[end] != '"':
                 end += 2 if text[end] == "\\" else 1
             if depth == 1 and expecting_key:
-                keys.append((start_line, text[index + 1 : end]))
+                keys.append((index, text[index + 1 : end]))
                 expecting_key = False
-            line += text.count("\n", index, end)
             index = end
         elif character in "{[":
             if not started and character == "[":
@@ -102,7 +101,13 @@ def _top_level_keys(text: str) -> list[tuple[int, str]]:
         elif character == "," and depth == 1:
             expecting_key = True
         index += 1
-    return keys
+    # Convert key offsets using the exact splitlines boundaries that the
+    # source-unit builder uses, including Unicode and mixed line endings.
+    line_ends = list(accumulate(len(part) for part in lines))
+    return [
+        (bisect_right(line_ends, position) + 1, key)
+        for position, key in keys
+    ]
 
 
 def extract_source_units(source_file: SourceFile) -> list[SourceUnit]:
@@ -128,7 +133,7 @@ def extract_source_units(source_file: SourceFile) -> list[SourceUnit]:
     path = source_file.path
     # Keys sharing a line stay in one part, named by the first of them.
     starts: list[tuple[int, str]] = []
-    for line, key in _top_level_keys(source_file.text):
+    for line, key in _top_level_keys(source_file.text, lines):
         if not starts or starts[-1][0] != line:
             starts.append((line, key))
     children: list[SourceUnit] = []
