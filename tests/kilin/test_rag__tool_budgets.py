@@ -29,6 +29,7 @@ class TestToolUserBudgets(unittest.TestCase):
         off = {
             "batch_classify", "batch_review", "filter_results",
             "find_passages", "generate_paper_summary", "writing_check",
+            "project_summary",
         }
         for name in TOOL_REGISTRY:
             for thinking in (True, False):

@@ -39,6 +39,9 @@ from kilin.tools.generate_paper_summary import (
     SHIPPED_TEMPLATES_DIR,
 )
 from kilin.tools._registry import TOOL_REGISTRY, ToolUse
+from kilin.tools.project_summary import (
+    SHIPPED_TEMPLATES_DIR as PROJECT_TEMPLATES_DIR,
+)
 from kilin.workspace import prepare_sources_workspace
 from kilin.repository import scan_repository
 from kilin.workspace_resources import (
@@ -130,7 +133,9 @@ class TestProjectLayout(unittest.TestCase):
         expected = (
             "README.md",
             "experimental_protocol.md",
+            "literature_table.md",
             "popular_science_summary.md",
+            "project_overview.md",
             "research_briefing.md",
             "technical_summary.md",
         )
@@ -138,11 +143,14 @@ class TestProjectLayout(unittest.TestCase):
             sorted(path.name for path in (root / "templates").iterdir())
         )
         self.assertEqual(actual, expected)
-        self.assertEqual(len(plan_project_layout("literature").resources), 5)
+        self.assertEqual(len(plan_project_layout("literature").resources), 7)
         for name in expected:
+            shipped = SHIPPED_TEMPLATES_DIR / name
+            if not shipped.exists():  # A project report template.
+                shipped = PROJECT_TEMPLATES_DIR / name
             self.assertEqual(
                 (root / "templates" / name).read_bytes(),
-                (SHIPPED_TEMPLATES_DIR / name).read_bytes(),
+                shipped.read_bytes(),
             )
 
     def test_reopening_preserves_edited_deleted_and_added_templates(
@@ -198,7 +206,7 @@ class TestProjectLayout(unittest.TestCase):
         self.assertTrue((project.root / "sources/paper.md").is_file())
         self.assertTrue((project.root / "outputs").is_dir())
         self.assertEqual(
-            len(list((project.root / "templates").glob("*.md"))), 5
+            len(list((project.root / "templates").glob("*.md"))), 7
         )
 
     def test_mirrored_workspace_installs_selected_templates(self) -> None:
@@ -212,7 +220,7 @@ class TestProjectLayout(unittest.TestCase):
         self.assertTrue((workspace.root / "outputs").is_dir())
         self.assertTrue((workspace.root / "templates").is_dir())
         self.assertEqual(
-            len(list((workspace.root / "templates").glob("*.md"))), 5
+            len(list((workspace.root / "templates").glob("*.md"))), 7
         )
         # Repeated synchronization cannot replace an edited template.
         modified = workspace.root / "templates/research_briefing.md"

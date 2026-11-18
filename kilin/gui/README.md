@@ -285,8 +285,9 @@ is loaded, and unknown settings are rejected. The tools are:
   at most 750 words. Edit a supplied template, or add your
   own `.md` template and name it in the question ("…with the lab_summary
   template"); the rules (limits in brackets after a heading, `{citation}`
-  and `{references}` placeholders) are in tutorial 170 and in
-  `kilin/tools/generate_paper_summary/_report_template.py`. The headline and each section are
+  and `{references}` placeholders) are in tutorial 170, in the projects'
+  `templates/README.md` and in `kilin/tools/_shared/report_templates.py`.
+  The headline and each section are
   written separately and checked in Python (word and item limits), with
   targeted fixes; the result is saved as Markdown in the project's
   `outputs/` folder. In the desktop app, an additional PDF is generated

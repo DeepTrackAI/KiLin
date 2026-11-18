@@ -287,6 +287,7 @@ callback, so document the default policy and cost.
 | `find_fact` | Find one fact or a complete set across a document/corpus. | [README](../kilin/tools/find_fact/README.md) |
 | `find_passages` | Locate relevant literal passages/sentences. | [README](../kilin/tools/find_passages/README.md) |
 | `paper_overview` | Produce a structured overview of a paper. | [README](../kilin/tools/paper_overview/README.md) |
+| `project_summary` | Write one report on every document of a project from a project template, with per-document entries assembled in code. | [README](../kilin/tools/project_summary/README.md) |
 | `reference_check` | Check a paper's references against the project's files, find their citations, and judge each claim against the cited paper. | [README](../kilin/tools/reference_check/README.md) |
 | `suggest_reference` | Suggest papers for a statement from model-assessed passages; include checked quotations when available. | [README](../kilin/tools/suggest_reference/README.md) |
 | `writing_check` | Check a document's grammar and style paragraph by paragraph, with consistency checks in code; suggest changes and save the report. | [README](../kilin/tools/writing_check/README.md) |
@@ -331,7 +332,10 @@ citation range is 100 passages.
 
 
 The report-generation package has an additional `_report_template.py` and
-`_report_format.py` to validate Markdown templates and report formatting.
+`_report_format.py` to validate Markdown templates and report formatting;
+the template format, parser and report checks themselves are shared in
+`kilin/tools/_shared/report_templates.py`, which each report tool calls with
+its own limits (`TemplateRules`).
 The GUI offers PDF rendering through its optional `_report_pdf.py`; core
 tools should still function without Qt (Markdown output remains available).
 

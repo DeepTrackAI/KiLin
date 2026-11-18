@@ -64,6 +64,17 @@ max_words: 300
 
 Notes.
 """
+LAB_OVERVIEW = """---
+title: Lab Overview
+description: What all our papers say together.
+max_words: 300
+scope: project
+---
+
+## Main Themes (40-60 words)
+
+The themes.
+"""
 BROKEN = """---
 title: Broken One
 description: A template with an unknown placeholder.
@@ -108,6 +119,8 @@ class _Project(unittest.TestCase):
             shutil.copy(source, self.templates / source.name)
         (self.templates / "journal_club.md").write_text(JOURNAL_CLUB)
         (self.templates / "minutes.md").write_text(MINUTES)
+        # A project report, which this tool leaves alone.
+        (self.templates / "lab_overview.md").write_text(LAB_OVERVIEW)
 
     def tearDown(self) -> None:
         self.folder.cleanup()
@@ -159,6 +172,7 @@ class TestRouting(_Project):
         # Templates with their own intent are left to it.
         self.assertNotIn("Research Briefing", found.description)
         self.assertIn("Technical Summary", found.description)
+        self.assertNotIn("Lab Overview", found.description)
         cues = [re.compile(cue, re.I) for cue in found.cues]
         for question, cued in (
             ("write a journal club handout of smith20", True),
@@ -231,6 +245,11 @@ class TestChoosing(_Project):
         with self.assertRaisesRegex(ValueError, "Which template"):
             choose_template("make a report of smith20", self.templates,
                             TEMPLATE_CHOOSE)
+        # A project template is not a paper report.
+        self.assertIsNone(choose_template(
+            "write a lab overview of smith20", self.templates,
+            TEMPLATE_CHOOSE, Mock(return_value=None),
+        ))
         # A fixed default is used without asking.
         self.assertEqual(
             choose_template("make a report", self.templates,
@@ -333,6 +352,10 @@ class TestListingAndChecking(_Project):
         shutil.copy(SHIPPED_TEMPLATES_DIR / "README.md", self.templates)
         answer = templates_answer(self.templates)
         self.assertIn("folder; `templates/README.md` explains", answer)
+        # Project report templates are listed apart.
+        self.assertNotIn("Lab Overview", answer.split("whole project")[0])
+        self.assertIn("**Report templates for the whole project**\n\n- "
+                      "**Lab Overview** (`lab_overview.md`)", answer)
         result, choose_paper = self._run("which templates do I have?")
         choose_paper.assert_not_called()
         self.assertEqual(result.answer, answer)

@@ -130,6 +130,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/_registry.py`](../kilin/tools/_registry.py) | Register KíLín's tools and resolve an intent's tool. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/__init__.py`](../kilin/tools/_shared/__init__.py) | Private services shared by registered KíLín tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/author_year.py`](../kilin/tools/_shared/author_year.py) | Find author-year citations and resolve them to reference-list entries. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/test_author_year.py) |
+| [`kilin/tools/_shared/report_templates.py`](../kilin/tools/_shared/report_templates.py) | Read Markdown report templates and check reports against them. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/citations.py`](../kilin/tools/_shared/citations.py) | Validate bounded passage citations for document tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/test_citations.py) |
 | [`kilin/tools/_shared/claims.py`](../kilin/tools/_shared/claims.py) | Judge whether a cited work supports the sentence that cites it. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/_rating.py`](../kilin/tools/_shared/_rating.py) | Rate citation suitability from checked evidence, not search rank. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/) |
@@ -168,11 +169,17 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/generate_paper_summary/__init__.py`](../kilin/tools/generate_paper_summary/__init__.py) | Produce a validated paper summary using project-owned templates. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/generate_paper_summary/_configuration.py`](../kilin/tools/generate_paper_summary/_configuration.py) | Validate the paper-summary tool's packaged configuration defaults. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/generate_paper_summary/_report_format.py`](../kilin/tools/generate_paper_summary/_report_format.py) | Format report Markdown into safe HTML for print rendering. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
-| [`kilin/tools/generate_paper_summary/_report_template.py`](../kilin/tools/generate_paper_summary/_report_template.py) | Read Markdown report templates and check reports against them. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/generate_paper_summary/_report_template.py`](../kilin/tools/generate_paper_summary/_report_template.py) | Read report templates and check reports with this tool's limits. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/generate_paper_summary/tool.py`](../kilin/tools/generate_paper_summary/tool.py) | Tool ``generate_paper_summary``: turn one paper into a templated report. | [Per-tool README](../kilin/tools/generate_paper_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/paper_overview/__init__.py`](../kilin/tools/paper_overview/__init__.py) | Expose the registered ``paper_overview`` tool. | [Per-tool README](../kilin/tools/paper_overview/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/paper_overview/_configuration.py`](../kilin/tools/paper_overview/_configuration.py) | Validate the defaults owned by the paper_overview tool. | [Per-tool README](../kilin/tools/paper_overview/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/paper_overview/tool.py`](../kilin/tools/paper_overview/tool.py) | Summarize one paper, chosen first, from its own passages. | [Per-tool README](../kilin/tools/paper_overview/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/project_summary/__init__.py`](../kilin/tools/project_summary/__init__.py) | Expose the registered ``project_summary`` tool. | [Per-tool README](../kilin/tools/project_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/project_summary/_configuration.py`](../kilin/tools/project_summary/_configuration.py) | Validate the defaults owned by the project_summary tool. | [Per-tool README](../kilin/tools/project_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/project_summary/_documents.py`](../kilin/tools/project_summary/_documents.py) | Choose a project's documents and the excerpt read from each. | [Per-tool README](../kilin/tools/project_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/project_summary/_mapping.py`](../kilin/tools/project_summary/_mapping.py) | Take one document's notes for a project report, and check them. | [Per-tool README](../kilin/tools/project_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/project_summary/_reduce.py`](../kilin/tools/project_summary/_reduce.py) | Write a project report from every document's notes and checks. | [Per-tool README](../kilin/tools/project_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/project_summary/tool.py`](../kilin/tools/project_summary/tool.py) | Tool ``project_summary``: one report on all the documents of a project. | [Per-tool README](../kilin/tools/project_summary/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/__init__.py`](../kilin/tools/reference_check/__init__.py) | Expose the registered ``reference_check`` tool. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_citations.py`](../kilin/tools/reference_check/_citations.py) | Find a paper's numbered in-text citations and their citing sentences. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_configuration.py`](../kilin/tools/reference_check/_configuration.py) | Validate the defaults owned by the reference_check tool. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
@@ -216,15 +223,15 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Conversation memory | 8 |
 | GUI architecture | 10 |
 | Model management | 8 |
-| Per-tool README | 50 |
+| Per-tool README | 56 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 32 |
 | Source pipeline | 23 |
-| Tool extension contracts | 26 |
+| Tool extension contracts | 27 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 182.**
+**Total production Python modules: 189.**
 
 ## Non-Python resources and UI assets
 

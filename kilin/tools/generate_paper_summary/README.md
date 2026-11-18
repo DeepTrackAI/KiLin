@@ -49,7 +49,9 @@ The tool is a self-contained package:
 
 - `tool.py`: settings validation, resource declarations, and execution.
 - `_configuration.py`: validates all packaged defaults at import time.
-- `_report_template.py`: reads templates and checks generated reports.
+- `_report_template.py`: reads templates and checks generated reports with
+  this tool's limits; the format, parser and checks are shared with the
+  other report tools in `kilin/tools/_shared/report_templates.py`.
 - `defaults.json`: default settings and private algorithm parameters.
 - `templates/`: Markdown templates available for selective installation.
 

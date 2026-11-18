@@ -22,6 +22,9 @@ from kilin.project_layout import plan_project_layout
 from kilin.project_type import load_project_types, project_type
 from kilin.tools._registry import TOOL_REGISTRY
 from kilin.tools.generate_paper_summary import SHIPPED_TEMPLATES_DIR
+from kilin.tools.project_summary import (
+    SHIPPED_TEMPLATES_DIR as PROJECT_TEMPLATES_DIR,
+)
 
 
 class TestToolResources(unittest.TestCase):
@@ -90,7 +93,8 @@ class TestToolResources(unittest.TestCase):
         }
         self.assertEqual(
             owned,
-            set(SHIPPED_TEMPLATES_DIR.glob("*.md")),
+            set(SHIPPED_TEMPLATES_DIR.glob("*.md"))
+            | set(PROJECT_TEMPLATES_DIR.glob("*.md")),
         )
         self.assertEqual(plan_project_layout("code").resources, ())
 

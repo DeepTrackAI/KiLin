@@ -1,0 +1,1177 @@
+"""Tool ``project_summary``: one report on all the documents of a project.
+
+A project template (``scope: project``) says what the report holds:
+sections written from all documents, and per-document sections listing the
+documents that meet a condition. The tool:
+
+1. Chooses the uniquely named project template or asks the user through
+   the shared GUI choice protocol, validating the returned choice.
+2. Plans the work (one call per document, one per section) and asks
+   before a large run; the quick version reads a shorter excerpt of each
+   document (its card and opening).
+3. Reads each selected document once (``_documents``, ``_mapping``):
+   notes for each section, and checked per-document answers.
+4. Writes the report (``_reduce``), checks its structure and completeness,
+   and saves it to ``outputs/``. Failed or omitted documents make the result
+   partial, with coverage disclosed in the saved report and result metadata.
+
+Key Features
+------------
+
+- **Whole-project scope**
+
+    All indexed documents are considered without a search filter. Limits
+    and failed reads are disclosed rather than marked fully validated.
+
+- **Any project template**
+
+    Shipped or written by the user, chosen by name or from a list.
+
+- **Checked**
+
+    Per-document entries need evidence; sections are checked against
+    their limits.
+
+Module Structure
+----------------
+
+- ``ProjectSummarySettings`` and ``parse_settings``
+
+    The settings of ``project_summary`` in a project type.
+
+- ``SHIPPED_TEMPLATES_DIR``, ``TEMPLATE_CHOOSE`` and
+  ``workspace_resources``
+
+    The project templates shipped with KíLín, and their installation.
+
+- ``project_templates``, ``choose_template`` and ``routing``
+
+    The project's project templates, the one a question asks for, and the
+    routing they add.
+
+- ``run``
+
+    Write the report and save it.
+
+Examples
+--------
+>>> from kilin.tools.project_summary import parse_settings
+>>> parse_settings({"template": "project_overview"}, "x").template
+'project_overview'
+
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from functools import partial
+from pathlib import Path
+import re
+from typing import Final
+
+from kilin._model_completion import strip_thinking
+from kilin.chunking import Chunk
+from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools._contract import (
+    ToolContext,
+    ToolRequest,
+    ToolResult,
+    ToolRouting,
+    check_choice,
+    check_int,
+    reject_unknown,
+)
+from kilin.tools._shared.outputs import save_output_file
+from kilin.tools._shared.planning import (
+    CONFIRMATION_CHOICES,
+    PLAN_CHOICE_CANCEL,
+    PLAN_CHOICE_QUICK,
+    ToolPlan,
+    ask_choice,
+    confirm_plan,
+)
+from kilin.tools._shared.report_templates import (
+    SCOPE_PROJECT,
+    SECTION_SOURCE_DOCUMENTS,
+    SECTION_SOURCE_KEY_DOCUMENTS,
+    SECTION_SOURCE_NOTES,
+    SECTION_SOURCE_PER_DOCUMENT,
+    ReportTemplate,
+    TemplateSection,
+    check_report,
+    load_template,
+    section_problem,
+    template_names,
+)
+from kilin.tools.project_summary import _configuration as _config
+from kilin.tools.project_summary._documents import (
+    ProjectDocument,
+    document_excerpt,
+    project_documents,
+    query_words,
+)
+from kilin.tools.project_summary._mapping import (
+    CHECK_NO,
+    CHECK_UNCLEAR,
+    CHECK_YES,
+    DocumentNotes,
+    map_prompt,
+    parse_notes,
+    quote_found,
+    template_texts,
+    topics,
+)
+from kilin.tools.project_summary._reduce import (
+    agreement_problem,
+    chosen_numbers,
+    citation_problem,
+    cite_document_names,
+    clean_citations,
+    support_problem,
+    condense_prompt,
+    coverage_problem,
+    documents_line,
+    documents_list,
+    fix_prompt,
+    fitted_headline,
+    headline_fix_prompt,
+    headline_prompt,
+    key_documents_prompt,
+    note_groups,
+    numeric_support_problem,
+    per_document_markdown,
+    section_prompt,
+)
+from kilin.workspace_resources import WorkspaceResource, templates_folder
+
+__all__ = [
+    "SHIPPED_TEMPLATES_DIR",
+    "TEMPLATE_CHOOSE",
+    "ProjectSummarySettings",
+    "choose_template",
+    "parse_settings",
+    "project_templates",
+    "routing",
+    "run",
+    "workspace_resources",
+]
+
+# Project templates shipped with KíLín.
+SHIPPED_TEMPLATES_DIR: Final[Path] = Path(__file__).parent / "templates"
+# The ``template`` value using any project template of the project.
+TEMPLATE_CHOOSE: Final[str] = "choose"
+_TEMPLATE_NAME = re.compile(r"[A-Za-z0-9][\w-]*")
+_WRITE_WORDS: Final[str] = (
+    r"\b(?:write|prepare|make|generate|create|produce|draft|fill(?:\s+in)?|"
+    r"do|give\s+me|build)\b[^\n]{0,60}?"
+)
+_FOR_WORDS: Final[str] = r"\s+(?:of|for|on|from|about|across)\b"
+_ROUTED_DESCRIPTION: Final[int] = 120
+# Characters of a document's other notes standing in for a missing note in
+# a section covering all documents.
+_FALLBACK_NOTE: Final[int] = 400
+# Bound the filenames and unresolved evidence shown in a saved report.
+_OMITTED_NAMES_SHOWN: Final[int] = 10
+_UNCERTAIN_SHOWN: Final[int] = 10
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectSummarySettings:
+    """Settings of ``project_summary`` in a project type.
+
+    Attributes
+    ----------
+    template: str
+        The project template's file name without ``.md``, or
+        ``TEMPLATE_CHOOSE`` to use the one the question names or the user
+        chooses.
+    document_tokens: int
+        Tokens read from each document (300-16000).
+    max_documents: int
+        Most documents read (1-2000); the others are reported as not read.
+    repair_attempts: int
+        Rewrites of a section that misses its limits (0-4).
+    confirmation: str
+        ``always``, ``when_large`` or ``never``.
+    large_batches: int
+        With ``when_large``, plans with more model calls than this ask
+        first (0-1000).
+
+    """
+
+    template: str = _config.DEFAULT_TEMPLATE
+    document_tokens: int = _config.DEFAULT_DOCUMENT_TOKENS
+    max_documents: int = _config.DEFAULT_MAX_DOCUMENTS
+    repair_attempts: int = _config.DEFAULT_REPAIR_ATTEMPTS
+    confirmation: str = _config.DEFAULT_CONFIRMATION
+    large_batches: int = _config.DEFAULT_LARGE_BATCHES
+
+
+def parse_settings(data: dict, where: str) -> ProjectSummarySettings:
+    """Validate ``project_summary`` settings from a project type.
+
+    Parameters
+    ----------
+    data: dict
+        Settings from the intent's ``tool`` object, without ``name``.
+    where: str
+        Location for errors.
+
+    Returns
+    -------
+    ProjectSummarySettings
+        Validated settings.
+
+    Raises
+    ------
+    ValueError
+        If a setting is unknown or out of range, or the template is not a
+        plain file name.
+
+    """
+
+    reject_unknown(
+        where, data,
+        ("template", "document_tokens", "max_documents", "repair_attempts",
+         "confirmation", "large_batches"),
+    )
+    defaults = ProjectSummarySettings()
+    template = data.get("template", defaults.template)
+    if not isinstance(template, str) or not _TEMPLATE_NAME.fullmatch(
+        template
+    ):
+        raise ValueError(
+            f"{where!r} template must be a template file name without .md."
+        )
+    return ProjectSummarySettings(
+        template=template,
+        document_tokens=check_int(
+            where, data, "document_tokens", defaults.document_tokens,
+            300, 16000,
+        ),
+        max_documents=check_int(
+            where, data, "max_documents", defaults.max_documents, 1, 2000
+        ),
+        repair_attempts=check_int(
+            where, data, "repair_attempts", defaults.repair_attempts, 0, 4
+        ),
+        confirmation=check_choice(
+            where, data, "confirmation", defaults.confirmation,
+            CONFIRMATION_CHOICES,
+        ),
+        large_batches=check_int(
+            where, data, "large_batches", defaults.large_batches, 0, 1000
+        ),
+    )
+
+
+def workspace_resources(
+    settings: ProjectSummarySettings,
+) -> tuple[WorkspaceResource, ...]:
+    """Declare the project templates one configured intent needs.
+
+    Parameters
+    ----------
+    settings: ProjectSummarySettings
+        Validated tool configuration.
+
+    Returns
+    -------
+    tuple[WorkspaceResource, ...]
+        Every shipped project template for ``TEMPLATE_CHOOSE``; otherwise
+        the named one when it is shipped, else none (a template the user
+        provides).
+
+    """
+
+    if settings.template == TEMPLATE_CHOOSE:
+        sources = sorted(SHIPPED_TEMPLATES_DIR.glob("*.md"))
+    else:
+        source = SHIPPED_TEMPLATES_DIR / f"{settings.template}.md"
+        sources = [source] if source.exists() else []
+    return tuple(
+        WorkspaceResource(source, f"templates/{source.name}")
+        for source in sources
+    )
+
+
+def project_templates(
+    folder: Path,
+) -> list[tuple[str, ReportTemplate | None, str]]:
+    """Return the project templates in a templates folder.
+
+    Parameters
+    ----------
+    folder: pathlib.Path
+        A project's templates folder.
+
+    Returns
+    -------
+    list[tuple[str, ReportTemplate | None, str]]
+        Each project template's file name, the template (None when it
+        breaks a rule) and the error (``""`` when valid), by name; a file
+        that breaks a rule is listed when it says ``scope: project``.
+        Templates for one document are left out.
+
+    """
+
+    if not folder.is_dir():
+        return []
+    found: list[tuple[str, ReportTemplate | None, str]] = []
+    for name in template_names(folder):
+        try:
+            template = load_template(name, folder, _config.TEMPLATE_RULES)
+        except (ValueError, UnicodeError, OSError) as error:
+            # The scope is still readable if the file has invalid UTF-8.
+            # Do not let a broken template prevent discovery of the rest.
+            try:
+                text = (folder / f"{name}.md").read_text(
+                    encoding="utf-8", errors="replace"
+                )
+            except OSError:
+                text = ""
+            if re.search(r"^scope:\s*project\s*$", text, re.M | re.I):
+                found.append((name, None, str(error)))
+            continue
+        if template.scope == SCOPE_PROJECT:
+            found.append((name, template, ""))
+    return found
+
+
+def _named_templates(
+    question: str,
+    found: list[tuple[str, ReportTemplate | None, str]],
+) -> list[tuple[str, ReportTemplate | None, str]]:
+    """Find templates named by complete IDs, filenames, or titles.
+
+    Separators are interchangeable. A shorter name embedded in a longer
+    matched name is not an additional match; separate names are ambiguous.
+
+    Parameters
+    ----------
+    question: str
+        The user's request.
+    found: list[tuple[str, ReportTemplate | None, str]]
+        Project templates, including unusable ones without a title.
+
+    Returns
+    -------
+    list[tuple[str, ReportTemplate | None, str]]
+        All distinct matching templates, in folder order.
+
+    """
+
+    text = " ".join(question.casefold().split())
+    hits: list[tuple[str, tuple[int, int]]] = []
+    for name, template, _ in found:
+        aliases = {name, f"{name}.md"}
+        if template is not None:
+            aliases.add(template.title)
+        for alias in aliases:
+            words = [
+                part for part in re.split(r"[\s_-]+", alias.casefold())
+                if part
+            ]
+            if not words:
+                continue
+            pattern = (
+                r"(?<!\w)" + r"[\s_-]+".join(
+                    re.escape(word) for word in words
+                ) + r"(?!\w)"
+            )
+            hits.extend(
+                (name, match.span())
+                for match in re.finditer(pattern, text)
+            )
+    named = {
+        name for name, (start, end) in hits
+        if not any(
+            other_start <= start and end <= other_end
+            and (other_start, other_end) != (start, end)
+            for _, (other_start, other_end) in hits
+        )
+    }
+    return [item for item in found if item[0] in named]
+
+
+def _ambiguous_templates(
+    named: list[tuple[str, ReportTemplate | None, str]],
+) -> str:
+    """Explain a request naming more than one project template.
+
+    Parameters
+    ----------
+    named: list[tuple[str, ReportTemplate | None, str]]
+        Matching templates.
+
+    Returns
+    -------
+    str
+        Instructions to identify exactly one template by filename.
+
+    """
+
+    options = ", ".join(f"`{name}.md`" for name, _, _ in named)
+    return (
+        f"Several project report templates match this question: {options}. "
+        "Name exactly one template by its filename."
+    )
+
+
+def choose_template(
+    question: str,
+    folder: Path,
+    default: str,
+    choose: Callable[[str, tuple[str, ...]], int | None] | None = None,
+) -> ReportTemplate | None:
+    """Pick the project template a question asks for, or ask which.
+
+    Parameters
+    ----------
+    question: str
+        The question.
+    folder: pathlib.Path
+        The project's templates folder.
+    default: str
+        The template used when the question names none, or
+        ``TEMPLATE_CHOOSE``.
+    choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
+        ``ToolContext.choose``. Defaults to ``None``.
+
+    Returns
+    -------
+    ReportTemplate | None
+        The uniquely named project template or the fixed default; with
+        ``TEMPLATE_CHOOSE``, the only usable template or the user's choice.
+        None if the user cancels or returns an invalid index.
+
+    Raises
+    ------
+    ValueError
+        If a named template is invalid, several are named, the default
+        is not project-scoped, there is no usable template, or nobody can
+        choose among several; the message explains the problem.
+
+    """
+
+    found = project_templates(folder)
+    named = _named_templates(question, found)
+    if len(named) > 1:
+        raise ValueError(_ambiguous_templates(named))
+    if named:
+        name, template, error = named[0]
+        if template is None:
+            raise ValueError(f"`{name}.md` cannot be used: {error}")
+        return template
+    # An explicitly named document template must not silently fall back
+    # to an unrelated project template when routing chose this tool.
+    known = {name for name, _, _ in found}
+    document_templates = []
+    for name in template_names(folder):
+        if name in known:
+            continue
+        try:
+            other = load_template(name, folder, _config.TEMPLATE_RULES)
+        except (ValueError, UnicodeError, OSError):
+            continue
+        if other.scope != SCOPE_PROJECT:
+            document_templates.append((name, other, ""))
+    wrong_scope = _named_templates(question, document_templates)
+    if wrong_scope:
+        names = ", ".join(f"`{name}.md`" for name, _, _ in wrong_scope)
+        raise ValueError(
+            f"{names} belongs to individual-document reports, not "
+            "reports on the whole project."
+        )
+    if default != TEMPLATE_CHOOSE:
+        try:
+            template = load_template(default, folder, _config.TEMPLATE_RULES)
+        except (UnicodeError, OSError) as error:
+            raise ValueError(
+                f"Cannot read project report template {default!r}: {error}"
+            ) from error
+        if template.scope != SCOPE_PROJECT:
+            raise ValueError(
+                f"Template {template.name!r} is for individual documents, "
+                "not a report on the whole project."
+            )
+        return template
+    usable = [template for _, template, _ in found if template is not None]
+    if not usable:
+        raise ValueError(
+            "This project has no project report template. A project "
+            "template is a Markdown file in `templates/` with `scope: "
+            "project` in its front matter; `templates/README.md` explains "
+            "the format."
+        )
+    if len(usable) == 1:
+        return usable[0]
+    if choose is None:
+        raise ValueError(
+            "Which project report? Name one in the question, for example "
+            f"“write a {usable[0].title.lower()} of the project”: "
+            + ", ".join(f"{t.title} (`{t.name}.md`)" for t in usable) + "."
+        )
+    index = choose(
+        "Which report on the whole project?",
+        tuple(f"{t.title} ({t.name})" for t in usable),
+    )
+    if type(index) is not int or not 0 <= index < len(usable):
+        return None
+    return usable[index]
+
+
+def routing(
+    settings: ProjectSummarySettings,
+    root: Path,
+    others: tuple[ProjectSummarySettings, ...] = (),
+) -> ToolRouting | None:
+    """Return the routing the project's project templates add.
+
+    Parameters
+    ----------
+    settings: ProjectSummarySettings
+        The intent's settings.
+    root: pathlib.Path
+        The project's workspace.
+    others: tuple[ProjectSummarySettings, ...], optional
+        Other intents using this tool; templates they name are left to
+        them. Defaults to none.
+
+    Returns
+    -------
+    ToolRouting | None
+        For ``TEMPLATE_CHOOSE``: a cue per valid project template whose
+        title or file name has at least two words, after a word asking to
+        write ("write a lab overview of the project") or before "of",
+        "for", "on", "from", "about" or "across"; and a description of the
+        templates for the router. None otherwise, or without templates.
+
+    """
+
+    if settings.template != TEMPLATE_CHOOSE:
+        return None
+    claimed = {other.template for other in others}
+    usable = [
+        template for name, template, _ in
+        project_templates(templates_folder(root))
+        if template is not None and name not in claimed
+    ]
+    if not usable:
+        return None
+    cues: list[str] = []
+    for template in usable:
+        phrases = {
+            " ".join(phrase.casefold().split())
+            for phrase in (template.title, template.name.replace("_", " "))
+            if len(phrase.replace("_", " ").split()) >= 2
+        }
+        if not phrases:
+            continue
+        alternatives = "|".join(
+            r"[\s_-]+".join(re.escape(word) for word in phrase.split())
+            for phrase in sorted(phrases)
+        )
+        cues.append(rf"{_WRITE_WORDS}\b(?:{alternatives})\b")
+        cues.append(rf"\b(?:{alternatives})\b{_FOR_WORDS}")
+
+    def short(text: str) -> str:
+        """Return a description cut for the router.
+
+        Parameters
+        ----------
+        text: str
+            A template's description.
+
+        Returns
+        -------
+        str
+            Without its final full stop, cut at a word with "…" when long.
+
+        """
+
+        text = " ".join(text.split()).rstrip(". ")
+        if len(text) <= _ROUTED_DESCRIPTION:
+            return text
+        return text[:_ROUTED_DESCRIPTION].rsplit(" ", 1)[0] + "…"
+
+    described = "; ".join(
+        f"{t.title} ({t.name}): {short(t.description)}" for t in usable
+    )
+    return ToolRouting(
+        tuple(cues),
+        f"Project report templates in this project: {described}.",
+    )
+
+
+def _seconds(prompt_tokens: int, reply_tokens: int) -> float:
+    """Return the estimated duration of one model call.
+
+    Parameters
+    ----------
+    prompt_tokens: int
+        Tokens sent.
+    reply_tokens: int
+        Tokens written.
+
+    Returns
+    -------
+    float
+        Seconds, from the tool's estimates.
+
+    """
+
+    return (
+        _config.CALL_SECONDS
+        + prompt_tokens / _config.PROMPT_TOKENS_PER_SECOND
+        + reply_tokens / _config.REPLY_TOKENS_PER_SECOND
+    )
+
+
+def _plan(
+    template: ReportTemplate,
+    documents: Sequence[ProjectDocument],
+    settings: ProjectSummarySettings,
+    left_out: int,
+) -> ToolPlan:
+    """Return the plan of one project report.
+
+    Parameters
+    ----------
+    template: ReportTemplate
+        The project template.
+    documents: Sequence[ProjectDocument]
+        The documents to read.
+    settings: ProjectSummarySettings
+        The settings, for the excerpt size.
+    left_out: int
+        Documents beyond ``max_documents``.
+
+    Returns
+    -------
+    ToolPlan
+        One call per document and one per written section, with estimated
+        times for full and shorter (quick) reading.
+
+    """
+
+    count = len(documents)
+    writing = len(topics(template)) + sum(
+        s.source == SECTION_SOURCE_KEY_DOCUMENTS for s in template.sections
+    ) + (1 if template.headline_characters else 0)
+    write_seconds = writing * _seconds(
+        _config.SECTION_PROMPT_TOKENS + _config.GROUP_TOKENS // 2,
+        _config.SECTION_REPLY_TOKENS,
+    )
+    read = count * _seconds(
+        _config.MAP_PROMPT_TOKENS + settings.document_tokens,
+        _config.MAP_REPLY_TOKENS,
+    )
+    quick = count * _seconds(
+        _config.MAP_PROMPT_TOKENS + _config.QUICK_DOCUMENT_TOKENS,
+        _config.MAP_REPLY_TOKENS,
+    )
+    cards = sum(document.card is not None for document in documents)
+    scope = f"{count} documents of the project, {cards} with a card"
+    if left_out:
+        scope += f"; {left_out} more are left out (the limit is {count})"
+    summary = f"Write a {template.title} from every document."
+    if left_out:
+        summary = (
+            f"Write a partial {template.title}: {count} of "
+            f"{count + left_out} documents."
+        )
+    return ToolPlan(
+        tool="project_summary",
+        summary=summary,
+        scope=scope + ".",
+        items=count,
+        batches=count + writing,
+        batches_to_run=count + writing,
+        estimated_seconds=read + write_seconds,
+        quick_items=count,
+        quick_seconds=quick + write_seconds,
+        details=(
+            f"Reads about {settings.document_tokens} tokens of each "
+            "document, then writes each section from all of them.",
+        ),
+        quick_label="Shorter reading",
+        quick_note="Each document's card and opening only",
+    )
+
+
+def _clean(content: str, section: TemplateSection) -> str:
+    """Return a model-written section without a repeated heading.
+
+    Parameters
+    ----------
+    content: str
+        The model's reply.
+    section: TemplateSection
+        The section it writes.
+
+    Returns
+    -------
+    str
+        Without thinking, a leading heading or label naming the section,
+        and surrounding blank lines; a labelled line is its first line.
+
+    """
+
+    lines = strip_thinking(content).strip().splitlines()
+    name = re.escape(section.name)
+    while lines and (
+        re.match(r"^\s*#+\s", lines[0])
+        or re.match(rf"^\**\s*{name}\s*:?\**\s*:?\s*$", lines[0], re.I)
+    ):
+        lines.pop(0)
+    text = "\n".join(lines).strip()
+    if section.inline:
+        first = next((line.strip() for line in lines if line.strip()), "")
+        text = re.sub(rf"^\**\s*{name}\s*:?\**\s*:?\s*", "", first,
+                      flags=re.I)
+    return text
+
+
+def _write_section(
+    template: ReportTemplate,
+    section: TemplateSection,
+    notes: dict[int, DocumentNotes],
+    documents: Sequence[ProjectDocument],
+    source_texts: Mapping[int, str],
+    settings: ProjectSummarySettings,
+    context: ToolContext,
+    failures: list[str],
+) -> str:
+    """Write one section from all documents' notes, fixing its problems.
+
+    Parameters
+    ----------
+    template: ReportTemplate
+        The project template.
+    section: TemplateSection
+        A ``notes`` section.
+    notes: dict[int, DocumentNotes]
+        Each read document's notes, by number.
+    documents: Sequence[ProjectDocument]
+        The documents.
+    source_texts: Mapping[int, str]
+        Original indexed source text, assembled once per report run.
+    settings: ProjectSummarySettings
+        The settings, for repair attempts.
+    context: ToolContext
+        Tool services, for model calls.
+    failures: list[str]
+        Problems left after the repairs, appended for the report's check
+        line.
+
+    Returns
+    -------
+    str
+        The section's content; when the notes do not fit one call, written
+        from each group's condensed facts. In a section covering all
+        documents, a document read without a note for it is represented by
+        its title and its other notes, and must be cited. A section
+        outside its limits,
+        citing documents wrongly (``citation_problem``), citing a document
+        that lacks the claim in its original source passages, or inventing
+        a numerical value (``numeric_support_problem``),
+        calling one document's view an agreement or disagreement
+        (``agreement_problem``) or, when marked ``all documents``, leaving
+        out documents with notes (``coverage_problem``) is rewritten up to
+        ``repair_attempts`` times; then documents still named in the text
+        ("Document 4") are written as citations ("[4]"), and brackets
+        still citing no document are removed.
+
+    """
+
+    lines = [
+        (number, found.notes[section.name])
+        for number, found in sorted(notes.items())
+        if section.name in found.notes
+    ]
+    if section.all_documents:
+        # Every document read belongs here: one without a note for this
+        # section (a paper says nothing of "the collection's scope") is
+        # represented by its title and its other notes.
+        titles_by_number = {d.number: d.title for d in documents}
+        noted_numbers = {number for number, _ in lines}
+        for number, found in sorted(notes.items()):
+            if found.failure or number in noted_numbers:
+                continue
+            other = " ".join(found.notes.values())[:_FALLBACK_NOTE]
+            lines.append((number, (
+                f"{titles_by_number.get(number, '')}. {other}".strip()
+            )))
+        lines.sort()
+    groups = note_groups(lines, _config.GROUP_TOKENS)
+    if len(groups) > 1:
+        condensed = [
+            strip_thinking(context.ask_model(
+                *condense_prompt(section, group), None
+            )).strip()
+            for group in groups
+        ]
+        text = "\n".join(condensed)
+    else:
+        text = "\n".join(f"[{n}] {note}" for n, note in lines)
+    content = _clean(context.ask_model(
+        *section_prompt(template, section, text, len(documents)), None
+    ), section)
+    cite = bool(lines) and not section.inline
+    noted = [number for number, _ in lines]
+    # Model-generated notes must never serve as independent evidence.
+    texts = source_texts
+
+    def problem_of(text: str) -> str:
+        """Return the section's first problem, or ``""``.
+
+        Parameters
+        ----------
+        text: str
+            The section's content.
+
+        Returns
+        -------
+        str
+            Its citation problem, else a citation of a document that does
+            not mention what it is cited for, else an agreement citing one
+            document, else documents a section covering all of them leaves
+            out, else its length or form problem.
+
+        """
+
+        return (
+            citation_problem(text, len(documents), cite)
+            or agreement_problem(text)
+            or (coverage_problem(text, noted) if section.all_documents
+                else "")
+            or section_problem(section, text, _config.TEMPLATE_RULES)
+            or numeric_support_problem(text, texts)
+            or support_problem(text, texts, strict=True)
+            or ""
+        )
+
+    for _ in range(settings.repair_attempts):
+        problem = problem_of(content)
+        if not problem:
+            break
+        content = _clean(context.ask_model(
+            *fix_prompt(section, content, problem), None
+        ), section) or content
+    content, _ = cite_document_names(content, len(documents))
+    content, removed = clean_citations(content, len(documents))
+    if removed:
+        failures.append(
+            f"{section.name}: {removed} citation(s) of no document removed."
+        )
+    left = (
+        citation_problem(content, len(documents), cite)
+        or agreement_problem(content)
+        or (coverage_problem(content, noted) if section.all_documents
+            else "")
+        or numeric_support_problem(content, texts)
+        or support_problem(content, texts, strict=True)
+    )
+    if left:
+        failures.append(f"{section.name}: {left}")
+    return content
+
+
+def _evidence_passage(
+    document: ProjectDocument, notes: DocumentNotes | None,
+) -> Chunk:
+    """Select one original passage that supports a checked quote.
+
+    Parameters
+    ----------
+    document: ProjectDocument
+        One indexed document with source-order passages.
+    notes: DocumentNotes | None
+        The source-checked mapping result, if the model read it.
+
+    Returns
+    -------
+    Chunk
+        The earliest passage with a verified positive or negative
+        quotation, or the opening passage when none is available. The
+        citation still refers to the whole document, not this excerpt.
+
+    """
+
+    if notes is not None and not notes.failure:
+        for check in notes.checks.values():
+            if check.answer not in (CHECK_YES, CHECK_NO):
+                continue
+            for passage in document.passages:
+                if quote_found(check.quote, passage.text):
+                    return passage
+    return document.passages[0]
+
+
+def run(
+    settings: ProjectSummarySettings,
+    request: ToolRequest,
+    context: ToolContext,
+) -> ToolResult:
+    """Write one report on all the documents of a project and save it.
+
+    Parameters
+    ----------
+    settings: ProjectSummarySettings
+        Validated settings.
+    request: ToolRequest
+        The question.
+    context: ToolContext
+        Tool services: the project's passages, cards, model, confirmation
+        and progress.
+
+    Returns
+    -------
+    ToolResult
+        The report, citing documents as ``[n]``, with an original source
+        passage as representative evidence per document and the saved
+        output location; or why the report could not be written.
+
+    """
+
+    summary: dict[str, object] = {"name": "project_summary"}
+    folder = templates_folder(context.project_root)
+    # Emit the choice event to the GUI before blocking for its reply.
+    chooser = (
+        partial(ask_choice, context=context)
+        if getattr(context, "choose", None) is not None
+        else None
+    )
+    try:
+        template = choose_template(
+            request.question, folder, settings.template, chooser,
+        )
+    except ValueError as error:
+        context.done("No project template", evidence_count=0)
+        return ToolResult(str(error), (), summary)
+    if template is None:
+        context.done("No template chosen", evidence_count=0)
+        return ToolResult("No template was chosen.", (), summary)
+    summary["template"] = template.name
+
+    documents = project_documents(
+        context.chunks, getattr(context, "card", None)
+    )
+    if not documents:
+        context.done("No documents", evidence_count=0)
+        return ToolResult(
+            "The project has no indexed documents to report on.", (),
+            summary,
+        )
+    total_documents = len(documents)
+    omitted = documents[settings.max_documents:]
+    left_out = len(omitted)
+    documents = documents[:settings.max_documents]
+    plan = _plan(template, documents, settings, left_out)
+    choice, asked = confirm_plan(
+        plan, settings.confirmation, settings.large_batches, context
+    )
+    summary.update({"documents": len(documents), "left_out": left_out,
+                    "asked": asked, "choice": choice})
+    if choice == PLAN_CHOICE_CANCEL:
+        context.done("Cancelled", evidence_count=0)
+        return ToolResult(
+            f"The {template.title} was not written (cancelled).", (),
+            summary,
+        )
+    tokens = (
+        _config.QUICK_DOCUMENT_TOKENS if choice == PLAN_CHOICE_QUICK
+        else settings.document_tokens
+    )
+
+    words = query_words(template_texts(template))
+    notes: dict[int, DocumentNotes] = {}
+    for document in documents:
+        context.progress(
+            f"Reading document {document.number} of {len(documents)}"
+        )
+        excerpt = document_excerpt(document, words, tokens)
+        try:
+            reply = context.ask_model(
+                *map_prompt(template, document, excerpt), None
+            )
+            source_passages = tuple(
+                chunk.text for chunk in document.passages
+            )
+            notes[document.number] = parse_notes(
+                reply, template, document.number, excerpt, source_passages
+            )
+        except Exception as error:  # One document must not stop the rest.
+            notes[document.number] = DocumentNotes(
+                document.number, failure=str(error) or type(error).__name__
+            )
+    failed = [n for n, found in notes.items() if found.failure]
+    uncertain = [
+        {"document": number, "section": section, "reason": check.why
+         or "the evidence does not establish the condition"}
+        for number, found in sorted(notes.items()) if not found.failure
+        for section, check in found.checks.items()
+        if check.answer == CHECK_UNCLEAR
+    ]
+    summary["failed"] = failed
+    summary["uncertain_checks"] = uncertain
+
+    # Assemble source text once, not again for every section and repair.
+    source_texts = {
+        document.number: "\n".join(
+            chunk.text for chunk in document.passages
+        )
+        for document in documents
+    }
+    written: dict[str, str] = {}
+    failures: list[str] = []
+    for section in template.sections:
+        context.progress(f"Writing {section.name}")
+        try:
+            if section.source == SECTION_SOURCE_NOTES:
+                written[section.name] = _write_section(
+                    template, section, notes, documents, source_texts,
+                    settings, context,
+                    failures,
+                )
+            elif section.source == SECTION_SOURCE_PER_DOCUMENT:
+                written[section.name] = per_document_markdown(
+                    section, documents, notes
+                )
+            elif section.source == SECTION_SOURCE_DOCUMENTS:
+                written[section.name] = documents_line(documents)
+            elif section.source == SECTION_SOURCE_KEY_DOCUMENTS:
+                lines = {
+                    n: " ".join(found.notes.values())
+                    for n, found in notes.items()
+                }
+                reply = context.ask_model(
+                    *key_documents_prompt(section, documents, lines), None
+                )
+                most = section.items[1] if section.items else 3
+                titles = {d.number: d.title for d in documents}
+                written[section.name] = "\n".join(
+                    f"- {titles[n]} [{n}]"
+                    for n in chosen_numbers(reply, len(documents), most)
+                )
+        except Exception as error:  # Reported; the other sections go on.
+            failures.append(f"{section.name}: {error}")
+            written[section.name] = "(This section could not be written.)"
+
+    headline = template.title
+    if template.headline_characters:
+        try:
+            reply = context.ask_model(*headline_prompt(
+                template,
+                [(name, text) for name, text in written.items()],
+            ), None)
+            line = next((x.strip() for x in strip_thinking(reply)
+                         .splitlines() if x.strip()), "")
+            line = line.lstrip("# ").strip().rstrip(".")
+            line = re.sub(r"\s*\[[^\[\]]*\]", "", line)  # No citations.
+            limit = template.headline_characters
+            if len(line) > limit:
+                shorter = next((x.strip() for x in strip_thinking(
+                    context.ask_model(
+                        *headline_fix_prompt(template, line), None
+                    )
+                ).splitlines() if x.strip()), "")
+                line = shorter.lstrip("# ").strip().rstrip(".") or line
+            if line:
+                headline = fitted_headline(line, limit)
+        except Exception as error:  # The title stands in.
+            failures.append(f"headline: {error}")
+
+    parts = [f"# {headline}"]
+    for section in template.sections:
+        text = written.get(section.name, "")
+        if section.inline:
+            parts.append(f"**{section.name}:** {text}")
+        else:
+            parts.append(f"## {section.name}\n\n{text}")
+    report = "\n\n".join(parts)
+    check = check_report(report, template, _config.TEMPLATE_RULES)
+    problems = [*check.lengths, *failures]
+    if failed:
+        problems.append(
+            "Not read: " + ", ".join(f"[{n}]" for n in failed) + "."
+        )
+    if uncertain:
+        shown = uncertain[:_UNCERTAIN_SHOWN]
+        details = "; ".join(
+            f"[{item['document']}] {item['section']} ({item['reason']})"
+            for item in shown
+        )
+        remainder = len(uncertain) - len(shown)
+        if remainder:
+            details += f"; and {remainder} more (see result metadata)"
+        problems.append(
+            f"{len(uncertain)} unresolved evidence check(s): {details}."
+        )
+    # Coverage is a separate contract from structural template checks.
+    # Omitted files have no report citation because they were never read.
+    coverage = ""
+    if omitted:
+        shown = omitted[:_OMITTED_NAMES_SHOWN]
+        names = ", ".join(f"`{doc.path.as_posix()}`" for doc in shown)
+        remaining = left_out - len(shown)
+        if remaining:
+            names += f", and {remaining} more (all paths in result metadata)"
+        coverage = (
+            "**Coverage**\n\n"
+            f"Partial report: {len(documents)} of {total_documents} indexed "
+            "documents were selected "
+            f"(`max_documents={settings.max_documents}`). "
+            f"The following {left_out} were not analyzed: {names}.\n\n"
+        )
+    # What the checks still found is kept with the report, for whoever
+    # reads the file later.
+    checked = (
+        "**Check**\n\n"
+        + "\n".join(f"- {problem}" for problem in problems) + "\n\n"
+        if problems else ""
+    )
+    final = (
+        f"{report}\n\n---\n\n"
+        f"{checked}{coverage}{documents_list(documents)}\n"
+    )
+    saved = save_output_file(
+        context.project_root, f"{template.name}_project_report.md", final
+    )
+    valid = (
+        check.valid and not failures and not failed and not omitted
+        and not uncertain
+    )
+    summary.update({
+        "report": saved.as_posix(),
+        "valid": valid,
+        "status": "complete" if valid else "partial",
+        "coverage": {
+            "indexed": total_documents,
+            "selected": len(documents),
+            "read": len(documents) - len(failed),
+            "omitted": [doc.path.as_posix() for doc in omitted],
+            "failed": failed,
+        },
+        "estimated_tokens": estimate_tokens(final),
+    })
+    note = f"\n\n*Saved to `{saved.as_posix()}`.*"
+    evidence_items: list[dict[str, object]] = []
+    for document in documents:
+        passage = _evidence_passage(document, notes.get(document.number))
+        evidence_items.append({
+            "citation": document.number,
+            "path": document.path,
+            "start_line": passage.start_line,
+            "end_line": passage.end_line,
+            "symbol": passage.symbol,
+            "text": passage.text,
+            "cell": passage.cell,
+        })
+    evidence = tuple(evidence_items)
+    context.done(
+        f"Wrote the {template.title}", evidence_count=len(evidence)
+    )
+    return ToolResult(final.rstrip() + note, evidence, summary)
