@@ -87,17 +87,6 @@ Graph extraction does not resolve object calls, dynamic dispatch, or
 executable template interpolations; such relationships require source
 inspection rather than an inferred graph edge.
 
-HTML is interpreted differently according to the project type. A Code
-project retains the markup and extracts imports from local `<script src>`
-tags and leading direct calls from inline `on...` handlers. The HTML graph
-hook parses actual tags, ignoring comments, JavaScript string contents and
-inert templates; it does not execute scripts or analyze arbitrary handler
-expressions. HTML chunks lack declaration symbols, so code search uses the
-page-level entity to follow an HTML-to-JavaScript relationship. HTML read
-as page text does not contribute to the code graph, even when that text
-includes displayed markup examples. Other code files in the project still
-do. HTML without extractable visible text is permitted and yields no chunks.
-
 Expansion also follows retrieved documentation, module headers, and test
 calls to implementing functions. Exact qualified names and uniquely resolved
 suffixes are preferred. An unresolved qualified name can still suggest a
