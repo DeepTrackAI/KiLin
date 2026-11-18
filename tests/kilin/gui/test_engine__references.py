@@ -89,6 +89,7 @@ class TestReferencePreview(unittest.TestCase):
             engine.session = SimpleNamespace(
                 project=SimpleNamespace(source=source),
                 turns=[SimpleNamespace(evidence=(evidence,))],
+                _reads_as_code=lambda: False,
             )
 
             engine.preview_reference(0, 1)

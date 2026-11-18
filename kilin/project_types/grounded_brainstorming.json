@@ -12,7 +12,8 @@
     ".bbl",
     ".ipynb",
     ".py",
-    ".m"
+    ".m",
+    ".html"
   ],
   "max_file_bytes": 20971520,
   "retrieval_instruction": "Find primary observations, reported mechanisms, conflicting findings, experimental constraints, unexplained patterns, and specific gaps in the indexed project materials that can support the researcher's next hypothesis. Prefer directly relevant scientific evidence and retain the distinction between reported facts and untested extrapolations.",

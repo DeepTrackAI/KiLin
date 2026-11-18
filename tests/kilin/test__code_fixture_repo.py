@@ -3,7 +3,8 @@
 ``tests/fixtures/code_repo`` holds one small file per supported code
 language. These tests run it through the same steps a Code project uses,
 without models: scanning with the Code type's file types, reading,
-splitting into units and passages, and building the code graph. Each
+splitting into units and passages, and building the code graph. As in a
+Code project, whose ``code_graph`` is ``true``, HTML is read as code. Each
 language's own reader is tested in detail by its unit tests; this file
 checks that they work together on one repository.
 
@@ -26,6 +27,7 @@ from kilin.retrievals.context_expansion import (
     names_code,
     plan_context_expansion,
 )
+from kilin.retrievals.strategies.retrieval_code import code_search
 from kilin.sources import extract_source_units, read_repository_files
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "code_repo"
@@ -40,12 +42,13 @@ class TestCodeFixtureRepository(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        report = scan_repository(
-            FIXTURE, extensions=project_type("code").extensions
-        )
+        code = project_type("code")
+        report = scan_repository(FIXTURE, extensions=code.extensions)
+        cls.report = report
         cls.selected = set(report["selected_files"])
-        cls.files = read_repository_files(report)
-        cls.units = extract_source_units(cls.files)
+        as_code = code.code_graph is True
+        cls.files = read_repository_files(report, as_code=as_code)
+        cls.units = extract_source_units(cls.files, as_code=as_code)
         cls.chunks = chunk_source_units(cls.units, count_tokens=_words)
         cls.graph = build_code_graph(cls.files, cls.units)
         cls.relations = set(cls.graph.relations)
@@ -143,6 +146,39 @@ class TestCodeFixtureRepository(unittest.TestCase):
                     any(target.endswith(name) for target in targets)
                 )
 
+    def test_html_is_read_as_code(self) -> None:
+        page = next(
+            chunk for chunk in self.chunks if chunk.path.suffix == ".html"
+        )
+        self.assertIn('<button onclick="js_function_A(1, 2)">', page.text)
+
+    def test_html_is_read_as_page_text_without_the_code_graph(self) -> None:
+        files = read_repository_files(self.report)
+        text = next(f.text for f in files if f.path.suffix == ".html")
+        self.assertIn("# html_heading_A", text)
+        self.assertIn("- Press the html_button_D button.", text)
+        self.assertNotIn("<", text)
+
+    def test_html_page_links_to_its_script_and_handler(self) -> None:
+        for expected in (
+            CodeRelation("html.page_html", "imports", "js.calculator_js"),
+            CodeRelation(
+                "html.page_html", "calls", "js.calculator_js.js_function_A"
+            ),
+        ):
+            with self.subTest(relation=expected):
+                self.assertIn(expected, self.relations)
+
+    def test_html_page_is_retrieved_through_javascript_calls(self) -> None:
+        """Follow a JavaScript function's call edge to its HTML page."""
+
+        results = code_search(
+            self.graph, self.chunks, "js_function_A", count=20
+        )
+        self.assertIn(
+            Path("html/page_html.html"),
+            {result.chunk.path for result in results},
+        )
 
     def test_javascript_functions_expand_to_callers_and_callees(self) -> None:
         js = "js.calculator_js"

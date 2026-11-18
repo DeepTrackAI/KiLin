@@ -12,7 +12,8 @@
     ".bbl",
     ".ipynb",
     ".py",
-    ".m"
+    ".m",
+    ".html"
   ],
   "max_file_bytes": 20971520,
   "retrieval_instruction": "Find reliable project evidence that can spark or sharpen creative scientific hypotheses. Retrieve relevant premises, contrasts, unresolved questions, and surprising observations; do not restrict proposals to what the indexed sources already claim.",

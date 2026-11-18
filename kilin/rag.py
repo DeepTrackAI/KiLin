@@ -3285,14 +3285,21 @@ class RAGSession:
         cached_chunks = cached_chunks or {}
         selected = list(report.get("selected_files", []))
         use_code_graph = self._behavior_config().code_graph is not False
+        as_code = self._reads_as_code()
 
         # Text read earlier is reused when the file's bytes are unchanged
         # (same SHA-256), so only new or changed files are read again;
         # reading is slow for PDFs. A file with the same name but other
-        # content has another hash and is read again.
+        # content has another hash and is read again. HTML read as code
+        # has a separate cache identity; other formats are unaffected.
         texts = _read_text_cache(self.project.indexes)
         hashes = {
             name: sha256((self.project.source / name).read_bytes()).hexdigest()
+            + (
+                ":code"
+                if as_code and Path(name).suffix.lower() == ".html"
+                else ""
+            )
             for name in selected
         }
         reused = {
@@ -3329,6 +3336,7 @@ class RAGSession:
                 if not selected_count
                 else read_repository_files(
                     report,
+                    as_code=as_code,
                     progress_callback=(
                         lambda current, total: self._emit_count_progress(
                             "reading_source",
@@ -3400,6 +3408,7 @@ class RAGSession:
                 if not source_files
                 else extract_source_units(
                     source_files,
+                    as_code=as_code,
                     progress_callback=(
                         lambda current, total: self._emit_count_progress(
                             "extracting_source",
@@ -3495,12 +3504,21 @@ class RAGSession:
             component="rag",
             data={"chunk_count": len(chunks)},
         ):
-            if not use_code_graph or not source_files:
-                # A project type without a code graph, or a project without
-                # files, gets an empty graph; retrieval then skips it.
+            # HTML read as page text is evidence, not executable markup.
+            # Its displayed code examples must not create graph links.
+            graph_files = [
+                source for source in source_files
+                if as_code or source.path.suffix.lower() != ".html"
+            ] if use_code_graph else []
+            graph_paths = {source.path for source in graph_files}
+            graph_units = [
+                unit for unit in units if unit.path in graph_paths
+            ]
+            if not graph_files or not graph_units:
+                # An HTML-only document can have no visible text or units.
                 code_graph = CodeGraph((), ())
             else:
-                code_graph = build_code_graph(source_files, units)
+                code_graph = build_code_graph(graph_files, graph_units)
         return chunks, code_graph
 
     def _prepare_retrieval(
@@ -5962,6 +5980,10 @@ class RAGSession:
         # Recorded only when off, so existing indexes stay valid by default.
         if self._behavior_config().code_graph is False:
             metadata["code_graph"] = False
+        # HTML reads differently as code, so a project that reads it is
+        # indexed again when this changes.
+        if ".html" in profile.extensions:
+            metadata["html_as_code"] = self._reads_as_code()
         # Indexes built from plain chunk text are rebuilt once.
         metadata["retrieval_text"] = RETRIEVAL_TEXT_FORMAT
         # Projects that read PDFs re-index when the PDF text extractor
@@ -5972,6 +5994,24 @@ class RAGSession:
         if self._uses_document_headers():
             metadata["document_headers"] = DOCUMENT_HEADER_FORMAT
         return metadata
+
+    def _reads_as_code(self: RAGSession) -> bool:
+        """Return whether the project reads its files as code.
+
+        Returns
+        -------
+        bool
+            True when the project type's ``code_graph`` capability is
+            ``true``, as for Code projects; ``"auto"`` and ``false`` read
+            formats such as HTML as the text a reader sees.
+
+        """
+
+        try:
+            return self._behavior_config().code_graph is True
+        except ValueError:
+            # An unregistered type reads files as text.
+            return False
 
     def _uses_document_headers(self: RAGSession) -> bool:
         """Return whether the project type indexes documents as papers.

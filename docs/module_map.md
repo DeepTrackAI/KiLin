@@ -71,6 +71,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/code_graph/__init__.py`](../kilin/retrievals/code_graph/__init__.py) | Expose the code-graph records and builder. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/code_graph/code_graph.py`](../kilin/retrievals/code_graph/code_graph.py) | Build a source-oriented graph of code entities and relationships. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/code_graph/extensions/__init__.py`](../kilin/retrievals/code_graph/extensions/__init__.py) | Group language-specific code-relationship extraction hooks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
+| [`kilin/retrievals/code_graph/extensions/code_graph_html.py`](../kilin/retrievals/code_graph/extensions/code_graph_html.py) | Link an HTML page to the scripts it loads and the functions it calls. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/code_graph/extensions/code_graph_js.py`](../kilin/retrievals/code_graph/extensions/code_graph_js.py) | Extract lightweight JavaScript relationships using textual patterns. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/code_graph/extensions/code_graph_m.py`](../kilin/retrievals/code_graph/extensions/code_graph_m.py) | Extract lightweight MATLAB relationships using textual patterns. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/code_graph/extensions/code_graph_py.py`](../kilin/retrievals/code_graph/extensions/code_graph_py.py) | Extract heuristic relationships from Python syntax trees. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
@@ -108,6 +109,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/sources/extensions/sources_bbl.py`](../kilin/sources/extensions/sources_bbl.py) | Index compiled LaTeX bibliography entries as searchable source units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_doc.py`](../kilin/sources/extensions/sources_doc.py) | Read the body text of old binary Word `.doc` files. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_docx.py`](../kilin/sources/extensions/sources_docx.py) | Read Word `.docx` files as Markdown-style text with heading sections. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
+| [`kilin/sources/extensions/sources_html.py`](../kilin/sources/extensions/sources_html.py) | Read HTML files as page text, or as code in code projects. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_ipynb.py`](../kilin/sources/extensions/sources_ipynb.py) | Extract code and Markdown cell text from notebook JSON. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_js.py`](../kilin/sources/extensions/sources_js.py) | Partition JavaScript text at top-level declarations. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_m.py`](../kilin/sources/extensions/sources_m.py) | Partition MATLAB text using recognizable declaration boundaries. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
@@ -211,13 +213,13 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Model management | 8 |
 | Per-tool README | 50 |
 | Project workspaces | 6 |
-| Retrieval pipeline | 30 |
-| Source pipeline | 19 |
+| Retrieval pipeline | 31 |
+| Source pipeline | 20 |
 | Tool extension contracts | 25 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 175.**
+**Total production Python modules: 177.**
 
 ## Non-Python resources and UI assets
 

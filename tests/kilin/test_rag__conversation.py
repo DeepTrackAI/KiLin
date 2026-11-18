@@ -448,6 +448,25 @@ class TestRAGLifecycle(unittest.TestCase):
             lookup.return_value.code_graph = False
             self.assertFalse(session._index_metadata()["code_graph"])
 
+    def test_html_is_read_as_code_only_when_code_graph_is_true(self) -> None:
+        """Record how HTML is read, so changing it indexes HTML again."""
+        session = _session()
+        self.assertNotIn("html_as_code", session._index_metadata())
+        session.project.profile.extensions = (".html",)
+        for setting, as_code in (
+            (True, True),
+            ("auto", False),
+            (False, False),
+        ):
+            with self.subTest(code_graph=setting), patch.object(
+                rag, "project_type"
+            ) as lookup:
+                lookup.return_value.code_graph = setting
+                self.assertIs(session._reads_as_code(), as_code)
+                self.assertIs(
+                    session._index_metadata()["html_as_code"], as_code
+                )
+
 
 class TestRAGConversationPersistence(unittest.TestCase):
     """Verify resumable turns, checkpoint identities, and path containment."""

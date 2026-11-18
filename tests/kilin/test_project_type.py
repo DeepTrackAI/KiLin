@@ -695,7 +695,7 @@ class TestProjectTypeLoading(ProjectTypeFixture):
             set(project_type("writing").extensions),
             {
                 ".pdf", ".doc", ".docx", ".md", ".txt", ".tex",
-                ".bib", ".bbl", ".py", ".m", ".ipynb",
+                ".bib", ".bbl", ".py", ".m", ".ipynb", ".html",
             },
         )
 

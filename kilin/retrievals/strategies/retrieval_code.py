@@ -283,15 +283,26 @@ def code_search(
         max_distance,
     )
     entity_paths = {entity.name: entity.path for entity in graph.entities}
+    html_files = {
+        entity.name for entity in graph.entities
+        if entity.kind == "source_file"
+        and entity.path.suffix.lower() == ".html"
+    }
     results: list[CodeResult] = []
     for chunk in chunks:
-        if chunk.symbol is None:
+        # HTML code units label sections rather than declarations. Their
+        # page-level graph node can still be reached from script calls.
+        if chunk.symbol is None and not chunk.kind.startswith("html_"):
             continue
         candidates = [
             (entity, distance)
             for entity, distance in distances.items()
             if entity_paths.get(entity) == chunk.path
-            and _symbols_match(entity, chunk.symbol)
+            and (
+                _symbols_match(entity, chunk.symbol)
+                if chunk.symbol is not None
+                else entity in html_files
+            )
         ]
         if not candidates:
             continue

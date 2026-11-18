@@ -12,7 +12,8 @@
     ".bbl",
     ".py",
     ".m",
-    ".ipynb"
+    ".ipynb",
+    ".html"
   ],
   "max_file_bytes": 20971520,
   "retrieval_instruction": "Retrieve relevant scientific or technical material when the user asks to draft from project sources, research a topic, or verify a manuscript claim.",

@@ -533,6 +533,73 @@ class TestRAGSourcePreparation(unittest.TestCase):
         self.assertEqual(set(cached), {"a.py", "b.py"})
         self.assertIn("return 1", cached["a.py"]["text"])
 
+    def test_html_text_does_not_create_code_graph_links(self) -> None:
+        """Preserve code relations but exclude visible HTML examples."""
+
+        page = self.session.project.source / "page.html"
+        page.write_text(
+            "<pre>&lt;button onclick=\"ghost()\"&gt;"
+            "example&lt;/button&gt;</pre>",
+            encoding="utf-8",
+        )
+        self.session.project.profile.extensions = (".py", ".html")
+        with patch.object(rag, "project_type") as lookup:
+            lookup.return_value.code_graph = "auto"
+            chunks, code_graph = self.session._prepare_source(
+                self.embedding, report=self._report(["a.py", "page.html"])
+            )
+        self.assertEqual({c.path for c in chunks}, {
+            Path("a.py"), Path("page.html")
+        })
+        self.assertIn("a.foo", {e.name for e in code_graph.entities})
+        self.assertFalse(any(
+            relation.target.endswith("ghost")
+            for relation in code_graph.relations
+        ))
+
+    def test_html_without_visible_text_has_no_graph(self) -> None:
+        """An HTML page of scripts alone must not prevent indexing."""
+
+        page = self.session.project.source / "page.html"
+        page.write_text(
+            '<html><head><script src="app.js"></script></head></html>',
+            encoding="utf-8",
+        )
+        self.session.project.profile.extensions = (".html",)
+        with patch.object(rag, "project_type") as lookup:
+            lookup.return_value.code_graph = "auto"
+            chunks, code_graph = self.session._prepare_source(
+                self.embedding, report=self._report(["page.html"])
+            )
+        self.assertEqual(chunks, [])
+        self.assertEqual(code_graph, CodeGraph((), ()))
+
+    def test_html_cache_representation_does_not_invalidate_python(
+        self,
+    ) -> None:
+        """Switching HTML modes rereads HTML but reuses Python text."""
+
+        page = self.session.project.source / "page.html"
+        page.write_text("<h1>Notes</h1>", encoding="utf-8")
+        self.session.project.profile.extensions = (".py", ".html")
+        report = self._report(["a.py", "page.html"])
+        self.session._prepare_source(self.embedding, report=report)
+        with patch.object(
+            rag, "read_repository_files", wraps=rag.read_repository_files
+        ) as reader:
+            self.session._prepare_source(self.embedding, report=report)
+            reader.assert_not_called()
+        with patch.object(rag, "project_type") as lookup:
+            lookup.return_value.code_graph = "auto"
+            with patch.object(
+                rag, "read_repository_files", wraps=rag.read_repository_files
+            ) as reader:
+                self.session._prepare_source(self.embedding, report=report)
+                self.assertEqual(
+                    reader.call_args.args[0]["selected_files"],
+                    ["page.html"],
+                )
+
     def test_unchanged_text_cache_skips_source_reader(self) -> None:
         """Reuse unchanged text without rereading the original source."""
         self.session._prepare_source(self.embedding, report=self._report())
