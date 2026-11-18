@@ -332,7 +332,8 @@ def rewrite_prompt(
     parts.append(
         f"{task} Each version must say exactly what the text says: keep "
         "every fact, claim, number, name, term and acronym, the "
-        "placeholders [cite], [author], [year] and (ref), and every hedge "
+        "placeholders [cite], [author], [year] and (ref), citations such "
+        "as (Smith et al., 2020), and every hedge "
         "or modal verb (\"virtually\", \"would\", \"may\"). Add nothing the "
         "paragraph does not say. Write each version in full, never "
         "shortened with \"...\".\n\nWrite each version on its own line:\n"

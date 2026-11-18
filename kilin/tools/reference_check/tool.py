@@ -15,9 +15,11 @@ paper) and the other files of the project (the cited works). The tool:
 3. Matches every entry to the project's other files (``_matching``): by
    DOI, title and first author, or first page. Entries without a file are
    reported as missing, so the user knows which cited works to add.
-4. Finds the numbered in-text citations (``_citations``) and the sentence
-   each appears in, and reports references never cited and citations of
-   numbers beyond the list (usually a sign the list was split wrongly).
+4. Finds the in-text citations (``_citations``), numbered or, for a list
+   that prints no numbers, author-year, and the sentence each appears in,
+   and reports references never cited, citations of numbers beyond the
+   list (usually a sign the list was split wrongly), and author-year
+   citations not in the list or matching several references.
 5. Checks each *claim* (a citing sentence and one cited work that is in
    the project) with the answering model (``_shared.claims``): the cited
    file's most related passages, a verdict, the passage sentence it rests
@@ -39,11 +41,12 @@ reason for every decision. Step 5 uses the answering model, whose verdicts
 can be wrong; its quotes are checked, and a reference is called
 contradicted only with a confirmed quote.
 
-Limits: author-year citations ("Smith et al., 2020") are not recognised;
-superscript citations are recognised only in PDFs (the font sizes and
-positions confirm them); an unusual layout can still split or join
-reference entries; a claim is judged from a few passages of the cited
-work, not all of it.
+Limits: author-year citations are read from common forms ("(Smith et al.,
+2020; Lee 2019a)", "Smith and Lee (2020)"), and only cite references they
+match by first author and year; superscript citations are recognised only
+in PDFs (the font sizes and positions confirm them); an unusual layout can
+still split or join reference entries; a claim is judged from a few
+passages of the cited work, not all of it.
 
 Key Features
 ------------
@@ -162,6 +165,7 @@ from kilin.tools.reference_check._resolution import (
     resolve_links,
 )
 from kilin.tools.reference_check._citations import (
+    STYLE_AUTHOR_YEAR,
     STYLE_BRACKETS,
     STYLE_NONE,
     STYLE_PARENTHESES,
@@ -608,6 +612,12 @@ def check_references(
         max((entry.number for entry in entries), default=0),
         superscripts,
         _config.CITATION_RULES,
+        # An unnumbered list may be cited by author and year.
+        entries=(
+            tuple((entry.number, entry.text) for entry in entries)
+            if latex is None and not any(entry.printed for entry in entries)
+            else ()
+        ),
     )
 
     cited_by: dict[int, list[Sentence]] = defaultdict(list)
@@ -1102,6 +1112,8 @@ def run(
             "citations": len(report.scan.citations),
             "uncited": list(report.scan.uncited),
             "beyond_list": list(report.scan.beyond_list),
+            "ambiguous": len(report.scan.ambiguous),
+            "unresolved": list(report.scan.unresolved),
             "claims_checked": len(report.verdicts),
             "model_calls": report.model_calls,
             **(
@@ -1898,22 +1910,27 @@ def _overview(report: ReferenceReport) -> str:
     numbering = (
         "numbered as printed"
         if printed == total
+        else "unnumbered, numbered in list order"
+        if not printed
         else f"{printed} numbered as printed, the others inferred"
     )
     if report.scan.style == STYLE_NONE:
         cited = (
-            "In-text citations were not recognised (only numbered "
-            "citations are, and superscripts only in PDFs)."
+            "In-text citations were not recognised (only numbered and "
+            "author-year citations are, and superscripts only in PDFs)."
         )
     else:
         style = {
             STYLE_BRACKETS: "bracketed",
             STYLE_PARENTHESES: "parenthesized",
             STYLE_WRITTEN: "written-out",
+            STYLE_AUTHOR_YEAR: "author-year",
         }.get(report.scan.style, "superscript")
+        uncited = set(report.scan.uncited)
         cited = (
             f"{len(report.scan.citations)} {style} citations in the text "
-            f"cite {total - len(report.scan.uncited)} of them."
+            f"cite {sum(e.number not in uncited for e in report.entries)} "
+            "of them."
         )
     return (
         (f"{report.list_note} " if report.list_note else "")
@@ -1990,9 +2007,10 @@ def _problems(report: ReferenceReport) -> list[str]:
     Returns
     -------
     list[str]
-        References never cited in the text, and numbers cited beyond the
-        reference list; empty when there are none or citations were not
-        recognised.
+        References never cited in the text, numbers cited beyond the
+        reference list, and author-year citations not in the list or
+        matching several references; empty when there are none or
+        citations were not recognised.
 
     """
 
@@ -2012,6 +2030,17 @@ def _problems(report: ReferenceReport) -> list[str]:
             "- Cited but not in the reference list: "
             + ", ".join(str(number) for number in report.scan.beyond_list)
             + " (the list may have been split wrongly)"
+        )
+    if report.scan.unresolved:
+        problems.append(
+            "- Cited but not in the reference list: "
+            + "; ".join(_escape(work) for work in report.scan.unresolved)
+        )
+    for work, numbers in report.scan.ambiguous:
+        problems.append(
+            f"- Ambiguous citation “{_escape(work)}”: it matches references "
+            + ", ".join(str(number) for number in numbers)
+            + " (a year suffix such as 2020a would tell them apart)"
         )
     return problems
 
@@ -2233,7 +2262,8 @@ def _marked(sentence: Sentence, citations: Sequence[Citation]) -> str:
         The sentence with each superscript or parenthesized marker written
         " [5,40,88–91]" where it stands (extraction glues superscripts to
         the word: "method5,40,88–91"); bracketed and written-out markers
-        are kept as they are.
+        are kept as they are; author-year markers are kept and followed by
+        the numbers they resolve to ("(Smith et al., 2020) [12]").
 
     """
 
@@ -2244,7 +2274,11 @@ def _marked(sentence: Sentence, citations: Sequence[Citation]) -> str:
         if citation.start < position or citation.end <= citation.start:
             continue
         shown = text[citation.start : citation.end]
-        if shown[:1] != "[" and not shown[:1].isalpha():
+        if citation.author_year:
+            numbers = ",".join(str(number) for number in citation.numbers)
+            shown = f"{shown} [{numbers}]"
+            parts.append(text[position : citation.start])
+        elif shown[:1] != "[" and not shown[:1].isalpha():
             numbers = shown.strip("()").replace(" ", "")
             shown = f" [{numbers}]"
             parts.append(text[position : citation.start].rstrip())
@@ -2318,8 +2352,9 @@ def _display(report: ReferenceReport, sentence: Sentence, number: int) -> str:
     -------
     str
         The sentence with its numeric markers written as superscripts
-        ("NN⁸²", "⁽¹³⁾" for a bracketed or parenthesized "[13]"), the
-        markers citing ``number`` in bold, words broken across lines
+        ("NN⁸²", "⁽¹³⁾" for a bracketed or parenthesized "[13]") and
+        author-year markers as printed, the markers citing ``number`` in
+        bold, words broken across lines
         joined, and Markdown characters escaped. A sentence longer than
         ``_SHOWN_CHARACTERS`` is cut, at spaces, to that length around the
         first bold marker, with "…" where text is left out.
@@ -2357,7 +2392,9 @@ def _display(report: ReferenceReport, sentence: Sentence, number: int) -> str:
             _escape(_BROKEN_WORD.sub("", text[position : citation.start]))
         )
         shown = sentence.text[citation.start : citation.end]
-        if shown[:1] in "[(":
+        if citation.author_year:
+            shown = _escape(shown)
+        elif shown[:1] in "[(":
             inner = shown[1:-1].replace(" ", "")
             shown = f"⁽{inner.translate(_SUPERSCRIPT)}⁾"
         elif shown[:1].isdigit():

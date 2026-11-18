@@ -346,6 +346,69 @@ class TestScientificClaimSafety(unittest.TestCase):
             with self.subTest(before=before, after=after):
                 self.assertTrue(meaning_change(before, after, Glossary()))
 
+    def test_author_year_citations_are_kept(self) -> None:
+        """Drop changes to the works author-year citations cite."""
+
+        from kilin.tools.writing_check._checks import Glossary
+        from kilin.tools.writing_check._review import meaning_change
+
+        for before, after, why in (
+            ("as shown (Smith et al., 2020).",
+             "as was shown (Smith et al., 2020).", ""),
+            ("as shown (Smith et al., 2020).",
+             "Smith et al. (2020) showed it.", ""),
+            ("as shown (Smith et al., 2020).",
+             "as shown (Smyth et al., 2020).", "it changes citations"),
+            ("as shown (Smith and Lee, 2020a).",
+             "as shown (Smith and Lee, 2020b).", "it changes citations"),
+            ("as shown (Smith et al., 2020; Lee 2019).",
+             "as shown (Lee 2019).", "it changes citations"),
+            ("as shown (The pandas development team, 2020).",
+             "as shown (The PyTorch development team, 2020).",
+             "it changes citations"),
+            ("The pandas development team (2020) reported results.",
+             "The PyTorch development team (2020) reported results.",
+             "it changes citations"),
+            ("as shown (The pandas development team, 2020).",
+             "The pandas development team (2020) showed this.", ""),
+        ):
+            with self.subTest(after=after):
+                self.assertEqual(
+                    meaning_change(before, after, Glossary()), why
+                )
+
+    def test_corporate_citations_are_not_interchangeable(self) -> None:
+        """Two-word and linked organization names are citation identity.
+
+        """
+
+        from kilin.tools.writing_check._checks import Glossary
+        from kilin.tools.writing_check._review import meaning_change
+
+        for original, changed in (
+            ("European Commission", "Federal Commission"),
+            ("United Nations", "African Nations"),
+            ("National Institutes of Health", "Department of Health"),
+        ):
+            for before, after in (
+                (f"as shown ({original}, 2020).",
+                 f"as shown ({changed}, 2020)."),
+                (f"{original} (2020) reported this.",
+                 f"{changed} (2020) reported this."),
+            ):
+                with self.subTest(before=before, after=after):
+                    self.assertEqual(
+                        meaning_change(before, after, Glossary()),
+                        "it changes citations",
+                    )
+        self.assertEqual(
+            meaning_change(
+                "as shown (European Commission, 2020).",
+                "European Commission (2020) showed this.", Glossary(),
+            ),
+            "",
+        )
+
     def test_rewrite_options_share_the_same_safeguards(self) -> None:
         """Reject unsafe options in the paragraph rewrite path.
 

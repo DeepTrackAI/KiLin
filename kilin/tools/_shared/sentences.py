@@ -37,11 +37,12 @@ from typing import Final
 from kilin.chunking import Chunk
 
 # Abbreviations that end with a period but not a sentence ("see Ref. 50",
-# "in Fig. 3", "Eq. 2"): no split after them.
+# "in Fig. 3", "Eq. 2", "Smith et al. (2020)", "p. 4"): no split after
+# them.
 _ABBREVIATIONS: Final[tuple[str, ...]] = (
     "Ref", "ref", "Refs", "refs", "Fig", "fig", "Figs", "figs", "Eq", "eq",
     "Eqs", "eqs", "Sec", "Secs", "No", "Nos", "Tab", "Vol", "ca", "cf",
-    "vs", "approx",
+    "vs", "approx", "al", "p", "pp", r"e\.g", r"i\.e",
 )
 _SENTENCE_END: Final[re.Pattern[str]] = re.compile(
     r"(?<=[.!?])"

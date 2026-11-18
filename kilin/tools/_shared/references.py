@@ -28,8 +28,9 @@ Key Features
 
 - **Layout-aware splitting**
 
-    Numbered lists split at their numbers; others split after a line that
-    ends an entry (a year, volume and pages, a PMID, or a DOI).
+    Numbered lists split at their numbers. Author-year lists use author
+    headings, including wrapped author lists with the year on a later line.
+    Other lists split after a line that ends an entry.
 
 - **Page furniture removed**
 
@@ -100,6 +101,7 @@ from functools import lru_cache
 from pathlib import Path
 import re
 from typing import Final
+import unicodedata
 
 from kilin.chunking import Chunk
 
@@ -150,7 +152,8 @@ _LONE_NUMBER: Final[re.Pattern[str]] = re.compile(
 _RIGHT_COLUMN_SHARE: Final[float] = 0.25
 # Running heads and footers: "PLOS ONE | https://...", "12 / 25".
 _FURNITURE: Final[re.Pattern[str]] = re.compile(
-    r"\|\s*https?://|\b\d+\s*/\s*\d+\s*$"
+    r"\|\s*https?://|(?<![\w./])\d+\s*/\s*\d+\s*$"
+    r"|^\s*\d+\s+of\s+\d+(?!\d)"
 )
 # Headings after the reference list, where it ends: alone on the line, or
 # followed by text ("Acknowledgements This work ..."). Not "Methods", which
@@ -180,6 +183,59 @@ _NUMBER_STEP_MAX: Final[int] = 3
 _BROKEN_URL: Final[re.Pattern[str]] = re.compile(
     r"(?:https?://|doi\.\s*org/|\b10\.\d{4,9}/)\S*[./_-]\s*$"
 )
+# The start of an author-year entry: "Smith, J. A., ... (2020)" (APA,
+# Harvard), "Smith JA, Lee B, ..." or "Hunter JD. 2007." (eLife), "The
+# pandas development team. 2020."; in an unnumbered list it starts a new
+# entry once the entry before has its year.
+_SURNAME: Final[str] = (
+    r"(?:(?i:van|von|der|den|de|del|di|da|du|la|le)\s+)*"
+    r"[^\W\d_a-zß-ÿ][\w'’\-]*(?:\s+[^\W\d_a-zß-ÿ][\w'’\-]*)?"
+)
+# The year must follow a sequence of surnames and initials, not a title
+# with a parenthesized year near its end ("Smith, J. Title ... (2020)").
+_APA_INITIALS: Final[str] = r"[A-Z]\.(?:\s*-?\s*[A-Z]\.)*"
+_APA_AUTHOR: Final[str] = rf"{_SURNAME},\s+{_APA_INITIALS}"
+_ELIFE_AUTHOR: Final[str] = (
+    rf"{_SURNAME}\s+[A-Z]{{1,3}}(?:-[A-Z]{{1,2}})?"
+)
+# The first line of a wrapped author list may not yet contain its year.
+# Start a new unnumbered entry at such a line only after the previous
+# entry's date is already known. The following author lines belong to
+# the new entry until its date is read.
+_WRAPPED_AUTHOR_HEAD: Final[re.Pattern[str]] = re.compile(
+    rf"^{_APA_AUTHOR}(?:,\s*(?:&\s*|and\s+)?{_APA_AUTHOR})+"
+    r"(?:,\s*(?:&|and)?)?\s*$"
+    rf"|^{_ELIFE_AUTHOR}(?:,\s*{_ELIFE_AUTHOR})+\s*,?\s*$"
+)
+_AUTHOR_YEAR_HEAD: Final[re.Pattern[str]] = re.compile(
+    rf"^{_APA_AUTHOR}(?:,?\s*(?:,|and\s+|&\s+)?{_APA_AUTHOR})*"
+    r"\s*\((?:19|20)\d\d[a-z]?\)"
+    rf"|^{_SURNAME}\s+[A-Z]{{1,3}}(?:-[A-Z]{{1,2}})?(?:,\s+{_SURNAME}\s+[A-Z]"
+    r"|\.\s+(?:19|20)\d\d[a-z]?\.)"
+    r"|^(?:The\s+)?[A-Z][\w-]*(?:\s+[\w-]+){0,4}\.\s+(?:19|20)\d\d[a-z]?\.\s"
+)
+# The year of an author-year entry: "(2020)", or "2020." before the title.
+_ENTRY_HAS_YEAR: Final[re.Pattern[str]] = re.compile(
+    r"\((?:19|20)\d\d[a-z]?\)|\b(?:19|20)\d\d[a-z]?\.(?=\s|$)"
+)
+# A number broken off the line before: the rest of a PMID ("PMID: 1772" /
+# "8438"), a DOI or URL ("joss." / "02668"), or a page range ("p. 87–" /
+# "90.").
+_OPEN_RANGE: Final[re.Pattern[str]] = re.compile(r"\d\s*[–-]\s*$")
+_SHORT_PMID: Final[re.Pattern[str]] = re.compile(r"PMID:\s*\d{1,6}\s*$")
+_DIGITS_LINE: Final[re.Pattern[str]] = re.compile(r"^\s*\d+\.?\s*$")
+_BARE_DIGITS: Final[re.Pattern[str]] = re.compile(r"^\s*\d+\s*$")
+# Accents printed apart from their letter ("Fu¨ rth", "Rı´o", "Carle´ n").
+_SPACING_ACCENT: Final[re.Pattern[str]] = re.compile(
+    r"([A-Za-zı])\s?([¨´`ˆ˜¸])\s?(?=\w)"
+)
+_COMBINING: Final[dict[str, str]] = {
+    "¨": "\u0308", "´": "\u0301", "`": "\u0300", "ˆ": "\u0302",
+    "˜": "\u0303", "¸": "\u0327",
+}
+# A list with fewer printed numbers than this share of its entries is
+# unnumbered: those few are stray numbers.
+_PRINTED_SHARE_MIN: Final[float] = 0.5
 # A line that always continues the entry before it (its DOI or PMID).
 _CONTINUATION: Final[re.Pattern[str]] = re.compile(
     r"^\s*(?:https?://|doi\b|pmid\b|pmcid\b)", re.I
@@ -608,7 +664,16 @@ def numbered_reference_entries(
         ("12. ...", "[12] ...") and no number stands alone, a new entry
         starts at each number; otherwise (as two-column PDFs print them)
         also after a line that ends an entry (a year, volume and pages, a
-        PMID, or a DOI), unless the next line is a DOI or PMID. A number
+        PMID, or a DOI), unless the next line is a DOI or PMID (a URL or
+        DOI broken over lines is joined without a space), and at a
+        line that starts like an author-year entry ("Smith, J. A., ...
+        (2020)", "Smith JA, Lee B, ...", "Hunter JD. 2007.") once the entry
+        before has its year. In an unnumbered author-year list, a single
+        recognizable entry head is enough to keep following title lines
+        with that entry; ``numbered_entries_min`` applies only to numbered
+        lists. Numbers broken off a PMID, DOI or page range are joined
+        back, and accents
+        printed apart from their letters ("Fu¨ rth") are joined. A number
         that does not follow the previous entry's (more than
         ``_NUMBER_STEP_MAX`` ahead, or back) starts no entry: it is part
         of the entry ("…919–\\n927. https://doi…"); a list that starts
@@ -621,8 +686,9 @@ def numbered_reference_entries(
         ``accept_short``. The list stops at a following heading such as
         "Acknowledgements", a table or figure caption, or another list's
         heading. An entry without a printed number takes the number after
-        the previous entry's (``printed`` is then False). Empty when the
-        paper has no reference list.
+        the previous entry's (``printed`` is then False); when fewer than
+        half the entries print one, the list is numbered in order and none
+        counts as printed. Empty when the paper has no reference list.
 
     """
 
@@ -639,10 +705,18 @@ def numbered_reference_entries(
         line for line in lines
         if repeats[" ".join(line.split())] < layout.running_line_repeats
     ]
+    lines = _joined_numbers([_accents_joined(line) for line in lines])
 
     numbered = sum(bool(_ENTRY_START.match(line)) for line in lines)
-    by_number = numbered >= layout.numbered_entries_min and not any(
-        _LONE_NUMBER.match(line) for line in lines
+    lone_numbers = any(_LONE_NUMBER.match(line) for line in lines)
+    by_number = numbered >= layout.numbered_entries_min and not lone_numbers
+    # Author-year lists need head-based splitting even when short. A
+    # wrapped author line without its year also signals a possible head.
+    # Keep the numeric threshold for numbered lists only.
+    by_head = not numbered and not lone_numbers and any(
+        _AUTHOR_YEAR_HEAD.match(line.strip())
+        or _WRAPPED_AUTHOR_HEAD.match(line.strip())
+        for line in lines
     )
 
     # The list in order: entries (printed number or None, lines) and the
@@ -680,7 +754,14 @@ def numbered_reference_entries(
         text = (match.group(3) if match else line).strip()
         entries = [item for item in sequence if isinstance(item, tuple)]
         if not entries or match or (
-            not by_number and complete and not _CONTINUATION.match(text)
+            not by_number and not by_head and complete
+            and not _CONTINUATION.match(text)
+        ) or (
+            not by_number and (
+                _AUTHOR_YEAR_HEAD.match(text)
+                or (by_head and _WRAPPED_AUTHOR_HEAD.match(text))
+            )
+            and _ENTRY_HAS_YEAR.search(" ".join(entries[-1][1]))
         ):
             number = int(match.group(1) or match.group(2)) if match else None
             if number is not None:
@@ -699,7 +780,7 @@ def numbered_reference_entries(
         if isinstance(item, int):
             kept.append(item)
             continue
-        joined = re.sub(r"-\s+(?=[a-z])", "", " ".join(item[1]))
+        joined = re.sub(r"-\s+(?=[a-z])", "", _lines_joined(item[1]))
         joined = " ".join(joined.split())
         if (
             len(joined.split()) >= layout.entry_min_words
@@ -730,7 +811,114 @@ def numbered_reference_entries(
         previous = number if number is not None else previous + 1
         cleaned.append(ReferenceEntry(previous, item[1], number is not None))
 
+    printed = sum(entry.printed for entry in cleaned)
+    if printed < _PRINTED_SHARE_MIN * len(cleaned):
+        # A few stray numbers in an unnumbered list: number it in order.
+        cleaned = [
+            ReferenceEntry(position, entry.text, False)
+            for position, entry in enumerate(cleaned, start=1)
+        ]
     return cleaned
+
+
+def _lines_joined(lines: Sequence[str]) -> str:
+    """Return an entry's lines as one text.
+
+    Parameters
+    ----------
+    lines: Sequence[str]
+        The entry's lines, in order.
+
+    Returns
+    -------
+    str
+        The lines joined by spaces, except after a line that ends inside
+        a URL or DOI ("https://doi." / "org/10.1101/...", "10.1038/" /
+        "s41467-...", "j.neuron." / "2019.04.034"), which the next line
+        continues without one.
+
+    """
+
+    text = ""
+    for line in lines:
+        if text and not _BROKEN_URL.search(text):
+            text += " "
+        text += line.strip()
+    return text
+
+
+def _accents_joined(line: str) -> str:
+    """Return a line with accents printed apart joined to their letters.
+
+    Parameters
+    ----------
+    line: str
+        A line of extracted text.
+
+    Returns
+    -------
+    str
+        With "u¨ " written "ü", "ı´" written "í", "e´ " written "é"
+        (``_SPACING_ACCENT``), in composed form.
+
+    """
+
+    def joined(match: re.Match[str]) -> str:
+        """Return one letter with its accent.
+
+        Parameters
+        ----------
+        match: re.Match[str]
+            A letter, an accent printed apart, and spaces around it.
+
+        Returns
+        -------
+        str
+            The accented letter, composed.
+
+        """
+
+        letter = "i" if match.group(1) == "ı" else match.group(1)
+        return unicodedata.normalize(
+            "NFC", letter + _COMBINING[match.group(2)]
+        )
+
+    return _SPACING_ACCENT.sub(joined, line)
+
+
+def _joined_numbers(lines: list[str]) -> list[str]:
+    """Return lines with numbers broken off the line before joined to it.
+
+    Parameters
+    ----------
+    lines: list[str]
+        The reference list's lines.
+
+    Returns
+    -------
+    list[str]
+        A line of digits is appended to the line before when that one
+        ends in an open page range ("p. 87–" / "90."), or, without a full
+        stop, in a PMID too short to be whole ("PMID: 1772" / "8438") or
+        inside a URL or DOI ("joss." / "02668"), so it is not taken for an
+        entry number; numbers printed alone with a full stop ("6.") in a
+        two-column list are kept.
+
+    """
+
+    joined: list[str] = []
+    for line in lines:
+        if joined and (
+            (_DIGITS_LINE.match(line) and _OPEN_RANGE.search(joined[-1]))
+            or (_BARE_DIGITS.match(line) and (
+                _SHORT_PMID.search(joined[-1])
+                or _BROKEN_URL.search(joined[-1])
+            ))
+        ):
+            joined[-1] = joined[-1].rstrip() + line.strip()
+        else:
+            joined.append(line)
+    return joined
 
 
 def _source_text(passages: Sequence[Chunk], file: Path | None) -> str:

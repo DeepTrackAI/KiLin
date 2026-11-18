@@ -43,6 +43,28 @@ For "check the references of the Smith paper", the tool:
    superscript ("high (3)⁴⁵,⁴⁶") is not taken for a function argument.
    It reports references never cited and numbers cited beyond the list.
 
+   A list that prints no numbers (an alphabetical, author-year list) is
+   numbered in its order, and author-year citations are looked for too
+   (`kilin/tools/_shared/author_year.py`): in parentheses ("(Smith 2020)",
+   "(Smith et al., 2020; Lee and Wu 2019a, b)", with "e.g.", "see" or a
+   page) and in the sentence ("Smith and Lee (2020)", "Smith et al.
+   (2020a, 2021)"). Each cited work is resolved to the entry with the same
+   first author (last word of a personal surname, without accents or
+   case; full normalized name for an organization) and year. Known second
+   authors and author counts must agree; recognizable institutional
+   names (including short names and names with "of") retain their full
+   identity; incomplete entries remain
+   candidates rather than overriding contradictory author information;
+   entries of the same first author and year without a printed suffix are
+   given "a", "b", ... in list order, as these styles print them. This
+   style is used when more author-year citations resolve than numbered
+   ones are found. Works matching several entries are listed as
+   ambiguous (and those entries are not called uncited); works matching
+   none are listed as not in the list when the form leaves no doubt ("et
+   al.", two authors, or beside a resolved work), so "(Phase 2020)" is
+   ignored. The model sees each citation as printed with the numbers it
+   resolved to ("(Smith et al., 2020) [12]").
+
    A LaTeX paper (`.tex`) is read by `_latex.py` instead of steps 2 and 4.
    Its references come from a `thebibliography` environment in the file,
    else a **selected and indexed** `.bbl` companion, else the **selected
@@ -175,7 +197,8 @@ limits the *input* evidence. See [Generation settings](#generation-settings)
 and the [shared policy](../../../docs/tool_packages.md#generation-settings-for-tools).
 The router remains nonthinking and deterministic.
 
-Limits: author-year citations ("Smith et al., 2020") are not recognised;
+Limits: author-year citations are read from common forms only, and a
+reference cited in a form not read is reported as never cited;
 superscripts are recognised only in PDFs; an unusual layout can still split
 or join reference entries. A claim is judged from a few passages of the
 cited work, not all of it, so "no matching passage" means none of the

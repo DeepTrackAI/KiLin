@@ -17,6 +17,7 @@ from pathlib import Path
 import unittest
 
 from kilin.tools.reference_check._citations import (
+    STYLE_AUTHOR_YEAR,
     STYLE_BRACKETS,
     STYLE_NONE,
     STYLE_PARENTHESES,
@@ -167,6 +168,112 @@ class TestBrackets(unittest.TestCase):
         self.assertEqual(scan.style, STYLE_NONE)
         self.assertEqual(scan.citations, ())
         self.assertEqual(scan.uncited, (1, 2, 3))
+
+
+class TestAuthorYear(unittest.TestCase):
+    """Author-year citations of an unnumbered reference list."""
+
+    ENTRIES = (
+        (1, "Brown, A. (2018). Networks. J 1, 2."),
+        (2, "Lee, B. (2019). One. J 2, 3."),
+        (3, "Lee, B. (2019). Two. J 3, 4."),
+        (4, "Smith, J., Wu, C., & Ode, D. (2020). Graphs. J 4, 5."),
+        (5, "Wu, C. (2020). Unused. J 5, 6."),
+        (6, "Ode, D. (2021). One. J 6, 7."),
+        (7, "Ode, D. (2021). Two. J 7, 8."),
+    )
+
+    def test_resolved_ambiguous_missing_and_uncited(self) -> None:
+        passages = (chunk(
+            "a",
+            "Brains are networks (Brown 2018; Lee 2019b).\n"
+            "Smith et al. (2020) measured them, as did others (Ode 2021).\n"
+            "Graphs help (e.g., Smith et al., 2020, p. 4; Gray et al. "
+            "2017).\nPhases differ (Phase 2020).\n",
+        ),)
+        scan = find_citations(passages, 7, None, RULES, self.ENTRIES)
+        self.assertEqual(scan.style, STYLE_AUTHOR_YEAR)
+        self.assertEqual(
+            [(c.marker, c.numbers) for c in scan.citations],
+            [("(Brown 2018; Lee 2019b)", (1, 3)),
+             ("Smith et al. (2020)", (4,)),
+             ("(e.g., Smith et al., 2020, p. 4; Gray et al. 2017)", (4,))],
+        )
+        citation = scan.citations[1]
+        self.assertTrue(citation.author_year)
+        self.assertEqual(
+            citation.sentence.text[citation.start:citation.end],
+            "Smith et al. (2020)",
+        )
+        self.assertEqual(scan.ambiguous, (("Ode, 2021", (6, 7)),))
+        self.assertEqual(scan.unresolved, ("Gray et al., 2017",))
+        # Entry 2 is never cited; 6 and 7 may be, by the ambiguous one.
+        self.assertEqual(scan.uncited, (2, 5))
+
+    def test_numbered_citations_win(self) -> None:
+        passages = (chunk(
+            "a", "Brains are networks [1]. Graphs [2]. Again [4].\n"
+            "Brown (2018) agrees.\n",
+        ),)
+        scan = find_citations(passages, 7, None, RULES, self.ENTRIES)
+        self.assertEqual(scan.style, STYLE_BRACKETS)
+        self.assertFalse(scan.citations[0].author_year)
+        # Without entries, author-year citations are not looked for.
+        passages = (chunk("a", "Brown (2018) agrees.\n"),)
+        scan = find_citations(passages, 7, None, RULES)
+        self.assertEqual(scan.style, STYLE_NONE)
+
+    def test_incompatible_author_lists_are_not_cited(self) -> None:
+        entries = (
+            (1, "Brown, A. (2018). A network study. J 1, 2."),
+            (2, "Smith, J., & Wu, C. (2020). A different study. J 2, 3."),
+        )
+        passages = (chunk(
+            "a",
+            "Brown (2018) identified networks.\n"
+            "Smith and Lee (2020) investigated them too.\n",
+        ),)
+        scan = find_citations(passages, 2, None, RULES, entries)
+        self.assertEqual(scan.style, STYLE_AUTHOR_YEAR)
+        self.assertEqual([citation.numbers for citation in scan.citations],
+                         [(1,)])
+        self.assertEqual(scan.unresolved, ("Smith and Lee, 2020",))
+        self.assertEqual(scan.uncited, (2,))
+
+    def test_wrapped_author_lists_cite_the_first_author(self) -> None:
+        """Use the reconstructed header, not its continuation authors.
+
+        """
+
+        from kilin.tools._shared.references import (
+            ReferenceLayout, numbered_reference_entries,
+        )
+        layout = ReferenceLayout(40000, 5, 3, 12, 5)
+        source = (
+            "References\n"
+            "Adams, A. (2018). A scientific overview. Journal 1, 2.\n"
+            "Brown, A., Clark, B.,\n"
+            "Ford, C., & Green, D. (2019). New microscopy research. "
+            "Journal 3, 4.\n"
+            "Cole, C. (2020). A different research article. Journal 5, 6.\n"
+        )
+        entries = numbered_reference_entries(
+            (chunk("a", source),), layout,
+        )
+        self.assertEqual(len(entries), 3)
+        passages = (chunk(
+            "b", "Adams (2018) introduced this idea. "
+            "Brown et al. (2019) expanded it. "
+            "Ford and Green (2019) offered another view.",
+        ),)
+        scan = find_citations(
+            passages, 3, None, RULES,
+            tuple((entry.number, entry.text) for entry in entries),
+        )
+        self.assertEqual(scan.style, STYLE_AUTHOR_YEAR)
+        self.assertEqual([c.numbers for c in scan.citations], [(1,), (2,)])
+        self.assertEqual(scan.unresolved, ("Ford and Green, 2019",))
+        self.assertEqual(scan.uncited, (3,))
 
 
 class TestSuperscripts(unittest.TestCase):
