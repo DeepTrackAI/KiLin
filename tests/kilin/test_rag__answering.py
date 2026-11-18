@@ -23,6 +23,7 @@ from kilin.project_type import (
     RETRIEVAL_MODE_NONE,
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
+    project_type,
 )
 from kilin.retrievals import DocumentSelection
 from kilin.tools import ToolResult, ToolUse
@@ -1153,6 +1154,26 @@ class TestRAGRoutingAndTools(unittest.TestCase):
         self.assertFalse(session._route(
             "Followup", config, False, "turn", report
         ).standalone)
+
+    def test_writing_without_router_uses_grounded_default(self) -> None:
+        """Use evidence-based writing when intent routing is disabled.
+
+        """
+
+        config = project_type("writing")
+        session = _session()
+        session._router_chat = Mock()
+        report = Mock()
+        decision = session._route(
+            "Draft a methods section", config, False, "turn", report
+        )
+        self.assertEqual(decision.intent, "grounded_writing")
+        self.assertEqual(decision.fallback, "routing off")
+        self.assertEqual(
+            config.intents[decision.intent].retrieval_mode, "search"
+        )
+        session._router_chat.assert_not_called()
+        report.assert_not_called()
 
     def test_routing_on_records_classification_and_fallback(self) -> None:
         """Trace route decisions and recover from invalid classifications."""

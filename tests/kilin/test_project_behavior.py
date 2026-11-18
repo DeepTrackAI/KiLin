@@ -99,6 +99,39 @@ class TestProjectBehavior(ProjectBehaviorFixture):
                          values["global"]["defaults"])
         self.assertEqual(len(values["intents"]), len(base.intents))
 
+    def test_writing_default_inherits_unless_project_overrides(self):
+        """Keep an explicit project-local writing preference authoritative.
+
+        """
+
+        workspace = self.root / "writing_project"
+        kilin.initialize_project(workspace, "writing")
+        self.assertEqual(
+            effective_project_type(workspace).default_intent,
+            "grounded_writing",
+        )
+        self.assertFalse((workspace / PROJECT_BEHAVIOR_FILE).exists())
+        settings = project_behavior_settings(workspace)
+        self.assertEqual(
+            settings["global"]["defaults"]["default_intent"],
+            "grounded_writing",
+        )
+        values = deepcopy(settings["global"]["values"])
+        values["default_intent"] = "writing"
+        save_project_behavior(
+            workspace, "global", values,
+            expected_revision=settings["revision"],
+        )
+        self.assertEqual(
+            effective_project_type(workspace).default_intent, "writing"
+        )
+        saved = json.loads(
+            (workspace / PROJECT_BEHAVIOR_FILE).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(saved["global"], {"default_intent": "writing"})
+
     def test_global_changes_are_private_and_survive_reopening(self):
         changed = self.save_global(
             description="My project", welcome_prompts=["Welcome back"],

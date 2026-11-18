@@ -607,6 +607,35 @@ class TestRouting(unittest.TestCase):
         self.assertIsNone(decision.fallback)
         self.assertIn("code_generation", decision.raw)
 
+    def test_writing_router_uses_default_only_as_fallback(self) -> None:
+        """Preserve source-free edits and use grounded fallback on errors.
+
+        """
+
+        writing = project_type("writing")
+        cases = (
+            (
+                '{"intent": "writing", "standalone": true}',
+                "Help me improve my draft", "writing",
+            ),
+            (
+                "invalid router output",
+                "Help me improve my draft", "grounded_writing",
+            ),
+            (
+                '{"intent": "grounded_writing", "standalone": true}',
+                "Rewrite this abstract for clarity", "writing",
+            ),
+        )
+        for reply, question, expected in cases:
+            with self.subTest(reply=reply, question=question):
+                with patch.object(answering, "side_reply",
+                                  return_value=reply):
+                    decision = answering.route_question(
+                        object(), writing, [], question
+                    )
+                self.assertEqual(decision.intent, expected)
+
     def test_unknown_intent_falls_back(self) -> None:
         """Preserve the default intent and explain an unknown identifier."""
 

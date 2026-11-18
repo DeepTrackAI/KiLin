@@ -686,6 +686,23 @@ class TestProjectTypeLoading(ProjectTypeFixture):
                 with self.assertRaisesRegex(ValueError, "Duplicate IDs"):
                     load_project_types(folder)
 
+    def test_writing_default_intent_has_source_first_retrieval(self) -> None:
+        """Prefer grounded writing without losing source-free editing.
+
+        """
+
+        definition = project_type("writing")
+        self.assertEqual(definition.default_intent, "grounded_writing")
+        grounded = definition.intents[definition.default_intent]
+        self.assertIsNone(grounded.tool)
+        self.assertEqual(grounded.retrieval_mode, "search")
+        self.assertEqual(grounded.retrieval_strategy, "source_first")
+        self.assertEqual(grounded.history_policy, "relevant")
+        self.assertEqual(definition.intents["writing"].retrieval_mode,
+                         "none")
+        self.assertEqual(definition.intents["writing"].history_policy,
+                         "recent")
+
     def test_writing_file_types_preserve_approved_defaults(self) -> None:
         """Keep Writing Assistant source formats from the base branch.
 
