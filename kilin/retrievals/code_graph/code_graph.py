@@ -61,6 +61,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 
+from kilin.sources import source_kinds as kinds
 from kilin.sources.sources import SourceFile, SourceUnit
 
 __all__ = [
@@ -71,6 +72,87 @@ __all__ = [
 ]
 
 _EXTENSION_PACKAGE = "kilin.retrievals.code_graph.extensions"
+# File types written in the same language share their names: a notebook's
+# functions are Python functions.
+_SAME_LANGUAGE = {".ipynb": ".py"}
+
+
+class _ReachableNames(dict[str, set[str]]):
+    """Names one file can call, keyed by their last part.
+
+    The mapping holds the names of the file's own language and of languages
+    it calls by plain name. ``prefixed`` holds, for each prefix the language
+    writes before a call into another one (MATLAB's ``py``), the names of
+    that language.
+
+    """
+
+    __slots__ = ("prefixed",)
+
+    def __init__(self) -> None:
+        """Start with no names and no other languages.
+
+        """
+
+        super().__init__()
+        self.prefixed: dict[str, dict[str, set[str]]] = {}
+
+
+def _language(path: Path) -> str:
+    """Return the file type that stands for a file's language.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Repository-relative source path.
+
+    Returns
+    -------
+    str
+        Lowercase suffix, with notebooks counted as Python.
+
+    """
+
+    suffix = path.suffix.lower()
+    return _SAME_LANGUAGE.get(suffix, suffix)
+
+
+def _reachable_names(
+    known: dict[str, dict[str, set[str]]],
+    language: str,
+    calls_into: dict[str, str],
+) -> _ReachableNames:
+    """Return the names a file of one language can call.
+
+    Parameters
+    ----------
+    known: dict[str, dict[str, set[str]]]
+        Known names of each language.
+    language: str
+        File type of the calling file's language.
+    calls_into: dict[str, str]
+        The extension's ``CALLS_INTO``: for each prefix written before a
+        call into another language, that language's file type; an empty
+        prefix means plain calls.
+
+    Returns
+    -------
+    _ReachableNames
+        Copies of the names, so resolving never changes ``known``.
+
+    """
+
+    names = _ReachableNames()
+    plain = [language] + [
+        other for prefix, other in calls_into.items() if not prefix
+    ]
+    for other in plain:
+        for short_name, qualified in known.get(other, {}).items():
+            names.setdefault(short_name, set()).update(qualified)
+    for prefix, other in calls_into.items():
+        if prefix:
+            names.prefixed[prefix] = known.get(other, {})
+    return names
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +271,13 @@ def build_code_graph(
     Entities are ordered by name, kind, and path because distinct source
     entities can share the same qualified name.
 
+    A plain call is matched only to names of the caller's own language. A
+    language hook that calls into another language declares it in
+    ``CALLS_INTO``, a mapping from the prefix it writes before such a call
+    to that language's file type: MATLAB's ``{"py": ".py"}`` links
+    ``py.helpers.smooth(x)`` to the Python function ``helpers.smooth``, and
+    HTML's ``{"": ".js"}`` lets plain handler calls reach JavaScript.
+
     """
 
     if not files or not units:
@@ -196,12 +285,16 @@ def build_code_graph(
 
     entities: set[CodeEntity] = set()
     relations: set[CodeRelation] = set()
-    known: dict[str, set[str]] = {}
+    # Names are kept per language, so a call in one language is never
+    # matched to a same-named function in another by accident.
+    known: dict[str, dict[str, set[str]]] = {}
 
     for source_file in files:
         module = _module_name(source_file.path)
         entities.add(CodeEntity(module, "source_file", source_file.path))
-        _remember_name(known, module)
+        _remember_name(
+            known.setdefault(_language(source_file.path), {}), module
+        )
 
     for unit in units:
         _add_unit(
@@ -209,7 +302,7 @@ def build_code_graph(
             _module_name(unit.path),
             entities,
             relations,
-            known,
+            known.setdefault(_language(unit.path), {}),
         )
 
     extensions: dict[Path, object] = {}
@@ -230,8 +323,9 @@ def build_code_graph(
             extension, "extract_module_constants", None
         )
         if extract_constants is not None:
+            names = known.setdefault(_language(source_file.path), {})
             for short_name, module in extract_constants(source_file).items():
-                known.setdefault(short_name, set()).add(module)
+                names.setdefault(short_name, set()).add(module)
 
     for source_file in files:
         extension = extensions.get(source_file.path)
@@ -239,7 +333,12 @@ def build_code_graph(
             continue
         suffix = source_file.path.suffix.lower().lstrip(".")
 
-        extracted = extension.extract_code_relations(source_file, known)
+        reachable = _reachable_names(
+            known,
+            _language(source_file.path),
+            getattr(extension, "CALLS_INTO", {}),
+        )
+        extracted = extension.extract_code_relations(source_file, reachable)
         if not isinstance(extracted, set) or any(
             not isinstance(item, CodeRelation) for item in extracted
         ):
@@ -325,17 +424,9 @@ def _unit_name(unit: SourceUnit, parent: str) -> str:
 
     if unit.symbol is None:
         return parent
-    context_kinds = (
-        "python_class_context",
-        "python_module_context",
-        "matlab_class_context",
-        "matlab_file_context",
-    )
-    if unit.kind in context_kinds or unit.kind.endswith("_block"):
+    if unit.kind in kinds.CONTEXT_KINDS or unit.kind.endswith("_block"):
         return parent
-    if unit.kind in {"matlab_class", "python_class"} and (
-        unit.symbol == parent
-    ):
+    if unit.kind in kinds.CLASS_KINDS and (unit.symbol == parent):
         return f"{parent}.{unit.symbol}"
     if unit.symbol == parent or unit.symbol.startswith(f"{parent}."):
         return unit.symbol
@@ -413,8 +504,13 @@ def _resolve_name(
 
     Notes
     -----
-    Candidates share the reference's last component. One candidate is
-    taken. Otherwise, in order:
+    A reference that starts with a prefix the language uses to call another
+    one (``py.helpers.smooth`` in MATLAB) is resolved among that language's
+    names only. A qualified cross-language reference must match its whole
+    name or a unique qualified suffix; a same-leaf fallback is not enough.
+    Otherwise candidates share the reference's last component,
+    and a file named after its function counts as that function. One
+    candidate is taken. Otherwise, in order:
 
     1. a dotted reference (``sources_py.extract_source_units``) takes the
        only candidate that is it or ends with it;
@@ -429,7 +525,35 @@ def _resolve_name(
 
     """
 
-    candidates = known.get(name.split(".")[-1], set())
+    first, _, rest = name.partition(".")
+    other = getattr(known, "prefixed", {}).get(first) if rest else None
+    if other is not None:
+        if "." in rest:
+            # A qualified cross-language call must not fall back to the
+            # only function with the same leaf in an unrelated module.
+            leaf = rest.rsplit(".", 1)[-1]
+            candidates = {
+                candidate
+                for candidate in other.get(leaf, set())
+                if f"{candidate}.{leaf}" not in other.get(leaf, set())
+            }
+            qualified = {
+                candidate for candidate in candidates
+                if candidate == rest or candidate.endswith(f".{rest}")
+            }
+            return next(iter(qualified)) if len(qualified) == 1 else name
+        resolved = _resolve_name(rest, other)
+        found = resolved in other.get(resolved.split(".")[-1], set())
+        return resolved if found else name
+
+    leaf = name.split(".")[-1]
+    # A file named after the function it defines (MATLAB's helper.m): the
+    # call means the function, not the file.
+    candidates = {
+        candidate
+        for candidate in known.get(leaf, set())
+        if f"{candidate}.{leaf}" not in known.get(leaf, set())
+    }
     if len(candidates) == 1:
         return next(iter(candidates))
 

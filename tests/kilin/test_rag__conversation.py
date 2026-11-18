@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch, sentinel
 from kilin import rag
+from kilin.chunking import Chunk
 from kilin.conversation_format import (
     CONVERSATION_SESSION_KEY,
     new_conversation_session,
@@ -465,6 +466,78 @@ class TestRAGLifecycle(unittest.TestCase):
                 self.assertIs(session._reads_as_code(), as_code)
                 self.assertIs(
                     session._index_metadata()["html_as_code"], as_code
+                )
+
+    def test_projects_reading_js_or_r_record_code_path_languages(
+        self,
+    ) -> None:
+        """Only projects with JS or R passages re-index for their paths."""
+        session = _session()
+        for extensions, recorded in (
+            ((".pdf", ".md"), False),
+            ((".py", ".m"), False),
+            ((".py", ".js"), True),
+            ((".r",), True),
+        ):
+            with self.subTest(extensions=extensions):
+                session.project.profile.extensions = extensions
+                self.assertIs(
+                    "code_path_languages" in session._index_metadata(),
+                    recorded,
+                )
+
+    def test_code_graph_format_invalidates_only_graph_profiles(
+        self,
+    ) -> None:
+        """Rebuild affected graph indexes without touching prose projects."""
+
+        session = _session()
+        for extensions, setting, recorded in (
+            ((".pdf", ".md"), True, False),
+            ((".json",), True, False),
+            ((".py",), True, True),
+            ((".m",), "auto", True),
+            ((".ipynb",), True, True),
+            ((".js",), True, True),
+            ((".r",), True, True),
+            ((".html",), True, True),
+            ((".html",), "auto", False),
+            ((".py", ".html"), "auto", True),
+            ((".py", ".js"), False, False),
+        ):
+            with self.subTest(extensions=extensions, code_graph=setting):
+                session.project.profile.extensions = extensions
+                with patch.object(rag, "project_type") as lookup:
+                    lookup.return_value.code_graph = setting
+                    metadata = session._index_metadata()
+                self.assertEqual(
+                    "code_graph_format" in metadata, recorded
+                )
+                if recorded:
+                    self.assertEqual(
+                        metadata["code_graph_format"],
+                        rag.CODE_GRAPH_FORMAT,
+                    )
+                    legacy = dict(metadata)
+                    legacy.pop("code_graph_format")
+                    self.assertNotEqual(legacy, metadata)
+                if ".json" in extensions:
+                    self.assertEqual(
+                        metadata["json_source_units"],
+                        rag.JSON_SOURCE_UNITS_FORMAT,
+                    )
+
+    def test_js_and_r_passages_are_searched_with_their_path(self) -> None:
+        for kind, path in (("js_function", "web/app.js"),
+                           ("r_function", "r/calc.R")):
+            with self.subTest(kind=kind):
+                chunk = Chunk(
+                    identifier="c1", path=Path(path), text="body",
+                    start_line=1, end_line=2, kind=kind, symbol="f",
+                    section=None,
+                )
+                self.assertTrue(
+                    rag._retrieval_text(chunk, {}).startswith(path)
                 )
 
 

@@ -91,6 +91,37 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         mocks.save.assert_called_once()
         tokens.assert_not_called()
 
+    def test_streamed_and_saved_citations_are_identical(self) -> None:
+        """Link worded prose citations without rewriting streamed code."""
+
+        session = _session()
+        raw = (
+            "See [sources 1 and 2] and "
+            "`[source 1]`.\n"
+            "```python\nvalue = '[source 1]'\n```\n"
+            "Then [source 1]."
+        )
+        emitted: list[str] = []
+
+        def reply(_prompt: str, **options: object) -> str:
+            """Simulate a model yielding one character at a time."""
+
+            callback = options["token_callback"]
+            for char in raw:
+                callback(char)
+            return raw
+
+        session.chat_session.reply.side_effect = reply
+        session.chat_session.last_finish_reason = "stop"
+        with _answer_patches(session, _intent()):
+            answer = session.ask(
+                "Explain the cited code", use_router=False,
+                token_callback=emitted.append,
+            )
+        self.assertEqual(answer, rag._numbered_citations(raw))
+        self.assertEqual("".join(emitted), answer)
+        self.assertEqual(session.turns[-1].answer, answer)
+
     def test_model_summary_comes_from_the_core(self) -> None:
         """Keep the model label with the saved turn, not in the GUI."""
         session = _session()
@@ -632,8 +663,40 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         tokens.assert_called_once_with("tool answer")
         forwarded = mocks.run.call_args.kwargs["token_callback"]
         self.assertTrue(callable(forwarded))
-        # A wrapper observes the first emitted output without altering it.
+        # A wrapper tracks the first output and formats worded citations.
         self.assertIsNot(forwarded, tokens)
+
+    def test_tool_worded_citations_match_stream_and_saved_answer(
+        self,
+    ) -> None:
+        """Apply the same citation policy to a tool-written response."""
+
+        session = _session()
+        use = ToolUse("project_inventory", object())
+        raw = "Tool [source 1]. Literal `[source 2]` stays."
+        pieces: list[str] = []
+
+        def run(*args: object, **kwargs: object) -> ToolResult:
+            """Simulate a tool sending its answer in partial fragments."""
+
+            callback = kwargs["token_callback"]
+            for fragment in (raw[:8], raw[8:15], raw[15:]):
+                callback(fragment)
+            return ToolResult(
+                raw, (asdict(_evidence()),), {"name": "tool"},
+                streamed=True,
+            )
+
+        with _answer_patches(
+            session, _intent(RETRIEVAL_MODE_NONE, tool=use)
+        ) as mocks:
+            mocks.run.side_effect = run
+            answer = session.ask(
+                "Inventory", use_router=False, token_callback=pieces.append
+            )
+        self.assertEqual(answer, rag._numbered_citations(raw))
+        self.assertEqual("".join(pieces), answer)
+        self.assertEqual(session.turns[-1].answer, answer)
 
     def test_tool_that_streamed_does_not_repeat_answer(self) -> None:
         """Avoid replaying an answer already streamed by the tool."""

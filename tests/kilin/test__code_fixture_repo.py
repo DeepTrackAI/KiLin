@@ -3,7 +3,8 @@
 ``tests/fixtures/code_repo`` holds one small file per supported code
 language. These tests run it through the same steps a Code project uses,
 without models: scanning with the Code type's file types, reading,
-splitting into units and passages, and building the code graph. As in a
+splitting into units and passages, and building the code graph, whose
+links can cross languages (MATLAB calling Python). As in a
 Code project, whose ``code_graph`` is ``true``, HTML is read as code. Each
 language's own reader is tested in detail by its unit tests; this file
 checks that they work together on one repository.
@@ -150,6 +151,43 @@ class TestCodeFixtureRepository(unittest.TestCase):
             any(target.endswith("m_function_B") for target in targets)
         )
 
+    def test_matlab_calls_its_helper_and_python(self) -> None:
+        m = "matlab"
+        for expected in (
+            CodeRelation(
+                f"{m}.m_function_A.m_function_A",
+                "calls",
+                f"{m}.m_function_B.m_function_B",
+            ),
+            CodeRelation(
+                f"{m}.m_function_C.m_function_C",
+                "calls",
+                "python.calculator_py.py_function_A",
+            ),
+            CodeRelation(
+                f"{m}.m_function_C.m_function_C",
+                "calls",
+                f"{m}.m_function_A.m_function_A",
+            ),
+        ):
+            with self.subTest(relation=expected):
+                self.assertIn(expected, self.relations)
+
+    def test_comments_and_builtins_do_not_link_across_files(self) -> None:
+        sources = {
+            relation.source
+            for relation in self.relations
+            if relation.relation == "calls"
+            and relation.target.endswith("py_function_A")
+        }
+        self.assertEqual(
+            sources,
+            {
+                "python.calculator_py.PyChildClass.py_method_C",
+                "matlab.m_function_C.m_function_C",
+            },
+        )
+
     def test_javascript_calls_through_objects_are_not_links(self) -> None:
         targets = {
             relation.target
@@ -198,27 +236,25 @@ class TestCodeFixtureRepository(unittest.TestCase):
         )
 
     def test_r_functions_expand_to_callers_and_callees(self) -> None:
-        r = 'r.calculator_r'
+        r = "r.calculator_r"
         plan = plan_context_expansion(
-            'Which functions call r_function_A?', self.graph
+            "Which functions call r_function_A?", self.graph
         )
-        self.assertTrue(names_code('Explain r_function_A', self.graph))
-        self.assertEqual(plan.functions, (f'{r}.r_function_A',))
+        self.assertTrue(names_code("Explain r_function_A", self.graph))
+        self.assertEqual(plan.functions, (f"{r}.r_function_A",))
         self.assertTrue(plan.relationship)
-        self.assertIn(
-            f'{r}.RChildClass.r_method_C', plan.related_functions
-        )
-        plain = plan_context_expansion('Explain r_function_A', self.graph)
-        self.assertIn(f'{r}.r_function_B', plain.related_functions)
+        self.assertIn(f"{r}.RChildClass.r_method_C", plan.related_functions)
+        plain = plan_context_expansion("Explain r_function_A", self.graph)
+        self.assertIn(f"{r}.r_function_B", plain.related_functions)
 
     def test_r_class_expands_to_its_methods(self) -> None:
         plan = plan_context_expansion(
-            'Which methods belong to RChildClass?', self.graph
+            "Which methods belong to RChildClass?", self.graph
         )
         self.assertEqual(plan.functions, ())
-        self.assertIn('exact class', plan.signals)
+        self.assertIn("exact class", plan.signals)
         self.assertIn(
-            'r.calculator_r.RChildClass.r_method_C',
+            "r.calculator_r.RChildClass.r_method_C",
             plan.related_functions,
         )
 
@@ -245,7 +281,6 @@ class TestCodeFixtureRepository(unittest.TestCase):
             plan.related_functions,
         )
 
-
     def test_json_is_one_passage_labelled_by_its_keys(self) -> None:
         """Keep JSON keys as subdivisions without losing their contents."""
 
@@ -260,6 +295,7 @@ class TestCodeFixtureRepository(unittest.TestCase):
         ]
         self.assertEqual(len(passages), 1)
         self.assertIn('"multiplier": 2', passages[0].text)
+
 
 
 if __name__ == "__main__":

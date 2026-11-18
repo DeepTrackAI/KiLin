@@ -154,10 +154,23 @@ When adding a suffix:
 6. Update project-type suffix defaults **only if** the project type should select
    the new format automatically; explicit files follow different policy.
 
-Code relationship extractors for Python and MATLAB live under
-`retrievals/code_graph/extensions/`; their results are heuristic, not
-execution or complete semantic analysis. Adding another language may also
-require source-unit conventions, graph entity typing and retrieval tests.
+Code relationship extractors for Python, MATLAB, JavaScript, R and HTML
+live under `retrievals/code_graph/extensions/`; their results are
+heuristic, not execution or complete semantic analysis. A plain call is
+matched only to names of the caller's own language (notebooks count as
+Python). A hook that calls into another language declares
+`CALLS_INTO`, mapping the prefix it writes before such a call to that
+language's file type: MATLAB's `{"py": ".py"}` links
+`py.helpers.smooth(x)` to the Python function, and HTML's `{"": ".js"}`
+lets inline handlers reach JavaScript by plain name.
+
+A new language's passage kinds belong in `sources/source_kinds.py`: add
+its functions and methods to `CALLABLE_KINDS` (methods also to
+`METHOD_KINDS`), its classes to `CLASS_KINDS`, its top-level file code to
+`MODULE_CONTEXT_KINDS`, and its prefix to `CODE_KIND_PREFIXES`. Retrieval
+then follows its functions through the code graph and searches its
+passages with their file path, like Python's. Kinds left out still index
+and retrieve; they only miss that behaviour.
 
 ## Source-card kind contract
 

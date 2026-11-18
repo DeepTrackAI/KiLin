@@ -47,6 +47,7 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin.sources import source_kinds as kinds
 from kilin.sources.sources import (
     SourceFile,
     SourceUnit,
@@ -95,9 +96,9 @@ def _declaration(line: str) -> tuple[str, str] | None:
     """
 
     for pattern, kind in (
-        (R_FUNCTION, "r_function"),
-        (R_CLASS, "r_class"),
-        (R_SET_CLASS, "r_class"),
+        (R_FUNCTION, kinds.R_FUNCTION),
+        (R_CLASS, kinds.R_CLASS),
+        (R_SET_CLASS, kinds.R_CLASS),
     ):
         match = pattern.match(line)
         if match is not None:
@@ -106,7 +107,7 @@ def _declaration(line: str) -> tuple[str, str] | None:
     if method is None:
         return None
     name, signature = method.groups()
-    return "r_method", name if signature is None else f"{signature}.{name}"
+    return kinds.R_METHOD, name if signature is None else f"{signature}.{name}"
 
 
 def _with_comment(lines: list[str], line_number: int, first: int) -> int:
@@ -233,8 +234,13 @@ def _class_unit(
         first = _with_comment(lines, number, position)
         last = _block_end(lines, number, end)
         for low, high, kind, symbol in (
-            (position, first - 1, "r_class_context", None),
-            (first, last, "r_method", f"{name}.{match.group(1).strip('`')}"),
+            (position, first - 1, kinds.R_CLASS_CONTEXT, None),
+            (
+                first,
+                last,
+                kinds.R_METHOD,
+                f"{name}.{match.group(1).strip('`')}",
+            ),
         ):
             unit = _source_unit(
                 path, lines, low, high, kind=kind, symbol=symbol
@@ -243,7 +249,9 @@ def _class_unit(
                 children.append(unit)
         position = number = last + 1
     if children:
-        rest = _source_unit(path, lines, position, end, kind="r_class_context")
+        rest = _source_unit(
+            path, lines, position, end, kind=kinds.R_CLASS_CONTEXT
+        )
         if rest is not None:
             children.append(rest)
     return _source_unit(
@@ -251,7 +259,7 @@ def _class_unit(
         lines,
         start,
         end,
-        kind="r_class",
+        kind=kinds.R_CLASS,
         symbol=name,
         children=tuple(children) if len(children) > 1 else (),
     )
@@ -290,15 +298,15 @@ def extract_source_units(source_file: SourceFile) -> list[SourceUnit]:
             continue
         start = _with_comment(lines, line_number, position)
         if start > position:
-            parts.append((position, start - 1, "r_script", None))
+            parts.append((position, start - 1, kinds.R_SCRIPT, None))
         end = _block_end(lines, line_number, len(lines))
         parts.append((start, end, kind, name))
         position = end + 1
     if position <= len(lines):
-        parts.append((position, len(lines), "r_script", None))
+        parts.append((position, len(lines), kinds.R_SCRIPT, None))
     units: list[SourceUnit] = []
     for first, last, kind, name in parts:
-        if kind == "r_class" and name is not None:
+        if kind == kinds.R_CLASS and name is not None:
             unit = _class_unit(path, lines, first, last, name)
         else:
             unit = _source_unit(

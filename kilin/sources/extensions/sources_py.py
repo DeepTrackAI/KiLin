@@ -46,6 +46,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from kilin.sources import source_kinds as kinds
 from kilin.sources.sources import (
     SourceFile,
     SourceUnit,
@@ -153,7 +154,7 @@ def _python_class_unit(
             lines,
             cursor,
             method_start - 1,
-            kind="python_class_context",
+            kind=kinds.PYTHON_CLASS_CONTEXT,
             symbol=node.name,
         )
         if context is not None:
@@ -164,7 +165,7 @@ def _python_class_unit(
             lines,
             method_start,
             _node_end(method),
-            kind="python_method",
+            kind=kinds.PYTHON_METHOD,
             symbol=f"{node.name}.{method.name}",
         )
         if method_unit is not None:
@@ -177,7 +178,7 @@ def _python_class_unit(
         lines,
         cursor,
         end_line,
-        kind="python_class_context",
+        kind=kinds.PYTHON_CLASS_CONTEXT,
         symbol=node.name,
     )
     if tail is not None:
@@ -188,7 +189,7 @@ def _python_class_unit(
         lines,
         start_line,
         end_line,
-        kind="python_class",
+        kind=kinds.PYTHON_CLASS,
         symbol=node.name,
         children=tuple(children),
     )
@@ -224,7 +225,7 @@ def _python_units(path: Path, lines: list[str]) -> list[SourceUnit]:
             lines,
             1,
             len(lines),
-            kind="python_file",
+            kind=kinds.PYTHON_FILE,
         )
         return [fallback] if fallback is not None else []
 
@@ -249,7 +250,7 @@ def _python_units(path: Path, lines: list[str]) -> list[SourceUnit]:
             lines,
             cursor,
             start_line - 1,
-            kind="python_module_context",
+            kind=kinds.PYTHON_MODULE_CONTEXT,
             symbol=path.stem,
         )
         if context is not None:
@@ -263,7 +264,7 @@ def _python_units(path: Path, lines: list[str]) -> list[SourceUnit]:
                 lines,
                 start_line,
                 _node_end(node),
-                kind="python_function",
+                kind=kinds.PYTHON_FUNCTION,
                 symbol=node.name,
             )
             if function is not None:
@@ -276,7 +277,7 @@ def _python_units(path: Path, lines: list[str]) -> list[SourceUnit]:
         lines,
         cursor,
         len(lines),
-        kind="python_module_context",
+        kind=kinds.PYTHON_MODULE_CONTEXT,
         symbol=path.stem,
     )
     if tail is not None:

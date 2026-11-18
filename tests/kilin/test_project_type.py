@@ -1515,5 +1515,30 @@ class TestIntentFields(ProjectTypeFixture):
             self._load("classifybad", data)
 
 
+
+class TestCodeRelationshipCues(unittest.TestCase):
+    """Questions about calls and inheritance explain code, not list it."""
+
+    def test_cues_match_relationship_questions_only(self) -> None:
+        cues = kilin.project_type("code").intents["code_explanation"].cues
+        for question, expected in (
+            ("Which function does js_function_A call?", True),
+            ("Which functions or methods call js_function_A?", True),
+            ("What calls save?", True),
+            ("Which class does JsChildClass extend?", True),
+            ("If I change py_function_B, which functions are affected?",
+             True),
+            ("Find every use of js_function_A.", False),
+            ("How many files mention js_function_B?", False),
+            ("List every call to save.", False),
+            ("Write a function which calls load_data.", False),
+            ("Which functions handle file loading?", False),
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(
+                    any(cue.search(question) for cue in cues), expected
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

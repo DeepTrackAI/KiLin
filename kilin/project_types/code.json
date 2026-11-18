@@ -36,7 +36,13 @@
   "default_intent": "code_explanation",
   "intents": {
     "code_explanation": {
-      "description": "Explain existing code, or how parts of the repository work and connect, including where and how the code decides something (for example, how it selects, reads, or skips files).",
+      "description": "Explain existing code, or how parts of the repository work and connect, including where and how the code decides something (for example, how it selects, reads, or skips files), and how one function or class relates to others: which functions it calls, which ones call it, and which class it extends ('which function does load_data call?', 'what calls save?').",
+      "cues": [
+        "\\b(?:which|what)\\s+(?:functions?|methods?)\\s+(?:does|do|did)\\b.{0,80}\\bcall\\b",
+        "\\b(?:which|what|who)\\b(?:\\s+[\\w-]+){0,4}\\s+calls?\\s+[A-Za-z_][\\w.]*(?:\\(\\))?\\s*\\?",
+        "\\bwhich\\s+class(?:es)?\\s+does\\b.{0,80}\\b(?:extend|inherit)",
+        "\\bif\\s+i\\s+change\\b.{0,80}\\b(?:affected|break)"
+      ],
       "system_prompt": "Explain the code clearly, including its role and how it relates to other parts of the repository.",
       "history": {
         "policy": "relevant"
@@ -129,7 +135,7 @@
       }
     },
     "mention_listing": {
-      "description": "List or count every place an exact name or text appears in the code, and the lines that contain it ('find every use of load_data', 'list all TODO comments', 'how many files mention matplotlib?'). Exhaustive and exact; not for explaining what code does or sorting occurrences into groups.",
+      "description": "List or count every place an exact name or text appears in the code, and the lines that contain it ('find every use of load_data', 'list all TODO comments', 'how many files mention matplotlib?'). Exhaustive and exact; not for explaining what code does, what a function calls or what calls it (code_explanation), or sorting occurrences into groups.",
       "history": {
         "policy": "none"
       },

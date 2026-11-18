@@ -363,6 +363,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .conversation-item, .project-item { width: 100%; min-height: 34px; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; font-size: 13px; font-weight: 400; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-item:hover:not(:disabled), .conversation-item.active, .project-item:hover:not(:disabled), .project-item.active { background: var(--selected); }
 .project-item { display: flex; align-items: baseline; gap: 8px; }
+/* Keep inactive projects visually subdued without dimming the whole row. */
+.project-item:not(.active) { color: var(--muted); }
+.project-item:not(.active):hover { color: var(--text); }
 /* The name keeps priority; a long type is cut first. */
 .project-item-name { flex: 0 1 auto; min-width: 4em; overflow: hidden; text-overflow: ellipsis; }
 .project-item-type { flex: 0 4 auto; min-width: 0; margin-left: auto; overflow: hidden; color: var(--muted); font-size: 12px; font-weight: 400; text-overflow: ellipsis; }

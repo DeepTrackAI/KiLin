@@ -274,6 +274,42 @@ class TestRAGIndexProvenance(unittest.TestCase):
         self.assertFalse(changes["configuration_changed"])
         self.assertEqual(loaded, original)
 
+    def test_legacy_graph_format_forces_reindex(self) -> None:
+        """A graph format change rejects otherwise reusable saved data."""
+
+        settings = {
+            "project_type_id": "code",
+            "code_graph_format": "qualified-cross-language-v2",
+        }
+        first = self._coordinator()
+        first._index_metadata.return_value = settings
+        self._prepare(first, self._embedding())
+
+        # An old index with identical sources and model lacks the new marker.
+        metadata_path = self.index_directory / "settings.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata.pop("code_graph_format")
+        metadata_path.write_text(
+            json.dumps(metadata), encoding="utf-8"
+        )
+
+        second = self._coordinator()
+        second._index_metadata.return_value = settings
+        embedding = self._embedding()
+        _, _, status, changes = self._prepare(second, embedding)
+        self.assertEqual(status, "rebuilt")
+        self.assertTrue(changes["configuration_changed"])
+        self.assertEqual(embedding.calls, [[_CODE_TEXT]])
+
+        # Once rebuilt with the new marker, unchanged sources reuse normally.
+        third = self._coordinator()
+        third._index_metadata.return_value = settings
+        embedding = self._embedding()
+        _, _, status, changes = self._prepare(third, embedding)
+        self.assertEqual(status, "reused")
+        self.assertFalse(changes["configuration_changed"])
+        self.assertEqual(embedding.calls, [])
+
     def test_new_session_uses_cached_model_file_hashes(self) -> None:
         """A fresh RAG session reuses disk hashes, not just memory cache.
 
