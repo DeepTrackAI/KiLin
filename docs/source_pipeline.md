@@ -125,8 +125,9 @@ It does **not execute source files or notebook cells**.
 | `sources_pdf.py` | Page-oriented selectable PDF text; page/section coordinates |
 | `sources_docx.py` | Word body text in reading order; Markdown heading sections |
 | `sources_doc.py` | Old Word 97-2003 body text in reading order; no headings |
-| `sources_html.py` | HTML page text with Markdown heading sections; as code, the file as written split at `<head>`, `<body>`, `<section>`, `<script>` and other main parts, short parts joined to the one before |
-| `sources_js.py` | JavaScript top-level functions and classes, class methods as children, comments kept with their declaration |
+| `sources_html.py` | HTML page text with heading sections; as code, source markup split at main HTML elements |
+| `sources_js.py` | JavaScript line-leading functions, classes, and direct methods; lexical masking and balanced braces prevent spurious declarations and scope crossings |
+| `sources_r.py` | R top-level functions, classes, and S4 methods, with attached comment blocks and class-method children |
 | `sources_tex.py` | LaTeX front matter and sections at `\part` to `\subsubsection`; setup before `\begin{document}` left out |
 | `sources_bib.py` | BibTeX entries and macros as independently indexed units with citation keys |
 | `sources_bbl.py` | Compiled LaTeX `\bibitem` references with original line and key provenance |
@@ -148,6 +149,24 @@ information or change the stored-file size policy. The stable
 `tests/kilin/sources/extensions/fixtures/sample.docx` fixture was converted
 from `sample.doc` with LibreOffice and has explicit title/author properties;
 it complements generated tests for specific Word list styles.
+
+**HTML as text or as code.** A project reads its files as code when its
+type's `code_graph` capability is `true`, as for Code projects;
+`"auto"` and `false` read them as text. HTML is the one format read
+differently: as text, `read_source_file` keeps what a reader sees, with
+headings, lists and tables, and leaves out scripts, styles and tags, like
+a Word file; as code, `read_repository_files(..., as_code=True)` keeps the
+file as written and `extract_source_units(..., as_code=True)` uses the
+reader's `extract_code_units`. Citation line numbers refer to the text
+that was indexed, so the reference preview reads the file the same way.
+The index records `html_as_code` for projects that select `.html`, and
+HTML cached as code has a separate identity from HTML cached as page text;
+other file types keep their existing cache identities. In a Code project,
+a page imports its local scripts and follows leading direct calls from
+inline `on...` handlers. The graph reader ignores HTML comments, inert
+templates, and JavaScript string contents. HTML read as page text does not
+contribute code-graph relationships, even when it contains examples of
+markup. JavaScript functions and methods link their plain calls.
 
 Literature profiles now allow `.bib` and `.bbl` alongside `.tex`.
 Selected bibliography files are ordinary indexed sources, not hidden
