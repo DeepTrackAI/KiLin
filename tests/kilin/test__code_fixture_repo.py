@@ -23,6 +23,11 @@ from kilin.chunking import chunk_source_units
 from kilin.project_type import project_type
 from kilin.repository import scan_repository
 from kilin.retrievals.code_graph import CodeRelation, build_code_graph
+from kilin.retrievals.context_expansion import (
+    names_code,
+    plan_context_expansion,
+)
+from kilin.retrievals.strategies.retrieval_code import code_search
 from kilin.sources import extract_source_units, read_repository_files
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "code_repo"
@@ -183,7 +188,9 @@ class TestCodeFixtureRepository(unittest.TestCase):
         self.assertTrue(names_code("Explain js_function_A", self.graph))
         self.assertEqual(plan.functions, (f"{js}.js_function_A",))
         self.assertTrue(plan.relationship)
-        self.assertIn(f"{js}.JsChildClass.js_method_C", plan.related_functions)
+        self.assertIn(
+            f"{js}.JsChildClass.js_method_C", plan.related_functions
+        )
         plain = plan_context_expansion("Explain js_function_A", self.graph)
         self.assertIn(f"{js}.js_function_B", plain.related_functions)
 
