@@ -89,6 +89,93 @@ class TestRCodeGraphExtension(unittest.TestCase):
         }
         self.assertNotIn("analysis.main", calls_in_comment)
 
+    def test_comment_and_string_loader_text_does_not_import(
+        self,
+    ) -> None:
+        text = (
+            '# library(fakepkg)\n'
+            '# source("phantom.R")\n'
+            'message("library(fakequoted)")\n'
+            'message("source(\\"quoted.R\\")")\n'
+            'value <- "note # is text"\n'
+            'library(realpkg)\n'
+            'require("also.real")\n'
+            'requireNamespace("thirdpkg")\n'
+            'source("helpers.R")\n'
+        )
+        files = [
+            source_file('analysis/main.R', text),
+            source_file('analysis/helpers.R', 'helper <- function() 1\n'),
+        ]
+        graph = cg.build_code_graph(files, extract_source_units(files))
+        imports = {
+            relation.target
+            for relation in graph.relations
+            if relation.source == 'analysis.main'
+            and relation.relation == 'imports'
+        }
+        self.assertEqual(
+            imports,
+            {'realpkg', 'also.real', 'thirdpkg', 'analysis.helpers'},
+        )
+
+    def test_commented_inheritance_cannot_override_real_base(
+        self,
+    ) -> None:
+        source = (
+            'Base <- setRefClass("Base")\n'
+            'Child <- setRefClass("Child",\n'
+            '  # contains = "Wrong",\n'
+            '  note = "contains = \\"Quoted\\"",\n'
+            '  contains = "Base")\n'
+        )
+        files = [source_file('class.R', source)]
+        graph = cg.build_code_graph(files, extract_source_units(files))
+        inherits = {
+            relation
+            for relation in graph.relations
+            if relation.relation == 'inherits'
+        }
+        self.assertEqual(
+            inherits,
+            {cg.CodeRelation('class.Child', 'inherits', 'class.Base')},
+        )
+
+    def test_commented_inheritance_alone_adds_no_edge(self) -> None:
+        source = (
+            'Child <- setRefClass("Child",\n'
+            '  # contains = "Wrong"\n'
+            '  fields = list(x = "numeric"))\n'
+        )
+        files = [source_file('class.R', source)]
+        graph = cg.build_code_graph(files, extract_source_units(files))
+        self.assertFalse(
+            any(
+                relation.relation == 'inherits'
+                for relation in graph.relations
+            )
+        )
+
+    def test_r6_inherit_is_recognized_outside_comments(self) -> None:
+        source = (
+            'Base <- R6::R6Class("Base")\n'
+            'Child <- R6::R6Class("Child",\n'
+            '  # inherit = Fake,\n'
+            '  inherit = Base)\n'
+        )
+        files = [source_file('r6.R', source)]
+        graph = cg.build_code_graph(files, extract_source_units(files))
+        self.assertIn(
+            cg.CodeRelation('r6.Child', 'inherits', 'r6.Base'),
+            graph.relations,
+        )
+        self.assertFalse(
+            any(
+                relation.target == 'Fake'
+                for relation in graph.relations
+            )
+        )
+
     def test_extension_alone(self) -> None:
         relations = r.extract_code_relations(
             source_file("a.R", "a <- function() {\n  b()\n}\n"), {}

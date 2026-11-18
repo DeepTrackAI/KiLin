@@ -113,6 +113,8 @@ _FUNCTION_KINDS = {
     "python_method",
     "js_function",
     "js_method",
+    "r_function",
+    "r_method",
 }
 
 # Relationship phrases influence deterministic graph-context expansion.
@@ -185,7 +187,8 @@ _SOURCE_SEARCH_OTHERS = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_OTHERS", "RETRIEVAL"
 )
 _MODULE_CONTEXT_KINDS = {
-    "python_module_context", "matlab_file_context", "js_module_context"
+    "python_module_context", "matlab_file_context", "js_module_context",
+    "r_script",
 }
 # Dotted code references in prose ("lexical_terms", "kilin.lexical_search").
 _CODE_REFERENCE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_]\w*)*")
@@ -196,7 +199,7 @@ _DOCUMENTATION_WORDS = require_default_lowercase_words(
 # Chunk kinds of prose and notebooks: Markdown files, notebook cells
 # (tutorial examples rather than the implementation), plain text, and PDFs.
 _DOCUMENTATION_KIND_PREFIXES = ("markdown_", "notebook_", "text_", "pdf_")
-_CLASS_KINDS = {"matlab_class", "python_class", "js_class"}
+_CLASS_KINDS = {"matlab_class", "python_class", "js_class", "r_class"}
 _WORD = re.compile(r"[A-Za-z0-9]+")
 # Words used in plain prose that introduce a code name ("the reply method").
 _CODE_NOUNS = ("function", "method", "class")
@@ -668,11 +671,31 @@ def _explicit_functions(
     )
     matches = set()
     for entity in functions:
+        # A period is part of an R function's identifier, not necessarily
+        # a separator before the last leaf (e.g. ``read.data``).
+        if entity.kind == "r_function":
+            module = ".".join(entity.path.with_suffix("").parts)
+            prefix = f"{module}."
+            if entity.name.startswith(prefix):
+                symbol = entity.name[len(prefix):]
+                if "." in symbol:
+                    names = (symbol, entity.name)
+                    if any(
+                        re.search(
+                            rf"(?<![A-Za-z0-9_.])"
+                            rf"{re.escape(name.casefold())}"
+                            r"(?![A-Za-z0-9_.])",
+                            normalized,
+                        ) is not None
+                        for name in names
+                    ):
+                        matches.add(entity.name)
+                    continue
         leaf = entity.name.rsplit(".", 1)[-1].casefold()
         # A plain word names a function only when it is unambiguous: one
         # top-level function, not a method, and longer than two letters.
         plain_word_ok = (
-            entity.kind not in {"python_method", "js_method"}
+            entity.kind not in {"python_method", "js_method", "r_method"}
             and leaf_counts[leaf] == 1
             and len(leaf) > 2
         )
@@ -1086,6 +1109,12 @@ def _chunk_matches_function(
 
     if chunk.path != entity.path or chunk.symbol is None:
         return False
+
+    if entity.kind == "r_function" and chunk.kind == "r_function":
+        module = ".".join(chunk.path.with_suffix("").parts)
+        return entity.name.casefold() == (
+            f"{module}.{chunk.symbol}".casefold()
+        )
 
     symbol = chunk.symbol.casefold()
     name = entity.name.casefold()
@@ -1657,7 +1686,14 @@ def _module_functions(
         members = [
             name
             for name, entity in functions.items()
-            if entity.path == path and name.rsplit(".", 1)[0] == module
+            if entity.path == path
+            and (
+                name.rsplit(".", 1)[0] == module
+                or (
+                    entity.kind == "r_function"
+                    and name.startswith(f"{module}.")
+                )
+            )
         ]
         members.sort()
         if len(members) > limit:

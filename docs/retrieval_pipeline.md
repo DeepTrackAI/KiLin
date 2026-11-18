@@ -73,6 +73,17 @@ patterns. JavaScript uses lexical masking and source-unit boundaries for
 plain calls and inheritance. These are useful structured hints, **not
 complete semantic call graphs** or code execution or static type checking.
 
+R support recognizes `r_function`, `r_method`, and `r_class` for explicit
+references, caller/callee expansion, and class-method expansion. Retrieved
+`r_script` passages may lead to the top-level functions in their file.
+R's `read.data`-style dotted function names are matched as complete
+identifiers, not as the separate `read` or `data` functions. R graph
+extraction uses lexical masks to reject calls, `library`/`require`/
+`requireNamespace`/`source` statements, and inheritance declarations in
+comments or quoted text while preserving literal loader arguments.
+It is still a heuristic: dynamic code, nonliteral loaders, and dispatch
+through `$`, `@`, or `::` are not resolved.
+
 `retrieval_code.py` resolves likely code entities in a question and finds
 related chunks. The channel runs only when the question names a file,
 function, or class (`names_code` in `context_expansion.py`). For ordinary

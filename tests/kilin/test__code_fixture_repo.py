@@ -197,6 +197,31 @@ class TestCodeFixtureRepository(unittest.TestCase):
             {result.chunk.path for result in results},
         )
 
+    def test_r_functions_expand_to_callers_and_callees(self) -> None:
+        r = 'r.calculator_r'
+        plan = plan_context_expansion(
+            'Which functions call r_function_A?', self.graph
+        )
+        self.assertTrue(names_code('Explain r_function_A', self.graph))
+        self.assertEqual(plan.functions, (f'{r}.r_function_A',))
+        self.assertTrue(plan.relationship)
+        self.assertIn(
+            f'{r}.RChildClass.r_method_C', plan.related_functions
+        )
+        plain = plan_context_expansion('Explain r_function_A', self.graph)
+        self.assertIn(f'{r}.r_function_B', plain.related_functions)
+
+    def test_r_class_expands_to_its_methods(self) -> None:
+        plan = plan_context_expansion(
+            'Which methods belong to RChildClass?', self.graph
+        )
+        self.assertEqual(plan.functions, ())
+        self.assertIn('exact class', plan.signals)
+        self.assertIn(
+            'r.calculator_r.RChildClass.r_method_C',
+            plan.related_functions,
+        )
+
     def test_javascript_functions_expand_to_callers_and_callees(self) -> None:
         js = "js.calculator_js"
         plan = plan_context_expansion(

@@ -141,6 +141,13 @@ heuristic, not an ECMAScript parser: inline/mixed-line declarations,
 dynamic code, and executable template interpolations are not fully
 analyzed. Unrecognized text remains searchable as source context.
 
+R extraction similarly preserves the original source text and line
+provenance. Top-level `r_function`, `r_class`, and `r_method` units include
+their associated comments. A comment-only line between a function's
+parameter list and its opening brace does not terminate the function.
+Other statements remain in `r_script` units. R readers use structural
+heuristics rather than executing R or building a complete syntax tree.
+
 Word title and author properties are read separately for literature
 search headers and the paper-summary tool. The property reader handles OLE
 (`.doc`) and OOXML (`.docx`) containers based on their signatures, returning

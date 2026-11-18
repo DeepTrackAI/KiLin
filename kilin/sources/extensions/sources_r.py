@@ -5,9 +5,11 @@ declared, such as ``smooth <- function(x) {``, ``Store <- setRefClass(``,
 ``setClass("Base")`` or ``setMethod("area", "Circle", ...)``. A
 declaration ends where its brackets close, so code after it is context of
 the file. Comment lines right above a declaration, roxygen ``#'`` blocks
-included, stay with it. The methods in a reference or R6 class body, such
-as ``save = function(x) {``, are parts of their class. Only declarations
-starting their line are found; functions defined inside other code stay
+included, stay with it. Comments between a function signature and its
+opening brace also remain inside that function. Methods in a reference or
+R6 class body, such as ``save = function(x) {``, are parts of their class.
+Only declarations starting their line are found; functions defined inside
+other code stay
 part of the code around them. The source is never run.
 
 Key Features
@@ -182,7 +184,11 @@ def _block_end(lines: list[str], line_number: int, last: int) -> int:
         # whose "{" starts the next line continues there.
         if opened and depth <= 0 and quote is None:
             following = next(
-                (text.strip() for text in lines[number:last] if text.strip()),
+                (
+                    text.strip()
+                    for text in lines[number:last]
+                    if text.strip() and not _COMMENT.match(text)
+                ),
                 "",
             )
             if not following.startswith("{"):

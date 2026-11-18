@@ -3,7 +3,8 @@
 This extension finds which functions an R function, class or S4 method
 calls, which class a class extends, and which packages and files a script
 loads. It reuses the units of the R reader, so a call belongs to the
-function or class method it appears in. Comments and strings are skipped.
+function or class method it appears in. Comments and string contents are
+skipped when recognizing calls; literal loader arguments are retained.
 It uses regular expressions and known entity names, not an R parser:
 calls through an object (``store$add()``), into a package
 (``stats::median()``) or built at run time with ``do.call`` are not
@@ -61,10 +62,6 @@ __all__ = [
     "extract_code_relations",
 ]
 
-# Comments and string literals, removed before looking for calls.
-_SKIPPED: Final[re.Pattern[str]] = re.compile(
-    r"#[^\n]*|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'"
-)
 # A plain call, not one through an object ("x$f(", "x@f(") or into a
 # package ("pkg::f(").
 _CALL: Final[re.Pattern[str]] = re.compile(
@@ -75,10 +72,13 @@ _INHERITS: Final[re.Pattern[str]] = re.compile(
     r"|\binherit\s*=\s*([A-Za-z.][\w.]*)"
 )
 _LIBRARY: Final[re.Pattern[str]] = re.compile(
-    r"\b(?:library|require|requireNamespace)\s*\(\s*[\"']?([A-Za-z][\w.]*)"
+    r"(?<![\w.$@:])(?:library|require|requireNamespace)\s*\(\s*"
+    r"(?:\"([A-Za-z][\w.]*)\"|'([A-Za-z][\w.]*)'|([A-Za-z][\w.]*))"
+    r"\s*(?=[,)])"
 )
 _SOURCE: Final[re.Pattern[str]] = re.compile(
-    r"\bsource\s*\(\s*[\"']([^\"']+\.[Rr])[\"']"
+    r"(?<![\w.$@:])source\s*\(\s*([\"'])([^\"']+\.[Rr])\1"
+    r"\s*(?=[,)])"
 )
 # Statements and loaders followed by "(", which are not calls.
 _KEYWORDS: Final[frozenset[str]] = frozenset(
@@ -96,6 +96,65 @@ _KEYWORDS: Final[frozenset[str]] = frozenset(
         "source",
     }
 )
+
+
+def _source_masks(text: str) -> tuple[str, str]:
+    """Mask R comments and literals while preserving character offsets.
+
+    Parameters
+    ----------
+    text: str
+        R code to inspect without executing it.
+
+    Returns
+    -------
+    tuple[str, str]
+        Code-only text (comments and literals masked), followed by text
+        with only comments masked. Both retain original newlines and length.
+
+    Notes
+    -----
+    The comment-only mask preserves literal loader arguments, while the
+    code-only mask identifies whether a matched call or inheritance keyword
+    appears in executable text rather than inside a quoted string. Single,
+    double, and backtick quotes support backslash escapes.
+
+    """
+
+    code: list[str] = []
+    uncommented: list[str] = []
+    quote: str | None = None
+    escaped = False
+    comment = False
+    for character in text:
+        newline = character in "\r\n"
+        masked = character if newline else " "
+        if comment:
+            code.append(masked)
+            uncommented.append(masked)
+            if newline:
+                comment = False
+        elif quote is not None:
+            code.append(masked)
+            uncommented.append(character)
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+        elif character == "#":
+            comment = True
+            code.append(" ")
+            uncommented.append(" ")
+        elif character in "\"'`":
+            quote = character
+            code.append(" ")
+            uncommented.append(character)
+        else:
+            code.append(character)
+            uncommented.append(character)
+    return "".join(code), "".join(uncommented)
 
 
 def extract_code_relations(
@@ -127,10 +186,16 @@ def extract_code_relations(
 
     relations: set[CodeRelation] = set()
     module = _module_name(source_file.path)
-    for package in _LIBRARY.finditer(source_file.text):
-        relations.add(CodeRelation(module, "imports", package.group(1)))
-    for script in _SOURCE.finditer(source_file.text):
-        target = _sourced_module(source_file.path, script.group(1), known)
+    code, uncommented = _source_masks(source_file.text)
+    for package in _LIBRARY.finditer(uncommented):
+        if not code[package.start()].isalpha():
+            continue
+        name = next(group for group in package.groups() if group is not None)
+        relations.add(CodeRelation(module, "imports", name))
+    for script in _SOURCE.finditer(uncommented):
+        if not code[script.start()].isalpha():
+            continue
+        target = _sourced_module(source_file.path, script.group(2), known)
         if target is not None:
             relations.add(CodeRelation(module, "imports", target))
     # Each unit with the graph name of the code around it: a class's own
@@ -144,7 +209,15 @@ def extract_code_relations(
         # Graph names: module.function, module.Class, module.Class.method.
         owner = around if unit.symbol is None else f"{module}.{unit.symbol}"
         if unit.kind == "r_class":
-            base = _INHERITS.search(unit.text)
+            unit_code, unit_uncommented = _source_masks(unit.text)
+            base = next(
+                (
+                    match
+                    for match in _INHERITS.finditer(unit_uncommented)
+                    if unit_code[match.start()].isalpha()
+                ),
+                None,
+            )
             if base is not None:
                 name = base.group(1) or base.group(2)
                 relations.add(
@@ -153,7 +226,9 @@ def extract_code_relations(
             if unit.children:
                 pending.extend((child, owner) for child in unit.children)
                 continue
-        for call in _CALL.finditer(_SKIPPED.sub(" ", unit.text)):
+        else:
+            unit_code, _ = _source_masks(unit.text)
+        for call in _CALL.finditer(unit_code):
             target = call.group(1)
             if target in _KEYWORDS:
                 continue

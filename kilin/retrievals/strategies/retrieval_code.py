@@ -194,20 +194,23 @@ def resolve_code_entities(
     word_matches = [
         entity
         for entity in graph.entities
-        if _contains_whole_words(
-            query_words,
-            _name_words(entity.name.split(".")[-1]),
+        if (
+            _r_dotted_name_matches(query_text, entity)
+            if _r_dotted_function_name(entity) is not None
+            else _contains_whole_words(
+                query_words, _name_words(_entity_leaf_name(entity))
+            )
         )
     ]
     if word_matches:
         longest = max(
-            len(_name_words(entity.name.split(".")[-1]))
+            len(_name_words(_entity_leaf_name(entity)))
             for entity in word_matches
         )
         word_matches = [
             entity
             for entity in word_matches
-            if len(_name_words(entity.name.split(".")[-1])) == longest
+            if len(_name_words(_entity_leaf_name(entity))) == longest
         ]
 
     operator_matches = _operator_seed_entities(graph, query_text)
@@ -222,6 +225,81 @@ def resolve_code_entities(
         seen.add(entity.name)
         matches.append(entity)
     return matches
+
+
+def _r_dotted_function_name(entity: CodeEntity) -> str | None:
+    """Return a dotted R function's full unqualified symbol, if present.
+
+    Parameters
+    ----------
+    entity: CodeEntity
+        Graph entity and its source path.
+
+    Returns
+    -------
+    str | None
+        R function name including its internal periods, or None for
+        other entities and ordinary function names.
+
+    """
+
+    if entity.kind != "r_function":
+        return None
+    module = ".".join(entity.path.with_suffix("").parts)
+    prefix = f"{module}."
+    if not entity.name.startswith(prefix):
+        return None
+    symbol = entity.name[len(prefix):]
+    return symbol if "." in symbol else None
+
+
+def _entity_leaf_name(entity: CodeEntity) -> str:
+    """Return the identifier used to rank an entity's query match.
+
+    Parameters
+    ----------
+    entity: CodeEntity
+        Graph entity to identify.
+
+    Returns
+    -------
+    str
+        Entire dotted R function name or the conventional last component.
+
+    """
+
+    return _r_dotted_function_name(entity) or entity.name.rsplit(".", 1)[-1]
+
+
+def _r_dotted_name_matches(query_text: str, entity: CodeEntity) -> bool:
+    """Match a dotted R function only as a complete code identifier.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text, before word normalization removes periods.
+    entity: CodeEntity
+        R function entity with a dotted identifier.
+
+    Returns
+    -------
+    bool
+        Whether the full R name or its module-qualified form is named.
+
+    """
+
+    symbol = _r_dotted_function_name(entity)
+    if symbol is None:
+        return False
+    text = query_text.casefold()
+    return any(
+        re.search(
+            rf"(?<![A-Za-z0-9_.]){re.escape(name.casefold())}"
+            r"(?![A-Za-z0-9_.])",
+            text,
+        ) is not None
+        for name in (symbol, entity.name)
+    )
 
 
 def code_search(
@@ -299,7 +377,7 @@ def code_search(
             for entity, distance in distances.items()
             if entity_paths.get(entity) == chunk.path
             and (
-                _symbols_match(entity, chunk.symbol)
+                _chunk_symbol_matches(entity, chunk)
                 if chunk.symbol is not None
                 else entity in html_files
             )
@@ -483,6 +561,31 @@ def _graph_distances(
         distances.update({name: distance for name in following})
         frontier = following
     return distances
+
+
+def _chunk_symbol_matches(entity: str, chunk: Chunk) -> bool:
+    """Check chunk provenance without splitting dotted R identifiers.
+
+    Parameters
+    ----------
+    entity: str
+        Graph entity qualified name.
+    chunk: Chunk
+        Source chunk with a known declaration symbol.
+
+    Returns
+    -------
+    bool
+        Whether the entity refers to the chunk's exact declaration.
+
+    """
+
+    if chunk.symbol is None:
+        return False
+    if chunk.kind == "r_function":
+        module = ".".join(chunk.path.with_suffix("").parts)
+        return entity == f"{module}.{chunk.symbol}"
+    return _symbols_match(entity, chunk.symbol)
 
 
 def _symbols_match(entity: str, symbol: str) -> bool:

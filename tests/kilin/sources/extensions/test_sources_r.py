@@ -104,6 +104,30 @@ class TestRExtraction(unittest.TestCase):
         self.assertEqual(units["square"].end_line, units["square"].start_line)
         self.assertTrue(units["clean.data"].text.rstrip().endswith("}"))
 
+    def test_comments_between_signature_and_body_stay_in_function(
+        self,
+    ) -> None:
+        text = (
+            'continued <- function(x)\n'
+            '# Why the body begins below.\n'
+            "#' An additional note.\n"
+            '{\n'
+            '  x + 1\n'
+            '}\n'
+            'after <- function() 2\n'
+        )
+        units = _units(text)
+        self.assertEqual(
+            [(unit.kind, unit.symbol) for unit in units],
+            [
+                ('r_function', 'continued'),
+                ('r_function', 'after'),
+            ],
+        )
+        self.assertEqual((units[0].start_line, units[0].end_line), (1, 6))
+        self.assertIn('# Why the body begins below.', units[0].text)
+        self.assertIn('x + 1', units[0].text)
+
     def test_reference_class_methods_are_children(self) -> None:
         store = next(unit for unit in _units() if unit.symbol == "Store")
         self.assertEqual(
