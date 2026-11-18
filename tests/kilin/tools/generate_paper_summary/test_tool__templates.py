@@ -74,6 +74,26 @@ max_words: 300
 
 Uses {author}.
 """
+LAB = """---
+title: Lab
+description: Short lab report.
+max_words: 300
+---
+
+## Notes (50-80 words)
+
+Notes.
+"""
+LAB_NOTES = """---
+title: Lab Notes
+description: Longer lab report.
+max_words: 300
+---
+
+## Notes (50-80 words)
+
+Notes.
+"""
 
 
 class _Project(unittest.TestCase):
@@ -231,13 +251,65 @@ class TestChoosing(_Project):
         with self.assertRaisesRegex(ValueError, "no usable report template"):
             choose_template("make a report", self.templates, TEMPLATE_CHOOSE)
 
+    def test_overlapping_names_and_boundaries(self) -> None:
+        (self.templates / "lab.md").write_text(LAB)
+        (self.templates / "lab_notes.md").write_text(LAB_NOTES)
+        for question, expected in (
+            ("use lab_notes for smith20", "lab_notes"),
+            ("use lab notes for smith20", "lab_notes"),
+            ("use LAB-NOTES.MD for smith20", "lab_notes"),
+            ("use templates/lab_notes.md for smith20", "lab_notes"),
+            ("prepare a Lab Notes report", "lab_notes"),
+            ("use lab.md for smith20", "lab"),
+            ("use lab for smith20", "lab"),
+            ("make a collaboration report", "minutes"),
+        ):
+            with self.subTest(question=question):
+                chosen = choose_template(
+                    question, self.templates, "minutes"
+                )
+                self.assertEqual(chosen.name, expected)
+
+    def test_ambiguous_names_do_not_silently_choose(self) -> None:
+        (self.templates / "lab.md").write_text(LAB)
+        (self.templates / "lab_notes.md").write_text(LAB_NOTES)
+        question = "use lab_notes and lab for smith20"
+        choose = Mock()
+        with self.assertRaisesRegex(
+            ValueError, "Several report templates match"
+        ) as error:
+            choose_template(question, self.templates, "minutes", choose)
+        choose.assert_not_called()
+        self.assertIn("`lab.md`", str(error.exception))
+        self.assertIn("`lab_notes.md`", str(error.exception))
+
+    def test_broken_longer_name_is_reported_not_shorter_one(
+        self,
+    ) -> None:
+        (self.templates / "lab.md").write_text(LAB)
+        (self.templates / "lab_notes.md").write_text(BROKEN)
+        with self.assertRaisesRegex(ValueError, r"lab_notes.*author"):
+            choose_template("use lab_notes.md", self.templates, "lab")
+        result = templates_answer(self.templates)
+        self.assertIn("`lab_notes.md` cannot be used", result)
+
+    def test_callback_indices_are_validated(self) -> None:
+        for value in (-1, 999, True, "1", None):
+            with self.subTest(value=value):
+                chosen = choose_template(
+                    "make a report", self.templates, TEMPLATE_CHOOSE,
+                    Mock(return_value=value),
+                )
+                self.assertIsNone(chosen)
+
 
 class TestListingAndChecking(_Project):
 
     def _run(self, question: str, choose=None):
         context = SimpleNamespace(
             project_root=self.root, done=Mock(), progress=Mock(),
-            trace=SimpleNamespace(emit=Mock()), choose=choose,
+            trace=SimpleNamespace(emit=Mock()), trace_turn_id="turn-1",
+            choose=choose,
         )
         with patch(
             "kilin.tools.generate_paper_summary.tool.choose_paper"
@@ -284,6 +356,91 @@ class TestListingAndChecking(_Project):
                                          Mock(return_value=None))
         choose_paper.assert_not_called()
         self.assertEqual(result.answer, "No template was chosen.")
+
+    def test_overlapping_names_in_template_check(self) -> None:
+        (self.templates / "lab.md").write_text(LAB)
+        (self.templates / "lab_notes.md").write_text(LAB_NOTES)
+        for question, expected in (
+            ("check lab_notes template", "lab_notes.md"),
+            ("check lab notes template", "lab_notes.md"),
+            ("check lab_notes.md template", "lab_notes.md"),
+            ("check lab template", "lab.md"),
+        ):
+            with self.subTest(question=question):
+                result, choose_paper = self._run(question)
+                choose_paper.assert_not_called()
+                self.assertIn(f"(`{expected}`) can be used", result.answer)
+        result, choose_paper = self._run(
+            "check lab and lab_notes template"
+        )
+        choose_paper.assert_not_called()
+        self.assertIn("Several report templates match", result.answer)
+        self.assertIn("`lab.md`", result.answer)
+        self.assertIn("`lab_notes.md`", result.answer)
+
+    def test_choice_is_announced_before_gui_callback(self) -> None:
+        seen = []
+
+        def progress(message, **details):
+            seen.append(("progress", message, details))
+
+        def choose(question, options):
+            self.assertTrue(seen)
+            self.assertEqual(seen[0][0], "progress")
+            self.assertEqual(seen[0][1], "Waiting for your choice")
+            self.assertEqual(
+                seen[0][2]["choice"],
+                {"question": question, "options": list(options)},
+            )
+            return 1
+
+        context = SimpleNamespace(
+            project_root=self.root,
+            done=Mock(),
+            progress=progress,
+            trace=SimpleNamespace(emit=Mock()),
+            trace_turn_id="turn-1",
+            choose=choose,
+        )
+        with patch(
+            "kilin.tools.generate_paper_summary.tool.choose_paper"
+        ) as choose_paper:
+            choose_paper.return_value = "No paper chosen."
+            result = run(
+                SummarySettings(template=TEMPLATE_CHOOSE),
+                ToolRequest("make a report", "make a report"), context,
+            )
+        self.assertEqual(result.summary["template"], "journal_club")
+        self.assertEqual(result.answer, "No paper chosen.")
+        self.assertEqual(seen[0][2]["choice"]["options"][1],
+                         "Journal Club Handout (journal_club)")
+        emitted = [
+            call.args[0] for call in context.trace.emit.call_args_list
+        ]
+        self.assertEqual(emitted,
+                         ["tool.choice.proposed", "tool.choice.decided"])
+        self.assertEqual(
+            context.trace.emit.call_args_list[0].kwargs["turn_id"],
+            "turn-1",
+        )
+        self.assertEqual(
+            context.trace.emit.call_args_list[1].kwargs["data"],
+            {"index": 1, "asked": True},
+        )
+
+    def test_invalid_gui_choice_stops_before_paper_selection(self) -> None:
+        for value in (-1, 100, True, "1", None):
+            with self.subTest(value=value):
+                result, choose_paper = self._run(
+                    "make a report of smith20", Mock(return_value=value)
+                )
+                choose_paper.assert_not_called()
+                self.assertEqual(result.answer, "No template was chosen.")
+
+    def test_noninteractive_choice_does_not_guess(self) -> None:
+        result, choose_paper = self._run("make a report of smith20")
+        choose_paper.assert_not_called()
+        self.assertIn("Which template?", result.answer)
 
 
 if __name__ == "__main__":

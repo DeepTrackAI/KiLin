@@ -149,6 +149,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 import re
 from time import perf_counter
@@ -199,6 +200,7 @@ from kilin.tools._shared.planning import (
     PLAN_CHOICE_QUICK,
     ConfirmationPolicy,
     ToolPlan,
+    ask_choice,
     confirm_plan,
 )
 from kilin.workspace_resources import (
@@ -685,42 +687,34 @@ def choose_template(
     Returns
     -------
     ReportTemplate | None
-        The first template in the folder whose title ("Research
-        Briefing"), file name ("research_briefing"), or file name with
-        spaces occurs in the question; otherwise the default, read from
-        the folder; with ``TEMPLATE_CHOOSE``, the only valid template or
-        the one the user chooses (None when they cancel). Missing
-        project-owned templates are not restored.
+        The uniquely named template (by title, ID, or filename), or the
+        default. With ``TEMPLATE_CHOOSE``, the only valid template or the
+        user's choice; None when the user cancels or chooses an invalid
+        index. A named template always takes precedence over the default.
 
     Raises
     ------
     ValueError
         If the chosen template does not exist or breaks a template rule,
         or with ``TEMPLATE_CHOOSE`` the project has no valid template or
-        nobody can be asked; the message names the line or lists the
-        project's templates.
+        nobody can be asked, or more than one template is named; the
+        message identifies the problem or lists the project's templates.
 
     """
 
-    text = " ".join(question.casefold().split())
-    for name in template_names(folder):
-        words = (name.casefold(), name.casefold().replace("_", " "))
-        try:
-            template = load_template(name, folder)
-        except ValueError:
-            # Broken templates are reported only when they are chosen.
-            if any(word in text for word in words):
-                raise
-            continue
-
-        if template.title.casefold() in text or any(
-            word in text for word in words
-        ):
-            return template
+    found = _templates(folder)
+    named = _named_templates(question, found)
+    if len(named) > 1:
+        raise ValueError(_ambiguous_templates(named))
+    if named:
+        _, template, error = named[0]
+        if template is None:
+            raise ValueError(error)
+        return template
 
     if default != TEMPLATE_CHOOSE:
         return load_template(default, folder)  # Raises, listing templates.
-    usable = [template for _, template, _ in _templates(folder) if template]
+    usable = [template for _, template, _ in found if template]
     if len(usable) == 1:
         return usable[0]
     if not usable:
@@ -735,7 +729,9 @@ def choose_template(
         "Which template should the report use?",
         tuple(f"{t.title} ({t.name})" for t in usable),
     )
-    return None if index is None else usable[index]
+    if type(index) is not int or not 0 <= index < len(usable):
+        return None
+    return usable[index]
 
 
 def _templates(
@@ -766,6 +762,88 @@ def _templates(
         except ValueError as error:
             found.append((name, None, str(error)))
     return found
+
+
+def _named_templates(
+    question: str,
+    found: list[tuple[str, ReportTemplate | None, str]],
+) -> list[tuple[str, ReportTemplate | None, str]]:
+    """Find templates named by complete IDs, filenames, or titles.
+
+    Shorter names embedded in a longer matched name are discarded, but
+    separate mentions of distinct templates remain ambiguous. Name
+    separators (space, underscore, hyphen) are interchangeable.
+
+    Parameters
+    ----------
+    question: str
+        The user's request.
+    found: list[tuple[str, ReportTemplate | None, str]]
+        Project templates, including invalid ones without a usable title.
+
+    Returns
+    -------
+    list[tuple[str, ReportTemplate | None, str]]
+        All distinct templates explicitly mentioned, in folder order.
+
+    """
+
+    text = " ".join(question.casefold().split())
+    hits: list[tuple[str, tuple[int, int]]] = []
+    for name, template, _ in found:
+        aliases = {name, f"{name}.md"}
+        if template is not None:
+            aliases.add(template.title)
+        for alias in aliases:
+            words = [
+                part for part in re.split(r"[\s_-]+", alias.casefold())
+                if part
+            ]
+            if not words:
+                continue
+            pattern = (
+                r"(?<!\w)" + r"[\s_-]+".join(
+                    re.escape(word) for word in words
+                ) + r"(?!\w)"
+            )
+            hits.extend(
+                (name, match.span())
+                for match in re.finditer(pattern, text)
+            )
+
+    named = {
+        name for name, (start, end) in hits
+        if not any(
+            other_start <= start and end <= other_end
+            and (other_start, other_end) != (start, end)
+            for _, (other_start, other_end) in hits
+        )
+    }
+    return [item for item in found if item[0] in named]
+
+
+def _ambiguous_templates(
+    named: list[tuple[str, ReportTemplate | None, str]],
+) -> str:
+    """Explain why a request cannot select one report template.
+
+    Parameters
+    ----------
+    named: list[tuple[str, ReportTemplate | None, str]]
+        Distinct template matches.
+
+    Returns
+    -------
+    str
+        A request to name exactly one template by its filename.
+
+    """
+
+    options = ", ".join(f"`{name}.md`" for name, _, _ in named)
+    return (
+        f"Several report templates match this question: {options}. "
+        "Name exactly one template by its filename."
+    )
 
 
 def templates_answer(folder: Path) -> str:
@@ -838,14 +916,10 @@ def _template_check(question: str, folder: Path) -> str:
 
     """
 
-    text = " ".join(question.casefold().split())
-    for name, template, error in _templates(folder):
-        words = (name.casefold(), name.casefold().replace("_", " "))
-        title = template.title.casefold() if template else ""
-        if not any(word in text for word in words) and not (
-            title and title in text
-        ):
-            continue
+    named = _named_templates(question, _templates(folder))
+    if len(named) > 1:
+        return _ambiguous_templates(named)
+    for name, template, error in named:
         if template is None:
             return f"`{name}.md` cannot be used: {error}"
         sections = []
@@ -1508,12 +1582,19 @@ def run(
         return ToolResult(
             _template_check(request.question, folder), (), summary
         )
+    # Reuse the shared choice protocol: it emits the options to the GUI
+    # before waiting for the callback, and validates the returned index.
+    chooser = (
+        partial(ask_choice, context=context)
+        if getattr(context, "choose", None) is not None
+        else None
+    )
     try:
         template = choose_template(
             request.question,
             folder,
             settings.template,
-            getattr(context, "choose", None),
+            chooser,
         )
     except ValueError as error:
         context.done("Could not read the template", evidence_count=0)

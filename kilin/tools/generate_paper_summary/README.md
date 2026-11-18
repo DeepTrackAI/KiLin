@@ -185,10 +185,16 @@ a Markdown file there, without editing a project type:
   the intent's own cues add "... template" forms ("use the minutes template
   for smith20"). Templates that another intent of the project type names
   (the four fixed Literature intents) are left to that intent.
-- **Choosing.** The template the question names is used. When it names
-  none, the project's only valid template is used, or the user chooses one
-  (`ToolContext.choose`); where nobody can be asked, the answer lists the
-  templates and how to name one.
+- **Choosing.** A complete template ID, filename (with or without `.md`),
+  or title names the format. Spaces, underscores, and hyphens in names are
+  interchangeable; a shorter name within a longer one is not a second
+  match. If two distinct templates are named, KíLín asks for exactly one
+  filename instead of silently picking the first. When none is named,
+  the project's only valid template is used, or the user chooses one
+  (`ToolContext.choose`). The desktop GUI receives the choices through
+  the shared, traced `ask_choice` protocol before waiting for a selection;
+  cancellation or an invalid response stops the report. Without an
+  interactive callback, the answer lists the templates and how to name one.
 - **Listing and checking.** "Which templates do I have?" lists each
   template with its description, and those that break a rule with the
   problem (`templates_answer`). "Check my journal_club template" says
