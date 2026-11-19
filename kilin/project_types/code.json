@@ -274,7 +274,7 @@
       }
     },
     "assistant_help": {
-      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files: how to add, upload, import, attach, or remove files or folders ('how do I add my papers?', 'can I upload a folder?', 'how do I remove a file?').",
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files and what it does with them: how to add, upload, import, attach, drag, or remove files or folders ('how do I add my papers?', 'how to drag files', 'can I upload a folder?', 'what do you mean by adding files?', 'what do you do with my files?').",
       "history": {
         "policy": "none"
       },
@@ -286,16 +286,16 @@
       },
       "shortcuts": [
         "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
-        "how (do|can) i (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( to (kilin|you|this project|the project))?",
-        "how to (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)",
-        "where (do|should|can) i (put|add|drop|place) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
+        "(how (do|can|should) i|how to|can i|where (do|should|can) i) (add|upload|import|attach|drag|drop|put|place|remove|delete)( and drop| in)? (my |a |the |some |more |new |these |this |our )?(whole |own |other )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?",
+        "what do you mean( by)? (add|adding|upload|uploading|attach|attaching|import|importing|sources?|files?)( .*)?",
+        "what (do|will|can) you do (with|to|for) (my|the|these|our) (files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
       ]
     }
   },
   "welcome_prompts": [
     "What would you like to do with your code today?",
     "Which piece of code shall we look at?",
-    "Paste some code and ask about it, or ask what I can do for you."
+    "Add your code, or ask what I can do for you."
   ],
   "welcome_templates": [
     "What would you like to do with this code for {theme}?",
@@ -304,16 +304,10 @@
   "suggestions": [
     "What can you do for me?",
     "How do I add my files?",
-    "Explain this code: …",
-    "Explain how … works",
-    "Review the whole … file",
-    "Write a function that …",
-    "Why does … fail?",
-    "Which libraries does each script use?",
-    "Show every line that uses …",
-    "Which files mention …?",
-    "Show every comment that discusses …",
-    "How many Python files are in this project?"
+    "Explain this code: print(sum(range(1, 11)))  # paste your own code here",
+    "Explain this code: disp(sum(1:10))  % paste your own code here",
+    "Explain this code: console.log([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].reduce((a, b) => a + b));  // paste your own code here",
+    "Explain this code: print(sum(1:10))  # paste your own code here"
   ],
   "suggestion_templates": {
     "code_explanation": [

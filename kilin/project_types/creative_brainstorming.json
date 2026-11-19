@@ -184,7 +184,7 @@
       }
     },
     "assistant_help": {
-      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files: how to add, upload, import, attach, or remove files or folders ('how do I add my papers?', 'can I upload a folder?', 'how do I remove a file?').",
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files and what it does with them: how to add, upload, import, attach, drag, or remove files or folders ('how do I add my papers?', 'how to drag files', 'can I upload a folder?', 'what do you mean by adding files?', 'what do you do with my files?').",
       "history": {
         "policy": "none"
       },
@@ -196,9 +196,9 @@
       },
       "shortcuts": [
         "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
-        "how (do|can) i (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( to (kilin|you|this project|the project))?",
-        "how to (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)",
-        "where (do|should|can) i (put|add|drop|place) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
+        "(how (do|can|should) i|how to|can i|where (do|should|can) i) (add|upload|import|attach|drag|drop|put|place|remove|delete)( and drop| in)? (my |a |the |some |more |new |these |this |our )?(whole |own |other )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?",
+        "what do you mean( by)? (add|adding|upload|uploading|attach|attaching|import|importing|sources?|files?)( .*)?",
+        "what (do|will|can) you do (with|to|for) (my|the|these|our) (files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
       ]
     }
   },
@@ -215,14 +215,11 @@
   "suggestions": [
     "What can you do for me?",
     "How do I add my files?",
-    "Invent five wildly different hypotheses about ...",
-    "Give me your most audacious, out-of-the-box explanation for ...",
-    "What if the central assumption in this field were exactly backwards?",
-    "Find a surprising connection between ... and an unrelated field",
-    "Go further: make this idea even more radical",
-    "Use my project papers as inspiration for unconventional hypotheses",
-    "Develop the wildest idea into predictions and experiments",
-    "Which factual premises of this speculation are supported by sources?"
+    "Invent five wildly different hypotheses about why we dream.",
+    "Invent five wildly different hypotheses about why we yawn.",
+    "Invent five wildly different hypotheses about why some birds migrate at night.",
+    "Invent five wildly different hypotheses about why music gives us chills.",
+    "Invent five wildly different hypotheses about why we laugh."
   ],
   "suggestion_templates": {
     "research_context": "What do the papers say about {topic}?",

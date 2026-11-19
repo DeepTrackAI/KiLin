@@ -375,16 +375,22 @@ papers?". Its `assistant_guide` tool answers with one of these questions
 per intent, so the user sees what each kind of request does with their
 own files, and always ends with how to add files (drag them onto
 **sources** in the Workspace panel, or attach them with **+** in the
-message box) and how to remove one. A project without sources is told
-how to add files first and that a pasted passage can be asked about
-meanwhile, followed by the fixed `suggestions`. No model is called.
-After the answer, the desktop app briefly flashes the **sources** folder
-and the **+** button so the user sees where they are.
+message box) and how to remove one. A question about files, such as "how
+to drag files" or "What do you mean by adding files?", gets only what
+sources are and these steps, without the examples. A project without
+sources is told how to add files first, followed by the fixed
+`suggestions`. No model is called. After the answer, the desktop app
+briefly flashes the **+** button and then the **sources** folder so the
+user sees where they are.
 
-The fixed `welcome_prompts` and `suggestions` are general, since they are
-shown when a project has no sources: the suggestions start with "What can
-you do for me?" and "How do I add my files?", which the empty chat always
-shows first.
+The fixed `welcome_prompts` and `suggestions` are shown when a project has
+no sources, so each one works without sources and can be sent as it is,
+with no "…" to fill in: the suggestions start with "What can you do for
+me?" and "How do I add my files?", which the empty chat always shows
+first, followed by one of the others at random. A type can list several
+complete examples there, such as Creative's "Invent five wildly
+different hypotheses about why we dream.", so each new chat can show
+another one.
 
 An intent can override inherited prompt/history/retrieval settings, specify
 shortcut regexes and select a registered tool. The parser gives missing

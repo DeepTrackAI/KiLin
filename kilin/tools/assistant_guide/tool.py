@@ -5,11 +5,11 @@ request the project type supports, such as "Give me a short summary of
 tiunn26braph2.pdf." for a paper overview. The examples are the project's
 suggested questions (``kilin.question_suggestions``), so they name the
 project's own files and topics, and they change from one answer to the
-next. Every answer ends with how to add and remove files, so the same
-intent answers "How do I add my papers?". A project without sources is
-told how to add its files first and that a pasted passage can be asked
-about meanwhile, followed by the project type's fixed suggestions. No
-model is called.
+next. Every answer ends with how to add and remove files, and a
+question about files, such as "how to drag files", gets only what
+sources are and these steps. A project without sources is told how
+to add its files first, followed by the project type's fixed
+suggestions. No model is called.
 
 Key Features
 ------------
@@ -62,6 +62,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 import random
+import re
 from typing import Final
 
 from kilin.tools._contract import (
@@ -84,8 +85,7 @@ _WITH_SOURCES: Final[str] = (
     "example for each kind of request. Copy an example into the question "
     "box and send it to try it:"
 )
-# How to add and remove files; ends every answer, so the same intent
-# also answers "How do I add my papers?".
+# How to add and remove files; ends every answer.
 _FILE_STEPS: Final[tuple[str, ...]] = (
     "1. Drag files or folders onto **sources** in the Workspace panel on "
     "the right.",
@@ -100,14 +100,33 @@ _NO_SOURCES: Final[str] = (
     "To add them:"
 )
 _MORE_SOURCES: Final[str] = "To add more files:"
-_PASTE: Final[str] = (
-    "Meanwhile, you can paste a short passage into the message box and ask "
-    "me about it."
+_NO_SOURCES_YET: Final[str] = "This project has no sources yet."
+# What sources are, for a question about files such as "How do I add my
+# papers?" or "What do you mean by adding files?".
+_ABOUT_SOURCES: Final[str] = (
+    "Sources are the files I read and answer from. When you add them, I "
+    "copy them into this project and index them so I can search them; "
+    "your original files are not changed. To add files:"
+)
+_NOW_ASK: Final[str] = (
+    'Once they are indexed, ask "What can you do for me?" to see example '
+    "questions about your own files."
 )
 _WITHOUT_SOURCES: Final[str] = "Here are the kinds of things you can ask:"
 _CLOSING: Final[str] = (
     "You can also ask your own question in your own words; I pick the "
     "right kind of request for it."
+)
+# A question about files rather than about KíLín in general: it names an
+# action on files or the files themselves, such as "how to drag files".
+_FILE_ACTION: Final[re.Pattern[str]] = re.compile(
+    r"\b(add|adding|upload|uploading|import|attach|drag|drop|remove|delete"
+    r"|put|place)\b",
+    re.IGNORECASE,
+)
+_FILE_WORD: Final[re.Pattern[str]] = re.compile(
+    r"\b(files?|folders?|papers?|pdfs?|documents?|sources?)\b",
+    re.IGNORECASE,
 )
 # Varies the examples from one answer to the next.
 _RANDOM: Final[random.Random] = random.Random()
@@ -180,6 +199,8 @@ def run(
 
     """
 
+    if _about_files(request.question):
+        return _file_steps(context)
     context.progress("Collecting example questions")
     suggestions = (
         list(context.suggestions()) if context.suggestions is not None else []
@@ -193,7 +214,7 @@ def run(
         ]
         lines += ["", _CLOSING, "", _MORE_SOURCES, "", *_FILE_STEPS]
     else:
-        lines = [_NO_SOURCES, "", *_FILE_STEPS, "", _PASTE]
+        lines = [_NO_SOURCES, "", *_FILE_STEPS]
         fixed = _other_requests(context.fixed_suggestions, request.question)
         if fixed:
             lines += ["", _WITHOUT_SOURCES, ""]
@@ -212,6 +233,63 @@ def run(
         turn_id=context.trace_turn_id,
     )
     context.done(f"Listed {len(examples)} examples", evidence_count=0)
+    return ToolResult("\n".join(lines), (), summary)
+
+
+def _about_files(question: str) -> bool:
+    """Return whether a question asks about adding or handling files.
+
+    Parameters
+    ----------
+    question: str
+        The user's question, such as "How to drag files?".
+
+    Returns
+    -------
+    bool
+        True if the question names an action on files, such as "add" or
+        "drag", or names files, such as "What do you do with my papers?".
+
+    """
+
+    return bool(_FILE_ACTION.search(question) or _FILE_WORD.search(question))
+
+
+def _file_steps(context: ToolContext) -> ToolResult:
+    """Answer a question about files with only how to add and remove them.
+
+    Parameters
+    ----------
+    context: ToolContext
+        KíLín's services; ``context.suggestions`` tells whether the
+        project has sources.
+
+    Returns
+    -------
+    ToolResult
+        What sources are and the steps, without examples or evidence.
+
+    """
+
+    has_sources = context.suggestions is not None and bool(
+        list(context.suggestions())
+    )
+    lines = [] if has_sources else [_NO_SOURCES_YET, ""]
+    lines += [_ABOUT_SOURCES, "", *_FILE_STEPS, "", _NOW_ASK]
+    summary: dict[str, object] = {
+        "name": "assistant_guide",
+        "examples": 0,
+        "intents": [],
+        "fallback": False,
+        "file_steps": True,
+    }
+    context.trace.emit(
+        "tool.assistant_guide.result",
+        component="tool",
+        data={key: value for key, value in summary.items() if key != "name"},
+        turn_id=context.trace_turn_id,
+    )
+    context.done("Explained how to add files", evidence_count=0)
     return ToolResult("\n".join(lines), (), summary)
 
 

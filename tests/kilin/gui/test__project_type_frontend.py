@@ -41,6 +41,7 @@ class TestProjectTypeFrontend(unittest.TestCase):
         state = []
         for prefix in (
             "let activeProjectTypeId", "const lastEmptyPrompt",
+            "const lastEmptySuggestions",
             "let projectTypes", "const genericEmptyChat",
         ):
             start = source.index(prefix)
@@ -140,6 +141,22 @@ const one = [{intent: "a", question: "A1"}];
 assert.deepEqual(chooseSuggestions(one, fixed).slice(0, 2),
                  ["A1", "Fixed first"]);
 assert.equal(chooseSuggestions(one, fixed).length, 3);
+// Without source questions: the first two fixed ones, then one other.
+const many = ["Help", "Add files", "X", "Y", "Z"];
+const thirds = new Set();
+for (let run = 0; run < 200; run += 1) {
+  const shown = chooseSuggestions([], many);
+  assert.deepEqual(shown.slice(0, 2), ["Help", "Add files"]);
+  thirds.add(shown[2]);
+}
+assert.deepEqual([...thirds].sort(), ["X", "Y", "Z"]);
+// The next empty chat shows another example than the last one.
+let shown = chooseSuggestions([], many);
+for (let run = 0; run < 50; run += 1) {
+  const next = chooseSuggestions([], many, shown);
+  assert.notEqual(next[2], shown[2]);
+  shown = next;
+}
 assert.deepEqual(chooseSuggestions([], ["Only"]), ["Only"]);
 assert.deepEqual(chooseSuggestions([], []), []);
 console.log("suggestion choice passed");

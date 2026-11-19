@@ -46,12 +46,16 @@ def _context(suggestions=None, fixed=()) -> SimpleNamespace:
     )
 
 
-def _answer(context: SimpleNamespace, **settings: object) -> str:
-    """Run the tool on "What can you do for me?" and return its answer."""
+def _answer(
+    context: SimpleNamespace,
+    question: str = "What can you do for me?",
+    **settings: object,
+) -> str:
+    """Run the tool on a question and return its answer."""
 
     result = tool.run(
         tool.parse_settings(settings, "example"),
-        ToolRequest("What can you do for me?", "", "", ()),
+        ToolRequest(question, "", "", ()),
         context,
     )
     return result.answer
@@ -94,6 +98,24 @@ class TestAssistantGuide(unittest.TestCase):
         self.assertIn("**sources** in the Workspace panel", answer)
         self.assertIn("**Delete**", answer)
 
+    def test_file_questions_get_only_the_steps(self) -> None:
+        """Answer a question about files without the list of examples."""
+
+        for question in (
+            "how to drag files",
+            "How do I add my papers?",
+            "What do you mean by adding files?",
+            "What do you do with my files?",
+        ):
+            with self.subTest(question=question):
+                answer = _answer(_context(lambda: SUGGESTIONS), question)
+                self.assertIn("Sources are the files I read", answer)
+                self.assertIn("**Attach folder**", answer)
+                self.assertNotIn("Paper overview", answer)
+                self.assertIn("What can you do for me?", answer)
+        answer = _answer(_context(lambda: []), "how to drag files")
+        self.assertIn("This project has no sources yet.", answer)
+
     def test_examples_change_between_answers(self) -> None:
         """Pick another file's example from one answer to the next."""
 
@@ -115,7 +137,6 @@ class TestAssistantGuide(unittest.TestCase):
         self.assertIn("no sources yet", answer)
         self.assertIn("**sources** in the Workspace panel", answer)
         self.assertIn("**Attach file**", answer)
-        self.assertIn("paste a short passage", answer)
         self.assertIn("- Summarize …", answer)
         # The question being answered is not listed as an example.
         self.assertNotIn("- What can you do for me?", answer)

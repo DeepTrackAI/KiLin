@@ -948,10 +948,21 @@ class TestProjectTypeFields(ProjectTypeFixture):
                         for pattern in intent.shortcuts
                     )
                 )
+                self.assertTrue(
+                    any(
+                        pattern.fullmatch("how to drag files")
+                        for pattern in intent.shortcuts
+                    )
+                )
                 self.assertEqual(
                     item.suggestions[:2],
                     ("What can you do for me?", "How do I add my files?"),
                 )
+                # Shown in a project without sources: each can be sent as
+                # it is, with nothing to fill in.
+                for text in item.suggestions:
+                    self.assertNotIn("…", text)
+                    self.assertNotIn("...", text)
 
     def test_packaged_suggestion_templates_name_their_intents(self) -> None:
         """Every packaged type has fill-in questions for its own intents."""

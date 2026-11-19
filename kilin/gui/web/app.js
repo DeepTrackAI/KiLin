@@ -183,6 +183,9 @@ let selectedDepthStep = 2;
 let resumeAfterStop = false;
 let activeProjectTypeId = "";
 const lastEmptyPrompt = Object.create(null);
+// Suggestions shown in each type's last empty chat, so the next one
+// shows another fixed example.
+const lastEmptySuggestions = Object.create(null);
 let messageAttachments = [];
 // A question whose attached files are being added to sources; it is asked
 // once the index is refreshed.
@@ -2885,18 +2888,30 @@ function pointToProjectsFolder() {
 
 /**
  * Briefly highlight an element (see `.attention` in the styles).
+ * The class is removed when the animation ends; left on, it would replay
+ * whenever the element is shown again, such as when a project opens.
  * @param element Button or message to point to.
+ * @param then Called once the highlight has ended, if given.
  */
-function drawAttention(element) {
+function drawAttention(element, then) {
   // Restarting the animation highlights again on every reminder.
   element.classList.remove("attention");
   void element.offsetWidth;
   element.classList.add("attention");
+  const finish = (event) => {
+    // Animations of child elements bubble up; wait for this one.
+    if (event.target !== element) return;
+    element.removeEventListener("animationend", finish);
+    element.classList.remove("attention");
+    then?.();
+  };
+  element.addEventListener("animationend", finish);
 }
 
 /**
  * Flash the controls that add sources after an answer that explains them:
- * the sources folder in the Workspace panel and the composer's + button.
+ * first the composer's + button, then the sources folder in the Workspace
+ * panel.
  * Every assistant_guide answer ("What can you do for me?", "How do I add
  * my papers?") ends with these steps, so it flashes them.
  * @param turn The finished turn.
@@ -2904,9 +2919,14 @@ function drawAttention(element) {
 function pointToSourceControls(turn) {
   const parameters = turn.parameters || {};
   if (parameters.tool?.name !== "assistant_guide") return;
-  for (const element of [byId("workspace-source-drop"), byId("attach-button")]) {
-    if (element) drawAttention(element);
-  }
+  const attach = byId("attach-button");
+  // Looked up when its turn comes: the file tree may be redrawn meanwhile.
+  const flashSources = () => {
+    const sources = byId("workspace-source-drop");
+    if (sources) drawAttention(sources);
+  };
+  if (attach) drawAttention(attach, flashSources);
+  else flashSources();
 }
 
 /**
@@ -6337,14 +6357,17 @@ function clearAskingConversation() {
  * at random, each with one of its questions at random, so each new chat
  * shows other things KíLín can do with other files and topics. When
  * there are fewer than three intents, for example in a project without
- * sources, the type's fixed suggestions fill the rest: its first one,
- * then others at random.
+ * sources, the type's fixed suggestions fill the rest: its first two
+ * ("What can you do for me?" and "How do I add my files?"), then one of
+ * the others at random, so each new chat can show another example.
+ * The examples shown last time are skipped while there are others.
  *
  * @param questions Ready-to-send {intent, question} items.
  * @param fixed The project type's fixed suggestions.
+ * @param shownBefore Texts shown in the last empty chat.
  * @returns Up to three distinct texts.
  */
-function chooseSuggestions(questions, fixed) {
+function chooseSuggestions(questions, fixed, shownBefore = []) {
   const shuffled = (items) => [...items].sort(() => Math.random() - 0.5);
   const intents = new Set();
   const picked = [];
@@ -6353,8 +6376,10 @@ function chooseSuggestions(questions, fixed) {
     intents.add(item.intent);
     picked.push(item.question);
   }
-  const [first, ...rest] = fixed;
-  const pool = [...picked, first, ...shuffled(rest)];
+  const [first, second, ...rest] = fixed;
+  const unseen = rest.filter((text) => !shownBefore.includes(text));
+  const examples = [...shuffled(unseen), ...shuffled(rest)];
+  const pool = [...picked, first, second, ...examples];
   return [...new Set(pool.filter(Boolean))].slice(0, 3);
 }
 
@@ -6382,7 +6407,9 @@ function renderConversationEmpty() {
   prompt.textContent = content.prompts[promptIndex];
   const suggestions = document.createElement("div");
   suggestions.className = "prompt-suggestions";
-  const choices = chooseSuggestions(openProjectPath ? sourceQuestions : [], content.suggestions);
+  const choices = chooseSuggestions(openProjectPath ? sourceQuestions : [], content.suggestions,
+    lastEmptySuggestions[activeProjectTypeId] || []);
+  lastEmptySuggestions[activeProjectTypeId] = choices;
   for (const text of choices) {
     const button = document.createElement("button");
     button.type = "button";
