@@ -343,6 +343,90 @@ Do: name the model.
                     )
                     self.assertNotIn("None of the 1 documents", saved)
 
+    def test_shared_citations_validate_each_assertion(self) -> None:
+        (self.templates / "lab_overview.md").write_text("""---
+title: Lab Overview
+description: A project report with shared citations.
+max_words: 200
+scope: project
+---
+
+**Documents:** {documents}
+
+## Findings (3-60 words)
+
+Compare the documents, with citations.
+""")
+        cases = (
+            (
+                "Study A enrolled 40 patients, while Study B enrolled "
+                "20 patients [1, 2].",
+                ("Study A enrolled 40 patients.",
+                 "Study B enrolled 20 patients."),
+                True,
+            ),
+            (
+                "Study A enrolled 40 patients, while Study B enrolled "
+                "20 patients [1, 2].",
+                ("Study A enrolled 40 patients.",
+                 "Study B enrolled 99 patients."),
+                False,
+            ),
+            (
+                "Study A measured +5%, and Study B measured -5% [1, 2].",
+                ("Study A measured -5%.", "Study B measured +5%."),
+                False,
+            ),
+            (
+                "Both studies enrolled 40 patients [1, 2].",
+                ("Study A enrolled 40 patients.",
+                 "Study B enrolled 20 patients."),
+                False,
+            ),
+            (
+                "The papers describe brain graph methods, and show a "
+                "guaranteed cure for a rare disease [1, 2].",
+                ("Brain graph methods support connectivity research.",
+                 "Rare disease genetics remains under investigation."),
+                False,
+            ),
+        )
+        for claim, sources, complete in cases:
+            with self.subTest(claim=claim, sources=sources):
+                self.chunks = [
+                    chunk("a", sources[0], path="a.md"),
+                    chunk("b", sources[1], path="b.md"),
+                ]
+
+                def model(system, prompt, tokens):
+                    if "Document [1]" in prompt:
+                        return f"NOTE 1: {sources[0]}"
+                    if "Document [2]" in prompt:
+                        return f"NOTE 1: {sources[1]}"
+                    if "Section: Findings" in prompt:
+                        return claim
+                    raise AssertionError(prompt)
+
+                result, _ = self._run(model=model, repair_attempts=0)
+                saved = (self.root / result.summary["report"]).read_text()
+                self.assertIs(result.summary["valid"], complete)
+                self.assertEqual(
+                    result.summary["status"],
+                    "complete" if complete else "partial",
+                )
+                if complete:
+                    self.assertNotIn("**Check**", saved)
+                    self.assertNotIn("**Partial report:**", saved)
+                else:
+                    self.assertIn("**Check**", saved)
+                    self.assertTrue(any(
+                        problem in saved for problem in (
+                            "Shared citation", "shared citation",
+                            "Value 40 cited",
+                        )
+                    ))
+                    self.assertIn("**Partial report:**", saved)
+
     def test_failed_document_and_groups(self) -> None:
         def model(system, prompt, tokens):
             if "Document [2]" in prompt:
@@ -927,6 +1011,16 @@ class TestReduce(unittest.TestCase):
                 "genomic data [5].", texts,
             ),
         )
+        # A list cited as a whole: each document backs one part of it.
+        listed = (
+            "The documents cover freeware MATLAB network measures, "
+            "reservoir computing and genome-wide association studies "
+            "[1, 2, 5]."
+        )
+        self.assertEqual(support_problem(listed, texts), "")
+        self.assertIn(
+            "cites [3]", support_problem(listed.replace("5]", "3]"), texts)
+        )
         # Too few distinctive words to judge, or no better document.
         self.assertEqual(support_problem("As shown [4].", texts), "")
         self.assertEqual(
@@ -1059,6 +1153,99 @@ class TestReduce(unittest.TestCase):
                     self.assertEqual(found, "")
         groups = note_groups([(1, "a " * 30), (2, "b"), (3, "c")], 10)
         self.assertEqual([[n for n, _ in g] for g in groups], [[1], [2, 3]])
+
+
+class TestSharedCitationValidation(unittest.TestCase):
+
+    def test_grouped_list_checks_each_part_and_document(self) -> None:
+        sources = {
+            1: "Freeware MATLAB network measures for neuroscience.",
+            2: "Reservoir computing on brain connectivity.",
+            3: "Genomic association studies in rare disease genetics.",
+        }
+        reported = (
+            "The documents cover freeware MATLAB network measures, "
+            "reservoir computing and genomic association studies [1-3]."
+        )
+        self.assertEqual(support_problem(reported, sources, strict=True), "")
+        self.assertEqual(numeric_support_problem(reported, sources), "")
+        missing = reported.replace("genomic association studies", (
+            "a guaranteed cure for rare diseases"
+        ))
+        self.assertIn("Shared citation", support_problem(
+            missing, sources, strict=True,
+        ))
+        wrong = reported.replace("[1-3]", "[1, 2]")
+        self.assertIn("Shared citation", support_problem(
+            wrong, sources, strict=True,
+        ))
+
+    def test_grouped_numeric_values_and_source_attribution(self) -> None:
+        sources = {
+            1: "Study A enrolled 40 patients and measured -5%.",
+            2: "Study B enrolled 20 patients and measured +5%.",
+        }
+        valid = (
+            "Study A enrolled 40 patients, while Study B enrolled "
+            "20 patients [1, 2]."
+        )
+        self.assertEqual(numeric_support_problem(valid, sources), "")
+        self.assertEqual(support_problem(valid, sources, strict=True), "")
+        reversed_count = valid.replace("20 patients", "99 patients")
+        self.assertIn("Numerical assertion", numeric_support_problem(
+            reversed_count, sources,
+        ))
+        for reported in (
+            "Study A measured +5%, and Study B measured -5% [1, 2].",
+            "Study A enrolled 40 patients [1, 2].",
+        ):
+            with self.subTest(reported=reported):
+                self.assertTrue(numeric_support_problem(reported, sources))
+                self.assertTrue(support_problem(
+                    reported, sources, strict=True,
+                ))
+        valid_signs = (
+            "Study A measured -5%, while Study B measured +5% [1, 2]."
+        )
+        self.assertEqual(numeric_support_problem(valid_signs, sources), "")
+        self.assertEqual(support_problem(
+            valid_signs, sources, strict=True,
+        ), "")
+
+    def test_short_study_labels_are_not_prefix_matches(self) -> None:
+        claim = (
+            "Study A enrolled 40 patients, while Study B enrolled "
+            "20 patients [1, 2]."
+        )
+        for first in (
+            "Study AB enrolled 40 patients.",
+            "Study a network enrolled 40 patients.",
+            "Study A1 enrolled 40 patients.",
+        ):
+            with self.subTest(first=first):
+                sources = {
+                    1: first,
+                    2: "Study B enrolled 20 patients.",
+                }
+                self.assertIn("Shared citation", support_problem(
+                    claim, sources, strict=True,
+                ))
+                self.assertIn("Numerical assertion", numeric_support_problem(
+                    claim, sources,
+                ))
+
+    def test_multi_source_single_assertion_is_not_a_list(self) -> None:
+        sources = {
+            1: "The study found the p < 5e-3 threshold.",
+            2: "The study found the p > 5e-3 threshold.",
+        }
+        claim = "Both studies found p < 5e-3 [1, 2]."
+        self.assertIn("Comparison p < 5e-3", numeric_support_problem(
+            claim, sources,
+        ))
+        self.assertIn("Shared citation", support_problem(
+            claim, sources, strict=True,
+        ))
 
 
 if __name__ == "__main__":

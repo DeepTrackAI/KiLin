@@ -548,7 +548,11 @@ def verification_prompt(
         listed = ", ".join(f"[{n}]" for n in claim.also_cited)
         others = (
             f"\nThe sentence also cites {listed}; reference [{number}] only "
-            "needs to support its own part of it."
+            "needs to support its own part of it. When the sentence does "
+            "not say which part that is, and the passages back some of "
+            "its parts but not others, the verdict is partly supported: "
+            f"the comment names the part [{number}] backs and says the "
+            "other parts are left to the other cited references."
         )
     cited_for = ""
     if claim.cited_for:

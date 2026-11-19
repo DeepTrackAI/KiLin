@@ -435,6 +435,8 @@ class TestVerifyClaim(unittest.TestCase):
         self.assertIn("citing reference [7]", prompt)
         self.assertIn('Preceding context: "Exercise matters."', prompt)
         self.assertIn("also cites [3]", prompt)
+        self.assertIn("the verdict is partly supported", prompt)
+        self.assertIn("left to the other cited references", prompt)
         self.assertIn("Judge only what the cited sentence", prompt)
         self.assertIn("Passage 2:\nMethods were standard.", prompt)
 

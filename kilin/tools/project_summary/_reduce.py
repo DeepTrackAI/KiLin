@@ -199,6 +199,25 @@ _UNIT_IGNORED: Final[frozenset[str]] = frozenset({
     "a", "an", "and", "as", "at", "by", "for", "from", "in", "into",
     "is", "of", "on", "or", "the", "to", "was", "were", "with",
 })
+# A grouped citation can attribute distinct list items to distinct papers.
+# Commas inside numerical literals are not list boundaries.
+_SHARED_SEPARATOR = re.compile(
+    r",\s+(?:(?:and|but|while|whereas)\s+)?"
+    r"|\s+(?:and|but|while|whereas)\s+",
+    re.IGNORECASE,
+)
+# Reporting verbs do not describe the scientific content of a claim.
+# Predicate words such as "cure" and "guarantee" are deliberately kept.
+_REPORTING_STEMS: Final[frozenset[str]] = frozenset({
+    "cover", "descr", "discu", "demon", "exami", "highl", "indic",
+    "liste", "prese", "repor", "show", "summa",
+})
+# Short labels are lost during word stemming, but distinguish studies
+# with different measurements in a shared citation ("Study A" vs "B").
+_STUDY_LABEL = re.compile(
+    r"\b(?i:Study|Paper|Source|Trial|Experiment|Cohort|Dataset|Group)"
+    r"\s+[A-Z]\b"
+)
 # Unclear documents named in a per-document section's count line.
 _UNCLEAR_NAMED: Final[int] = 10
 
@@ -743,37 +762,148 @@ def _stems(text: str) -> set[str]:
     }
 
 
+def _shared_parts(phrase: str) -> list[str]:
+    """Separate substantive items sharing one citation marker.
+
+    Parameters
+    ----------
+    phrase: str
+        Text before a marker citing multiple documents.
+
+    Returns
+    -------
+    list[str]
+        Independent comma- or conjunction-delimited assertions when
+        each is substantive; otherwise the original indivisible claim.
+        An unclear division must not relax per-source citation checks.
+
+    """
+
+    parts = [
+        part.strip(" ,;:")
+        for part in _SHARED_SEPARATOR.split(phrase)
+        if part.strip(" ,;:")
+    ]
+    if len(parts) > 1 and all(_substantive(part) for part in parts):
+        return parts
+    return [phrase]
+
+
+def _source_supports_part(
+    part: str, source: str, source_stems: set[str],
+) -> bool:
+    """Check one assertion against one cited original source.
+
+    Parameters
+    ----------
+    part: str
+        One separately attributable assertion.
+    source: str
+        Original indexed text, never model-generated notes.
+    source_stems: set[str]
+        Distinctive word stems already extracted from ``source``.
+
+    Returns
+    -------
+    bool
+        True when every content-word stem and every numerical literal,
+        value-unit pair, and comparison in the assertion occurs in the
+        source. This is a conservative lexical test, not entailment.
+
+    """
+
+    required = _stems(part) - _REPORTING_STEMS
+    values = {_number(value) for value in _FACT_NUMBER.findall(part)}
+    if not required and not values:
+        return False
+    if not required.issubset(source_stems):
+        return False
+    if any(
+        re.search(
+            rf"\b(?i:{re.escape(label[:-1])}){label[-1]}\b",
+            source,
+        ) is None
+        for label in _STUDY_LABEL.findall(part)
+    ):
+        return False
+    if not values:
+        return True
+    available = {_number(value) for value in _FACT_NUMBER.findall(source)}
+    if not values.issubset(available):
+        return False
+    if not _comparisons(part).issubset(_comparisons(source)):
+        return False
+    quantities = {
+        (_number(value), unit.casefold())
+        for value, unit in _QUANTITY.findall(part)
+        if unit.casefold() not in _UNIT_IGNORED
+    }
+    found = {
+        (_number(value), unit.casefold())
+        for value, unit in _QUANTITY.findall(source)
+    }
+    return quantities.issubset(found)
+
+
+def _shared_matches(
+    parts: list[str], cited: list[int], texts: dict[int, str],
+    stems: dict[int, set[str]],
+) -> list[set[int]]:
+    """Identify which cited sources independently anchor each claim part.
+
+    Parameters
+    ----------
+    parts: list[str]
+        Distinct assertions, or the undivided claim.
+    cited: list[int]
+        Document numbers in the shared citation.
+    texts: dict[int, str]
+        Original indexed source text by number.
+    stems: dict[int, set[str]]
+        Precomputed source terms.
+
+    Returns
+    -------
+    list[set[int]]
+        The supporting document numbers for each assertion, in order.
+
+    """
+
+    return [
+        {
+            number for number in cited
+            if _source_supports_part(
+                part, texts.get(number, ""), stems.get(number, set())
+            )
+        }
+        for part in parts
+    ]
+
+
 def support_problem(
     content: str, texts: dict[int, str], *, strict: bool = False,
 ) -> str:
-    """Return a citation whose document does not mention what it cites.
+    """Return a citation lacking an identifiable original-source anchor.
 
     Parameters
     ----------
     content: str
         A section written from the notes.
     texts: dict[int, str]
-        Each document's texts by number. The caller must supply original
-        indexed source passages for independent validation.
+        Original indexed passage text by document number.
     strict: bool, optional
-        Also flag cited phrases with no overlap in their original source
-        even when no alternative document is better. Defaults to False
-        for the earlier heuristic's compatibility.
+        Report missing anchors even without a better matching document.
 
     Returns
     -------
     str
-        For the first citation whose phrase (the clause before it: the
-        words since the previous citation or the start of the sentence,
-        cut after the last comma, semicolon, dash or "such as" when that
-        clause alone has enough distinctive words) has at least
-        ``_SUPPORT_WORDS_MIN`` distinctive words, none of them in the cited
-        document's text, while another document has at least
-        ``_SUPPORT_WORDS_MIN``: a problem naming the phrase, the citation
-        and the document that may be meant. Words in more than half the
-        documents are not distinctive. In strict mode, a cited phrase
-        without a recognizable original-source anchor is reported even
-        when no alternative document seems better. ``""`` otherwise.
+        A diagnostic for the first unsupported cited assertion, else
+        ``""``. A shared marker is not automatically a list: independent
+        parts are validated separately only when the text has substantive
+        list boundaries. Every part needs a supporting cited source and
+        every cited source must support a part. Indivisible assertions
+        must be supported by each cited document. A source anchor does
+        not prove scientific entailment.
 
     """
 
@@ -791,12 +921,37 @@ def support_problem(
             phrase = sentence[start:match.start()]
             start = match.end()
             cited = _cited(match.group(1), max(stems, default=0))
+            if not cited:
+                continue
+            if len(cited) > 1:
+                parts = _shared_parts(phrase)
+                matches = _shared_matches(parts, cited, texts, stems)
+                uncovered = [
+                    part for part, numbers in zip(parts, matches)
+                    if not numbers
+                ]
+                covered = set().union(*matches)
+                unused = [number for number in cited if number not in covered]
+                if uncovered or unused:
+                    if unused:
+                        number = unused[0]
+                        return (
+                            f"Shared citation cites [{number}] without a "
+                            "distinct source-backed part in the original "
+                            "source passages; check each assertion and source."
+                        )
+                    shown = " ".join(uncovered[0].split())[:100]
+                    return (
+                        f"Shared citation has an unsupported assertion: "
+                        f"“{shown}”. Check original source passages."
+                    )
+                continue
             clause = _CLAUSE.split(phrase)[-1]
             threshold = 1 if strict else _SUPPORT_WORDS_MIN
             if len(_stems(clause) - common) >= threshold:
-                phrase = clause  # "..., such as reservoir computing [1]"
+                phrase = clause
             words = _stems(phrase) - common
-            if not cited or len(words) < threshold:
+            if len(words) < threshold:
                 continue
             for number in cited:
                 if words & stems.get(number, set()):
@@ -910,6 +1065,24 @@ def numeric_support_problem(
             cited = _cited(match.group(1), max(texts, default=0))
             if not cited:
                 continue
+            if len(cited) > 1:
+                parts = _shared_parts(clause)
+                if len(parts) > 1:
+                    stems = {
+                        number: _stems(texts.get(number, ""))
+                        for number in cited
+                    }
+                    matches = _shared_matches(parts, cited, texts, stems)
+                    for part, backing in zip(parts, matches):
+                        if not _FACT_NUMBER.search(part) or backing:
+                            continue
+                        shown = " ".join(part.split())[:100]
+                        return (
+                            f"Numerical assertion “{shown}” in shared "
+                            "citation has no matching original source "
+                            "among its cited documents."
+                        )
+                    continue
             for number in cited:
                 for comparison in _comparisons(clause):
                     if comparison not in source_comparisons.get(

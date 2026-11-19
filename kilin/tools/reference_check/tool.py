@@ -2311,10 +2311,12 @@ def _cited_for(
         marker and the last comma, semicolon, colon or opening
         parenthesis, after the last word such as "using", "with" or "such
         as", and without a leading "and", "or" or "but"; at most
-        ``_CITED_FOR_WORDS`` words. Empty when the reference has no marker
-        in the sentence, no words precede it, or they only attribute the
-        sentence ("already observed in ..."), so the whole sentence is
-        what it is cited for.
+        ``_CITED_FOR_WORDS`` words. A marker citing several references
+        ("[11-18]") cites a comma list as a whole, so its text is not cut
+        at commas, and is empty when longer than ``_CITED_FOR_WORDS``
+        words. Empty when the reference has no marker in the sentence, no
+        words precede it, or they only attribute the sentence ("already
+        observed in ..."), so the whole sentence is what it is cited for.
 
     """
 
@@ -2325,15 +2327,18 @@ def _cited_for(
 
     start = max((c.end for c in ordered if c.end <= marker.start), default=0)
     phrase = sentence.text[start : marker.start]
-    clause = re.split(r"[,;:(]", phrase)[-1]
+    shared = len(marker.numbers) > 1
+    clause = re.split(r"[;:(]" if shared else r"[,;:(]", phrase)[-1]
     if _ATTRIBUTION.match(clause.strip()):
         return ""
     if len(clause.split()) >= 2:
         phrase = clause
     phrase = _CITED_FOR_START.sub("", phrase) or phrase
     phrase = re.sub(r"^\s*(?:and|or|but)\s+", "", phrase, flags=re.I)
-    words = _BROKEN_WORD.sub("", phrase).split()[-_CITED_FOR_WORDS:]
-    return " ".join(words).strip(" .")
+    words = _BROKEN_WORD.sub("", phrase).split()
+    if shared and len(words) > _CITED_FOR_WORDS:
+        return ""
+    return " ".join(words[-_CITED_FOR_WORDS:]).strip(" .")
 
 
 def _display(report: ReferenceReport, sentence: Sentence, number: int) -> str:

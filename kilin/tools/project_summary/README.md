@@ -170,8 +170,19 @@ other documents continue.
   scientific exponents (`5e-3`) and comparison direction. The existing
   word-overlap check uses the clause preceding each citation and
   compares distinctive word stems against the original indexed passages,
-  ignoring vocabulary common to most documents. If the cited document
-  shares no distinctive term while another matches at least two, the
+  ignoring vocabulary common to most documents. A citation of several
+  documents is **not automatically treated as a list**. Where the prose
+  separates substantive assertions by commas or conjunctions, each part
+  must have an identifiable anchor in a cited source, and each cited
+  document must support at least one part. Source assignments also check
+  the exact signed values, value-unit pairs and comparisons belonging to
+  that part; distinct measurements need not appear in every document.
+  A single indivisible claim cited to multiple sources must be supported
+  by each source independently. The grouped-claim check conservatively
+  requires the substantive wording and numerical anchors to be present
+  in the original text, including short labels such as Study A and Study
+  B. Paraphrased or ambiguous attributions can therefore remain partial.
+  When source support cannot be established, the
   model is asked to reconsider the citation; it is never silently changed
   by code. In strict mode, a cited phrase with no recognizable source
   anchor is flagged even without a better alternative. These checks do
