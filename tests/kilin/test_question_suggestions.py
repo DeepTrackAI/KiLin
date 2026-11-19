@@ -51,7 +51,8 @@ CHUNKS = (
 )
 REPLY = (
     "Here you are:\n"
-    '{"topics": ["variational autoencoders", "quantum gravity"], '
+    '{"themes": ["autoencoders for MRI", "quantum gravity"], '
+    '"topics": ["variational autoencoders", "quantum gravity"], '
     '"terms": ["MRI", "fMRI"]}'
 )
 
@@ -153,6 +154,9 @@ class TestModelWords(unittest.TestCase):
             words.topics, ("variational autoencoders", "quantum gravity")
         )
         self.assertEqual(words.terms, ("MRI", "fMRI"))
+        self.assertEqual(
+            words.themes, ("autoencoders for MRI", "quantum gravity")
+        )
         system, prompt, tokens = ask.call_args.args
         self.assertIn("JSON", system)
         self.assertIn("- a.pdf: Variational autoencoders", prompt)
@@ -193,6 +197,31 @@ class TestModelWords(unittest.TestCase):
         self.assertEqual(words.topics, ("variational autoencoders",))
         self.assertEqual(words.terms, ("MRI",))
 
+    def test_one_theme_instead_of_a_list_is_read(self) -> None:
+        """Read a single "theme" when a model writes no list."""
+
+        ask = Mock(return_value='{"theme": "MRI", "topics": [], "terms": []}')
+        self.assertEqual(ask_for_words(CHUNKS, (), ask).themes, ("MRI",))
+
+    def test_themes_are_checked_and_spelled_as_printed(self) -> None:
+        """Keep short printed single themes in the sources' spelling."""
+
+        chunks = (chunk("x", "We study Alzheimer's disease and resilience."),)
+        themes = (
+            "alzheimer's disease and resilience",
+            "disease, resilience",
+            "quantum gravity",
+            "study of alzheimer's disease resilience",
+            "alzheimer's disease",
+            "resilience",
+            "disease",
+            "study",
+        )
+        words = checked_words(SuggestionWords((), (), themes), chunks)
+        self.assertEqual(
+            words.themes, ("Alzheimer's disease", "resilience", "disease")
+        )
+
     def test_topics_are_spelled_as_printed(self) -> None:
         """Keep a name's capital and lower-case an ordinary word."""
 
@@ -232,8 +261,10 @@ class TestWordPool(unittest.TestCase):
         self.assertEqual(pool.terms, ("MRI",))
         self.assertEqual(self._pool(ask), pool)
         ask.assert_called_once()
+        self.assertEqual(pool.themes, ("autoencoders for MRI",))
         saved = json.loads((self.indexes / SUGGESTION_WORDS_FILE).read_text())
         self.assertEqual(saved["topics"], ["variational autoencoders"])
+        self.assertEqual(saved["themes"], ["autoencoders for MRI"])
 
     def test_another_model_picks_again(self) -> None:
         """Ask again when the model changes."""
@@ -360,6 +391,39 @@ class TestWelcomePrompts(unittest.TestCase):
             for _ in range(20)
         }
         self.assertEqual(len(seen), 3)
+
+    def test_theme_heading_covers_the_whole_collection(self) -> None:
+        """Name the collection's theme, not one file or topic."""
+
+        words = SuggestionWords(("sleep",), (), ("memory in aging",))
+        self.assertEqual(
+            welcome_prompts(
+                ("What would you like to understand about {theme}?",),
+                CHUNKS,
+                words,
+            ),
+            ["What would you like to understand about memory in aging?"],
+        )
+        self.assertEqual(
+            welcome_prompts(
+                ("About {theme}?",), CHUNKS, SuggestionWords((), ())
+            ),
+            [],
+        )
+
+    def test_headings_take_turns_naming_each_theme(self) -> None:
+        """Show another theme in other chats, from the same saved pool."""
+
+        words = SuggestionWords((), (), ("memory", "sleep", "aging"))
+        seen = {
+            welcome_prompts(
+                ("About {theme}?",), CHUNKS, words, random.Random(seed)
+            )[0]
+            for seed in range(20)
+        }
+        self.assertEqual(
+            seen, {"About memory?", "About sleep?", "About aging?"}
+        )
 
     def test_unfillable_headings_are_left_out(self) -> None:
         """Without words or sources, leave the fixed headings to the caller."""

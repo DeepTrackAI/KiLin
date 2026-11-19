@@ -5,8 +5,11 @@ request the project type supports, such as "Give me a short summary of
 tiunn26braph2.pdf." for a paper overview. The examples are the project's
 suggested questions (``kilin.question_suggestions``), so they name the
 project's own files and topics, and they change from one answer to the
-next. A project without sources gets the project type's fixed suggestions
-and is told to add its files. No model is called.
+next. Every answer ends with how to add and remove files, so the same
+intent answers "How do I add my papers?". A project without sources is
+told how to add its files first and that a pasted passage can be asked
+about meanwhile, followed by the project type's fixed suggestions. No
+model is called.
 
 Key Features
 ------------
@@ -19,9 +22,14 @@ Key Features
 
     Every example is a complete question the user can copy and send.
 
+- **Adding files**
+
+    Every answer says how to add and remove files.
+
 - **Empty projects**
 
-    Fall back to the project type's fixed suggestions.
+    Explain how to add files first, and fall back to the project type's fixed
+    suggestions.
 
 Module Structure
 ----------------
@@ -76,15 +84,27 @@ _WITH_SOURCES: Final[str] = (
     "example for each kind of request. Copy an example into the question "
     "box and send it to try it:"
 )
-_WITHOUT_SOURCES: Final[str] = (
-    "This project has no searchable files yet. Add your papers, documents "
-    "or code to its sources, and I will suggest questions about them. "
-    "Meanwhile, here are the kinds of things you can ask:"
+# How to add and remove files; ends every answer, so the same intent
+# also answers "How do I add my papers?".
+_FILE_STEPS: Final[tuple[str, ...]] = (
+    "1. Drag files or folders onto **sources** in the Workspace panel on "
+    "the right.",
+    "2. Or click **+** in the message box, choose **Attach file** or "
+    "**Attach folder**, and send your question.",
+    "",
+    "To remove a file, right-click it under **sources** and choose "
+    "**Delete**.",
 )
-_NOTHING: Final[str] = (
-    "This project has no searchable files yet. Add your papers, documents "
-    "or code to its sources, then ask me about them."
+_NO_SOURCES: Final[str] = (
+    "This project has no sources yet, so I cannot answer from your files. "
+    "To add them:"
 )
+_MORE_SOURCES: Final[str] = "To add more files:"
+_PASTE: Final[str] = (
+    "Meanwhile, you can paste a short passage into the message box and ask "
+    "me about it."
+)
+_WITHOUT_SOURCES: Final[str] = "Here are the kinds of things you can ask:"
 _CLOSING: Final[str] = (
     "You can also ask your own question in your own words; I pick the "
     "right kind of request for it."
@@ -171,15 +191,13 @@ def run(
             f"- **{_label(intent)}**: {question}"
             for intent, question in examples
         ]
-        lines += ["", _CLOSING]
-    elif context.fixed_suggestions:
-        lines = [_WITHOUT_SOURCES, ""]
-        lines += [
-            f"- {text}"
-            for text in context.fixed_suggestions[: settings.max_listed]
-        ]
+        lines += ["", _CLOSING, "", _MORE_SOURCES, "", *_FILE_STEPS]
     else:
-        lines = [_NOTHING]
+        lines = [_NO_SOURCES, "", *_FILE_STEPS, "", _PASTE]
+        fixed = _other_requests(context.fixed_suggestions, request.question)
+        if fixed:
+            lines += ["", _WITHOUT_SOURCES, ""]
+            lines += [f"- {text}" for text in fixed[: settings.max_listed]]
 
     summary: dict[str, object] = {
         "name": "assistant_guide",
@@ -219,6 +237,32 @@ def _one_per_intent(suggestions: Sequence[object]) -> list[tuple[str, str]]:
     return [
         (intent, _RANDOM.choice(questions))
         for intent, questions in by_intent.items()
+    ]
+
+
+def _other_requests(fixed: Sequence[str], question: str) -> list[str]:
+    """Return the fixed suggestions other than the question being answered.
+
+    Parameters
+    ----------
+    fixed: Sequence[str]
+        The project type's fixed suggestions.
+    question: str
+        The user's question, such as "What can you do for me?".
+
+    Returns
+    -------
+    list[str]
+        The suggestions in order, without the one that is the question,
+        ignoring case and the final punctuation.
+
+    """
+
+    asked = question.strip().rstrip("?!. ").casefold()
+    return [
+        text
+        for text in fixed
+        if text.strip().rstrip("?!. ").casefold() != asked
     ]
 
 

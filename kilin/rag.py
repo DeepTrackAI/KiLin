@@ -3478,7 +3478,7 @@ class RAGSession:
         -------
         list[str]
             One heading per fill-in heading of the project type, such as
-            "What would you like to know about variational autoencoders?",
+            "What would you like to understand about brain networks?",
             chosen anew on every call. Empty without sources, and when the
             project's own settings replace the type's headings, so the
             user's headings are shown.

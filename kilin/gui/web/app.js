@@ -2895,6 +2895,21 @@ function drawAttention(element) {
 }
 
 /**
+ * Flash the controls that add sources after an answer that explains them:
+ * the sources folder in the Workspace panel and the composer's + button.
+ * Every assistant_guide answer ("What can you do for me?", "How do I add
+ * my papers?") ends with these steps, so it flashes them.
+ * @param turn The finished turn.
+ */
+function pointToSourceControls(turn) {
+  const parameters = turn.parameters || {};
+  if (parameters.tool?.name !== "assistant_guide") return;
+  for (const element of [byId("workspace-source-drop"), byId("attach-button")]) {
+    if (element) drawAttention(element);
+  }
+}
+
+/**
  * Close Settings; every change has been saved when it was made. Until the
  * projects folder and terms of use are confirmed, Settings stays open.
  */
@@ -7028,6 +7043,7 @@ function completePendingTurn(turn) {
   bindAnswerSelection(current.answer, current.item, turn);
   renderAnswer(current.answer, turn, current.item, current.thinkingMs);
   addMessageActions(current.item, turn);
+  pointToSourceControls(turn);
   refreshFeedbackControls();
   if (reading?.live) {
     renderConversations(lastConversationData);

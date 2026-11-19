@@ -244,9 +244,10 @@ PROJECT_TYPES_DIR: Final[Path] = Path(__file__).parent / "project_types"
 # and in ``profile.ini``.
 _ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 # What a suggested-question template may fill in: a source file name, a
-# second, different one, a topic of the sources, and an exact term in them.
+# second, different one, a topic of the sources, an exact term in them, and
+# a broad theme of the whole collection.
 SUGGESTION_PLACEHOLDERS: Final[tuple[str, ...]] = (
-    "file", "file2", "topic", "term",
+    "file", "file2", "topic", "term", "theme",
 )
 _PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"\{([a-z0-9]+)\}")
 
@@ -529,8 +530,8 @@ class ProjectType:
         Headings the desktop app shows in an empty chat when there are no
         headings about the project's own sources.
     welcome_templates: tuple[str, ...]
-        Fill-in headings, such as "What would you like to know about
-        {topic}?", from which ``kilin.question_suggestions`` writes
+        Fill-in headings, such as "What would you like to understand about
+        {theme}?", from which ``kilin.question_suggestions`` writes
         headings about the project's own sources. Empty when the type has
         none.
     suggestions: tuple[str, ...]

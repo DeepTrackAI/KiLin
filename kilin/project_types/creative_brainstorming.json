@@ -184,7 +184,7 @@
       }
     },
     "assistant_help": {
-      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources).",
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files: how to add, upload, import, attach, or remove files or folders ('how do I add my papers?', 'can I upload a folder?', 'how do I remove a file?').",
       "history": {
         "policy": "none"
       },
@@ -195,21 +195,26 @@
         "name": "assistant_guide"
       },
       "shortcuts": [
-        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)"
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "how (do|can) i (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( to (kilin|you|this project|the project))?",
+        "how to (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)",
+        "where (do|should|can) i (put|add|drop|place) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
       ]
     }
   },
   "welcome_prompts": [
     "What research problem shall we approach in a completely unconventional way?",
     "Which established assumption should we overturn today?",
-    "Shall we invent ideas unconstrained by current methods or literature?"
+    "Shall we invent ideas unconstrained by current methods or literature?",
+    "Paste an idea to push further, or ask what I can do for you."
   ],
   "welcome_templates": [
-    "What if we approached {topic} in a completely unconventional way?",
-    "Which assumption about {topic} should we overturn today?",
-    "What unexpected idea could grow out of {file}?"
+    "What if we rethought {theme} from scratch?",
+    "Which assumption about {theme} should we overturn today?"
   ],
   "suggestions": [
+    "What can you do for me?",
+    "How do I add my files?",
     "Invent five wildly different hypotheses about ...",
     "Give me your most audacious, out-of-the-box explanation for ...",
     "What if the central assumption in this field were exactly backwards?",

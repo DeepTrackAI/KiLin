@@ -7,14 +7,16 @@ This module fills them with the project's real file names and with topics
 and exact terms that a small model picks from the sources, so each question
 shows what KíLín can do with these sources and can be answered. The
 heading above them is written the same way from ``welcome_templates``, such
-as "What would you like to know about {topic}?".
+as "What would you like to understand about {theme}?", where a theme is
+a broad subject of the whole collection, so the heading covers the
+questions below it.
 
 The work has two steps. Once, when the sources change, the small model
-reads a random mix of the files and picks a pool of up to ten topics and
-ten terms, which is saved in the index folder. Then, every time questions
-are needed (a new chat, or "What can you do for me?"), they are filled at
-once from that pool with randomly chosen files, topics, and terms, without
-a model, so each chat shows other ones.
+reads a random mix of the files and picks a pool of up to three themes,
+ten topics, and ten terms, which is saved in the index folder. Then, every
+time questions are needed (a new chat, or "What can you do for me?"), they
+are filled at once from that pool with randomly chosen files, themes,
+topics, and terms, without a model, so each chat shows other ones.
 
 Nothing is invented: file names come from the index, and a topic or term is
 kept only when its words are printed in the sources. A question whose
@@ -54,7 +56,7 @@ Module Structure
 
 - ``SuggestionWords``
 
-    Topics and terms that the questions may name.
+    The themes, topics, and terms that the questions may name.
 
 - ``suggestion_files``
 
@@ -62,11 +64,11 @@ Module Structure
 
 - ``ask_for_words``
 
-    Ask a model for topics and terms of the sources.
+    Ask a model for the themes, topics, and terms of the sources.
 
 - ``checked_words``
 
-    Keep only the topics and terms printed in the sources.
+    Keep only the themes, topics, and terms printed in the sources.
 
 - ``fill_templates``
 
@@ -131,7 +133,7 @@ __all__ = [
 ]
 
 SUGGESTION_WORDS_FILE: Final[str] = "suggestion_words.json"
-_FORMAT: Final[str] = "suggestion-words-v1"
+_FORMAT: Final[str] = "suggestion-words-v2"
 # Questions written from each template, so chats can show other ones.
 _VARIANTS: Final[int] = 3
 
@@ -145,7 +147,11 @@ _REPLY_TOKENS: Final[int] = 400
 _DEFINED_NAMES: Final[int] = 8
 # How many topics and terms the pool keeps, and how long they may be.
 _MAX_WORDS: Final[int] = 10
+_MAX_THEMES: Final[int] = 3
 _TOPIC_WORDS: Final[tuple[int, int]] = (1, 6)
+_THEME_WORDS: Final[tuple[int, int]] = (1, 4)
+# A theme names one subject, not two joined together.
+_JOINED: Final[re.Pattern[str]] = re.compile(r"\band\b|&|,|/", re.IGNORECASE)
 _TERM_CHARACTERS: Final[int] = 40
 # Words of a topic shorter than this are not checked against the sources.
 _CHECKED_WORD: Final[re.Pattern[str]] = re.compile(r"\w{4,}")
@@ -162,20 +168,23 @@ _RANDOM: Final[random.Random] = random.Random()
 _CARD_FIELDS: Final[tuple[str, ...]] = ("aim", "abstract")
 
 _SYSTEM: Final[str] = (
-    "You pick topics and exact terms from a list of documents for "
-    "example questions. Reply with JSON only."
+    "You pick the themes, topics, and exact terms of a list of documents "
+    "for example questions. Reply with JSON only."
 )
 _PROMPT: Final[str] = (
     "Documents:\n{documents}\n\n"
     "Reply with one JSON object: "
-    '{{"topics": [...], "terms": [...]}}. '
+    '{{"themes": [...], "topics": [...], "terms": [...]}}. '
+    "themes: 1 to 3 broad subjects that the documents share as a whole, "
+    'each one single subject of 1 to 4 words without "and", such as '
+    '"Alzheimer\'s disease" or "brain network analysis". '
     "topics: up to 10 subjects the documents discuss, or tasks and "
     "analyses their code is used for, 1 to 5 words each, such as "
     '"variational autoencoders" or "functional connectivity analysis". '
     "terms: up to 10 exact words, names, or acronyms printed in the "
     'documents, such as "MRI" or "load_data". '
-    "Use the documents' own words. Write topics in lower case, as inside "
-    "a sentence, keeping names and acronyms as printed."
+    "Use the documents' own words. Write the themes and topics in lower "
+    "case, as inside a sentence, keeping names and acronyms as printed."
 )
 
 
@@ -198,7 +207,7 @@ class Suggestion:
 
 @dataclass(frozen=True, slots=True)
 class SuggestionWords:
-    """Topics and terms that suggested questions may name.
+    """The themes, topics, and terms that suggested questions may name.
 
     Attributes
     ----------
@@ -206,11 +215,16 @@ class SuggestionWords:
         Subjects of the sources, such as "variational autoencoders".
     terms: tuple[str, ...]
         Exact words printed in the sources, such as "MRI".
+    themes: tuple[str, ...], optional
+        Broad subjects of the whole collection, one subject each, such as
+        "Alzheimer's disease", for welcome headings. Defaults
+        to ``()``, none.
 
     """
 
     topics: tuple[str, ...]
     terms: tuple[str, ...]
+    themes: tuple[str, ...] = ()
 
 
 def suggestion_files(chunks: Sequence[Chunk]) -> tuple[str, ...]:
@@ -248,7 +262,7 @@ def ask_for_words(
     ask: Callable[[str, str, int], str],
     rng: random.Random | None = None,
 ) -> SuggestionWords:
-    """Ask a model for topics and terms of the sources.
+    """Ask a model for the themes, topics, and terms of the sources.
 
     Parameters
     ----------
@@ -267,8 +281,8 @@ def ask_for_words(
     Returns
     -------
     SuggestionWords
-        The topics and terms of the reply, unchecked; empty when the reply
-        is not the requested JSON.
+        The themes, topics, and terms of the reply, unchecked; empty when
+        the reply is not the requested JSON.
 
     """
 
@@ -284,15 +298,17 @@ def ask_for_words(
         data = {}
     if not isinstance(data, dict):
         data = {}
+    # A small model may still write one "theme" instead of a list.
+    themes = _texts(data.get("themes")) or _texts([data.get("theme")])
     return SuggestionWords(
-        _texts(data.get("topics")), _texts(data.get("terms"))
+        _texts(data.get("topics")), _texts(data.get("terms")), themes
     )
 
 
 def checked_words(
     words: SuggestionWords, chunks: Sequence[Chunk]
 ) -> SuggestionWords:
-    """Keep only the topics and terms printed in the sources.
+    """Keep only the themes, topics, and terms printed in the sources.
 
     Parameters
     ----------
@@ -304,11 +320,13 @@ def checked_words(
     Returns
     -------
     SuggestionWords
-        Topics of one to six words whose longer words all appear in the
-        sources, and terms that appear as whole words, ignoring case; at
-        most ten of each. A term that is only a file name is dropped. Each
-        topic word is spelled as the sources print it, so "alzheimer's
-        disease" becomes "Alzheimer's disease".
+        Topics of one to six words and themes of one to four words, each
+        one subject not joined by "and", whose longer words all appear in
+        the sources, and terms that appear as whole words, ignoring case;
+        at most ten topics, ten terms, and three themes. A term that is only
+        a file name is dropped. Each topic and theme word is spelled as the
+        sources print it, so "alzheimer's disease" becomes "Alzheimer's
+        disease".
 
     """
 
@@ -318,11 +336,13 @@ def checked_words(
     topics = tuple(
         _printed_spelling(topic, printed)
         for topic in words.topics
-        if _TOPIC_WORDS[0] <= len(topic.split()) <= _TOPIC_WORDS[1]
-        and all(
-            _printed(word, text)
-            for word in _CHECKED_WORD.findall(topic.casefold())
-        )
+        if _is_printed_topic(topic, text, _TOPIC_WORDS)
+    )
+    themes = tuple(
+        _printed_spelling(theme, printed)
+        for theme in words.themes
+        if _is_printed_topic(theme, text, _THEME_WORDS)
+        and not _JOINED.search(theme)
     )
     terms = tuple(
         term
@@ -331,7 +351,9 @@ def checked_words(
         and term.casefold() not in files
         and _printed(term.casefold(), text)
     )
-    return SuggestionWords(topics[:_MAX_WORDS], terms[:_MAX_WORDS])
+    return SuggestionWords(
+        topics[:_MAX_WORDS], terms[:_MAX_WORDS], themes[:_MAX_THEMES]
+    )
 
 
 def fill_templates(
@@ -365,7 +387,12 @@ def fill_templates(
 
     """
 
-    values = {"file": files, "topic": words.topics, "term": words.terms}
+    values = {
+        "file": files,
+        "topic": words.topics,
+        "term": words.terms,
+        "theme": words.themes,
+    }
     used = Counter[str]()
     found: dict[int, list[Suggestion]] = {}
     for _ in range(variants):
@@ -493,16 +520,17 @@ def welcome_prompts(
     words: SuggestionWords
         The pool, as from ``suggestion_words``.
     rng: random.Random | None, optional
-        Picks the files, topics, and terms. Defaults to ``None``, a shared
-        generator.
+        Picks the files, themes, topics, and terms. Defaults to ``None``,
+        a shared generator.
 
     Returns
     -------
     list[str]
         One heading per template that could be filled, naming files,
-        topics, and terms chosen anew on every call; empty when the
-        project has no sources or no templates, so the caller shows the
-        type's fixed ``welcome_prompts``. No model is called.
+        themes, topics, and terms chosen anew on every call, so a new chat
+        may show another theme; empty when the project has no sources or no
+        templates, so the caller shows the type's fixed
+        ``welcome_prompts``. No model is called.
 
     """
 
@@ -525,7 +553,7 @@ def _shuffled_values(
     chunks: Sequence[Chunk]
         The project's indexed passages.
     words: SuggestionWords
-        The pool of topics and terms.
+        The pool of themes, topics, and terms.
     rng: random.Random
         Picks the order.
 
@@ -533,16 +561,17 @@ def _shuffled_values(
     -------
     tuple[list[str], SuggestionWords]
         Shuffled file names, as from ``suggestion_files``, and shuffled
-        topics and terms.
+        themes, topics, and terms.
 
     """
 
     files = list(suggestion_files(chunks))
     topics = list(words.topics)
     terms = list(words.terms)
-    for values in (files, topics, terms):
+    themes = list(words.themes)
+    for values in (files, topics, terms, themes):
         rng.shuffle(values)
-    return files, SuggestionWords(tuple(topics), tuple(terms))
+    return files, SuggestionWords(tuple(topics), tuple(terms), tuple(themes))
 
 
 def _descriptions(
@@ -678,6 +707,32 @@ def _texts(value: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(text for text in texts if text))
 
 
+def _is_printed_topic(topic: str, text: str, length: tuple[int, int]) -> bool:
+    """Return whether a topic has a fitting length and printed words.
+
+    Parameters
+    ----------
+    topic: str
+        Topic or theme as the model wrote it.
+    text: str
+        Lowercase source text.
+    length: tuple[int, int]
+        Fewest and most words allowed.
+
+    Returns
+    -------
+    bool
+        True when the word count is in range and every word of four or
+        more letters is printed in the sources.
+
+    """
+
+    return length[0] <= len(topic.split()) <= length[1] and all(
+        _printed(word, text)
+        for word in _CHECKED_WORD.findall(topic.casefold())
+    )
+
+
 def _printed(word: str, text: str) -> bool:
     """Return whether a lowercase word appears in text as a whole word.
 
@@ -792,7 +847,7 @@ def _fill(
     """
 
     filled: dict[str, str] = {}
-    for name in ("file", "topic", "term"):
+    for name in ("file", "topic", "term", "theme"):
         if name in names or (name == "file" and "file2" in names):
             options = values[name]
             filled[name] = options[used[name] % len(options)]
@@ -875,6 +930,7 @@ def _read_saved(path: Path, fingerprint: str) -> SuggestionWords | None:
         return SuggestionWords(
             tuple(str(item) for item in data["topics"]),
             tuple(str(item) for item in data["terms"]),
+            tuple(str(item) for item in data["themes"]),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -897,6 +953,7 @@ def _save(path: Path, fingerprint: str, words: SuggestionWords) -> None:
     data = {
         "format": _FORMAT,
         "fingerprint": fingerprint,
+        "themes": list(words.themes),
         "topics": list(words.topics),
         "terms": list(words.terms),
     }

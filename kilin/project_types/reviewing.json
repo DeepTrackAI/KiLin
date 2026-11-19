@@ -238,7 +238,7 @@
       }
     },
     "assistant_help": {
-      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources).",
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files: how to add, upload, import, attach, or remove files or folders ('how do I add my papers?', 'can I upload a folder?', 'how do I remove a file?').",
       "history": {
         "policy": "none"
       },
@@ -249,21 +249,26 @@
         "name": "assistant_guide"
       },
       "shortcuts": [
-        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)"
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "how (do|can) i (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( to (kilin|you|this project|the project))?",
+        "how to (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)",
+        "where (do|should|can) i (put|add|drop|place) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
       ]
     }
   },
   "welcome_prompts": [
     "I can help locate, verify, and compare evidence, but I cannot evaluate a submission or write a review.",
-    "Which manuscript, proposal, or supporting source would you like to examine?",
-    "What factual information, references, or passages should I check?"
+    "Which document or claim shall we check?",
+    "Paste a passage to check, or ask what I can do for you."
   ],
   "welcome_templates": [
-    "What would you like to check in {file}?",
-    "Which claims about {topic} should we verify?",
-    "Which references in {file} should we look at?"
+    "What would you like to check in this work on {theme}?",
+    "Which claims about {theme} should we examine against the sources?"
   ],
   "suggestions": [
+    "What can you do for me?",
+    "How do I add my files?",
+    "Explain in plain words: …",
     "Extract the stated objectives and methods with citations",
     "List the sample sizes and experimental conditions reported",
     "Read the document and summarize its factual contents",

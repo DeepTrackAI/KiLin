@@ -934,6 +934,25 @@ class TestProjectTypeFields(ProjectTypeFixture):
                 with self.assertRaisesRegex(ValueError, "welcome_templates"):
                     self._load(f"badwelcome{index}", data)
 
+    def test_packaged_types_guide_adding_sources(self) -> None:
+        """Send questions about adding files to the assistant guide."""
+
+        for type_id, item in load_project_types().items():
+            with self.subTest(type_id=type_id):
+                self.assertNotIn("source_help", item.intents)
+                intent = item.intents["assistant_help"]
+                self.assertEqual(intent.tool.name, "assistant_guide")
+                self.assertTrue(
+                    any(
+                        pattern.fullmatch("how do I add my papers")
+                        for pattern in intent.shortcuts
+                    )
+                )
+                self.assertEqual(
+                    item.suggestions[:2],
+                    ("What can you do for me?", "How do I add my files?"),
+                )
+
     def test_packaged_suggestion_templates_name_their_intents(self) -> None:
         """Every packaged type has fill-in questions for its own intents."""
 

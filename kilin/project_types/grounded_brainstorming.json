@@ -195,7 +195,7 @@
       }
     },
     "assistant_help": {
-      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources).",
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files: how to add, upload, import, attach, or remove files or folders ('how do I add my papers?', 'can I upload a folder?', 'how do I remove a file?').",
       "history": {
         "policy": "none"
       },
@@ -206,21 +206,26 @@
         "name": "assistant_guide"
       },
       "shortcuts": [
-        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)"
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "how (do|can) i (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( to (kilin|you|this project|the project))?",
+        "how to (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)",
+        "where (do|should|can) i (put|add|drop|place) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
       ]
     }
   },
   "welcome_prompts": [
-    "Which research result or unexplained observation should we build on?",
-    "Which of your indexed papers should inspire our next hypothesis?",
-    "What source-supported assumptions should we challenge?"
+    "Which question shall we brainstorm about?",
+    "Which finding or observation shall we build on?",
+    "Paste a finding to build on, or ask what I can do for you."
   ],
   "welcome_templates": [
-    "Which result on {topic} should we build on?",
-    "Which assumption in {file} should we challenge?",
-    "What new hypothesis could {file} inspire?"
+    "Which new idea about {theme} shall we build from your sources?",
+    "What open question about {theme} should we explore?"
   ],
   "suggestions": [
+    "What can you do for me?",
+    "How do I add my files?",
+    "Brainstorm hypotheses from this finding: …",
     "Brainstorm new hypotheses from the findings in my project sources",
     "Find contradictions between the papers and propose explanations",
     "Develop three research directions supported by these results",

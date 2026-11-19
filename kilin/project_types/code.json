@@ -2,14 +2,14 @@
   "display_name": "Code Repository",
   "description": "A software repository with source code and documentation.",
   "extensions": [
-      ".py",
-      ".ipynb",
-      ".m",
-      ".r",
-      ".md",
-      ".json",
-      ".js",
-      ".html"
+    ".py",
+    ".ipynb",
+    ".m",
+    ".r",
+    ".md",
+    ".json",
+    ".js",
+    ".html"
   ],
   "max_file_bytes": 1048576,
   "retrieval_instruction": "Given a question about a software repository, retrieve relevant code and documentation that help answer the question.",
@@ -274,7 +274,7 @@
       }
     },
     "assistant_help": {
-      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources).",
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files: how to add, upload, import, attach, or remove files or folders ('how do I add my papers?', 'can I upload a folder?', 'how do I remove a file?').",
       "history": {
         "policy": "none"
       },
@@ -285,24 +285,26 @@
         "name": "assistant_guide"
       },
       "shortcuts": [
-        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)"
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "how (do|can) i (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( to (kilin|you|this project|the project))?",
+        "how to (add|upload|import|attach) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)",
+        "where (do|should|can) i (put|add|drop|place) (my |a |the |some |more )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
       ]
     }
   },
   "welcome_prompts": [
-    "What would you like to understand about this codebase?",
-    "Which part of your project should we explore?",
-    "What do you want to trace through the code?",
-    "What behavior would you like to investigate?",
-    "Where should we start in this repository?"
+    "What would you like to do with your code today?",
+    "Which piece of code shall we look at?",
+    "Paste some code and ask about it, or ask what I can do for you."
   ],
   "welcome_templates": [
-    "What would you like to understand about {file}?",
-    "Shall we trace how {term} works through the code?",
-    "How would you like to use this code for {topic}?",
-    "Where should we start: {file} or {file2}?"
+    "What would you like to do with this code for {theme}?",
+    "What would you like to understand about this code for {theme}?"
   ],
   "suggestions": [
+    "What can you do for me?",
+    "How do I add my files?",
+    "Explain this code: …",
     "Explain how … works",
     "Review the whole … file",
     "Write a function that …",

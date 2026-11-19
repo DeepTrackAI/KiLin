@@ -1,8 +1,9 @@
 """Unit tests for the ``assistant_guide`` tool.
 
 The tool answers "What can you do for me?" with one example question per
-kind of request, taken from the project's suggested questions, or with the
-project type's fixed suggestions when the project has no sources.
+kind of request, taken from the project's suggested questions, or, when the
+project has no sources, with how to add them and the project type's fixed
+suggestions.
 
 """
 
@@ -85,6 +86,14 @@ class TestAssistantGuide(unittest.TestCase):
         self.assertEqual(answer.count("**Paper overview**"), 1)
         self.assertIn("**Mention listing**: Which papers mention MRI?", answer)
 
+    def test_every_answer_says_how_to_add_files(self) -> None:
+        """End the examples with how to add and remove files."""
+
+        answer = _answer(_context(lambda: SUGGESTIONS))
+        self.assertIn("To add more files:", answer)
+        self.assertIn("**sources** in the Workspace panel", answer)
+        self.assertIn("**Delete**", answer)
+
     def test_examples_change_between_answers(self) -> None:
         """Pick another file's example from one answer to the next."""
 
@@ -99,13 +108,19 @@ class TestAssistantGuide(unittest.TestCase):
         self.assertEqual(answer.count("- **"), 1)
 
     def test_empty_project_falls_back_to_fixed_suggestions(self) -> None:
-        """Ask for sources and show the type's fixed suggestions."""
+        """Explain how to add sources and show the type's fixed ones."""
 
-        answer = _answer(_context(lambda: [], ("Summarize …", "Compare …")))
-        self.assertIn("no searchable files yet", answer)
+        fixed = ("What can you do for me?", "Summarize …", "Compare …")
+        answer = _answer(_context(lambda: [], fixed))
+        self.assertIn("no sources yet", answer)
+        self.assertIn("**sources** in the Workspace panel", answer)
+        self.assertIn("**Attach file**", answer)
+        self.assertIn("paste a short passage", answer)
         self.assertIn("- Summarize …", answer)
+        # The question being answered is not listed as an example.
+        self.assertNotIn("- What can you do for me?", answer)
         answer = _answer(_context(None))
-        self.assertIn("no searchable files yet", answer)
+        self.assertIn("no sources yet", answer)
         self.assertNotIn("- ", answer)
 
 
