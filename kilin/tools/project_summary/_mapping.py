@@ -97,17 +97,20 @@ _MISSING: Final[str] = "not reported"
 _NONE = re.compile(r"^(?:none|n/?a|-|—|not (?:reported|stated|mentioned))\.?$",
                    re.IGNORECASE)
 _LETTERS: Final[str] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-# A negative cannot be inferred from silence. Require an explicit negative
-# statement whose topic overlaps the template's condition.
-_NEGATION = re.compile(
-    r"\b(?:no|not|never|without|neither|none|lack\w*|absen\w*|"
-    r"didn.?t|doesn.?t)\b", re.IGNORECASE,
-)
-# These constructions do not establish absence of the named activity.
-# A quote with an equivocal negation is left unresolved conservatively.
+# Matching a topic word near "not" is not evidence that the topic was
+# negated. Only accept a simple, directly negated template action.
 _EQUIVOCAL_NEGATION = re.compile(
     r"\bnot\s+(?:only|just|merely|solely|exclusively|necessarily|"
-    r"always|without|unlike|uncommon)\b|\bno\s+(?:less|more)\s+than\b",
+    r"always|all|every|each|both|without|unlike|uncommon|"
+    r"fail(?:ed)?|avoid(?:ed)?|forget|neglect)\b|"
+    r"\bno\s+(?:less|more)\s+than\b",
+    re.IGNORECASE,
+)
+# Restrictions on *how, when, or which* activity occurred do not establish
+# absence of the activity itself ("not trained on labeled data").
+_RESTRICTED_NEGATIVE = re.compile(
+    r"\b(?:on|with|for|using|from|in|during|before|after|while|when|"
+    r"if|unless|except|under|within|that|which|whose|as|by)\b",
     re.IGNORECASE,
 )
 _TOPIC_IGNORED: Final[frozenset[str]] = frozenset({
@@ -435,7 +438,7 @@ def _source_quote_found(
 
 
 def _explicit_negative(quote: str, condition: str) -> bool:
-    """Check that a negative quote concerns the stated condition.
+    """Check that a quotation explicitly negates the template's action.
 
     Parameters
     ----------
@@ -447,48 +450,99 @@ def _explicit_negative(quote: str, condition: str) -> bool:
     Returns
     -------
     bool
-        True only for explicit, unambiguous lexical negation sharing a
-        topic stem with the condition in its negated clause. Constructions
-        such as "not only" do not establish absence elsewhere.
+        True only for an unqualified negation of a simple condition's
+        main action and subject matter. Partial quantifiers, double
+        negations, restricted actions, and contradictory clauses are
+        unresolved rather than evidence of absence.
+
+    Notes
+    -----
+    This conservative lexical test does not establish document-wide
+    absence. Unrecognized grammar deliberately yields ``False``.
 
     """
 
-    if not _NEGATION.search(quote) or _EQUIVOCAL_NEGATION.search(quote):
+    # A single "not" cannot disprove a disjunction of different actions.
+    if re.search(r"\b(?:or|and|either|neither)\b|[,;]", condition,
+                 flags=re.IGNORECASE):
         return False
+    match = re.search(r"\bdocuments?\s+([a-z]+)\b", condition,
+                      flags=re.IGNORECASE)
+    if match is None:
+        return False
+    verb = match.group(1).casefold()
+    if verb in {"is", "are", "was", "were", "has", "have", "does"}:
+        return False
+    base = (verb[:-3] + "y" if verb.endswith("ies") else
+            verb[:-1] if verb.endswith("s") else verb)
+    past = base + ("d" if base.endswith("e") else "ed")
+    forms = {verb, base, base + "s", past}
+    forms.add(base[:-1] + "ing" if base.endswith("e") else base + "ing")
+    action = r"(?:" + "|".join(re.escape(word) for word in sorted(forms))
+    action += r")"
+    negative = re.compile(
+        rf"\b(?:(?:did|do|does|have|has|had)\s+not|"
+        rf"(?:didn|don|doesn|haven|hasn|hadn)['’]?t)"
+        rf"\s+{action}\b|"
+        rf"\b(?:we|the study|the authors|the researchers|the team)"
+        rf"\s+never\s+{action}\b|"
+        rf"\b{action}\s+no\s+|"
+        rf"\bno\s+(?:[\w-]+\s+){{1,8}}"
+        rf"(?:was|were)\s+{re.escape(past)}\b",
+        re.IGNORECASE,
+    )
 
-    def topic_stems(text: str) -> set[str]:
-        """Return distinctive stems of a negative or its condition.
+    def stems(text: str) -> set[str]:
+        """Return distinctive word stems for conservative topic matching.
 
         Parameters
         ----------
         text: str
-            Source quotation or template condition.
+            A template condition or quoted clause.
 
         Returns
         -------
         set[str]
-            Topic stems with common framing words removed.
+            Five-letter stems excluding framing words and action forms.
 
         """
 
         return {
             word[:5] for word in re.findall(r"[a-z]{4,}", _plain(text))
-            if word not in _TOPIC_IGNORED
+            if word not in _TOPIC_IGNORED and word not in forms
         }
 
-    # Topic words elsewhere in the quote do not establish what was
-    # negated. For example, "trained a model without labeled data" is
-    # not evidence that no model was trained.
-    required = topic_stems(condition)
-    for match in _NEGATION.finditer(quote):
-        clause = re.split(
-            r"[;:,.!?]|\b(?:but|however|although|whereas)\b",
-            quote[match.start():], maxsplit=1, flags=re.IGNORECASE,
-        )[0]
-        local = " ".join(clause.split()[:12])
-        if topic_stems(local) & required:
-            return True
-    return False
+    required = stems(condition)
+    if not required:
+        return False
+    clauses = re.split(
+        r"[,;.!?]|\b(?:and|but|however|although|whereas|though)\b",
+        quote,
+        flags=re.IGNORECASE,
+    )
+    justified = False
+    for clause in clauses:
+        candidate = negative.search(clause)
+        if candidate:
+            if (_EQUIVOCAL_NEGATION.search(clause)
+                    or _RESTRICTED_NEGATIVE.search(clause)):
+                continue
+            # Negating only a specified model or a subset does not
+            # establish the absence of *any* matching activity.
+            remainder = clause[candidate.end():].strip()
+            if re.match(
+                r"(?:the|this|that|these|those|all|every|each|both|"
+                r"some|several|many|most|one|only)\b", remainder,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            if stems(clause) & required:
+                justified = True
+        elif re.search(rf"\b{action}\b", clause, re.IGNORECASE):
+            # An affirmative statement elsewhere in the same quotation
+            # invalidates a purported document-wide negative.
+            return False
+    return justified
 
 
 def _value_found(value: str, source: str) -> bool:

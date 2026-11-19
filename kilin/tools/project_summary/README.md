@@ -123,18 +123,22 @@ separately from source cards and model-generated notes:
 - `CHECK ...: NO` is **not** established by silence or by a general quote.
   A negative result requires an exact quotation with explicit negation
   and a topic term overlapping the template's `When:` clause in the
-  *negated clause*. Ambiguous constructions such as "not only", "not
-  necessarily" and "without labeled data" (when the condition asks
-  whether a model was trained) cannot establish absence. This is a
-  lexical check, not proof that the conclusion applies to the entire
-  document. Without clear evidence, the result is **unclear**.
+  *negated clause*. The negation must apply to the condition's main
+  action, not a related activity or a restricted subset. Double negatives
+  ("did not fail to train"), partial quantifiers ("not all"), and limited
+  conditions ("not trained on labeled data") remain **unclear**. For
+  compound ``When:`` conditions, negating one alternative is not enough.
+  This conservative lexical check cannot prove document-wide absence;
+  unfamiliar grammar also remains **unclear**.
 - Missing or invalid answers remain unclear. The model is instructed to
   copy quotations, entries and table values without inventing or silently
   normalizing them. Source validation is deterministic. It may trigger
   the existing bounded section-repair calls, but adds no checking model.
 
 The report identifies unclear documents and their reasons in each
-per-document section. Every unresolved check also makes the saved result
+per-document section. When no matches are verified but some documents are
+unresolved or unread, the section says "No confirmed matches" rather than
+claiming none exist. Every unresolved check also makes the saved result
 `status: partial`, `valid: false`, with details in the result metadata
 and its **Check** section. Unverified table values are never published
 as confirmed cells. A document whose call fails is reported as not read;

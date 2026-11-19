@@ -281,6 +281,68 @@ What the documents report.
                     self.assertNotIn("**Check**", saved)
                     self.assertNotIn("> **Partial report:**", saved)
 
+    def test_negative_report_stays_partial_without_clear_absence(
+        self,
+    ) -> None:
+        (self.templates / "lab_overview.md").write_text("""---
+title: Lab Overview
+description: A single-model classification report.
+max_words: 100
+scope: project
+---
+
+**Documents:** {documents}
+
+## Models (per document)
+
+When: the document trains a deep-learning model.
+Do: name the model.
+""")
+        for quote, complete in (
+            ("We did not fail to train a deep-learning model.", False),
+            ("The model was not trained on labeled data.", False),
+            ("Not all documents trained a deep-learning model.", False),
+            ("We did not train all deep-learning models.", False),
+            ("We did not train a deep-learning model but later trained one.",
+             False),
+            ("We did not train any deep-learning model.", True),
+        ):
+            with self.subTest(quote=quote):
+                self.chunks = [chunk("a", quote, path="a.md")]
+
+                def model(system, prompt, tokens):
+                    if "Document [1]" in prompt:
+                        return f"CHECK A: NO\nQUOTE A: {quote}"
+                    raise AssertionError(prompt)
+
+                result, _ = self._run(
+                    model=model, repair_attempts=0,
+                )
+                saved = (self.root / result.summary["report"]).read_text()
+                self.assertIs(result.summary["valid"], complete)
+                self.assertEqual(
+                    result.summary["status"],
+                    "complete" if complete else "partial",
+                )
+                if complete:
+                    self.assertEqual(result.summary["uncertain_checks"], [])
+                    self.assertIn("None of the 1 documents", saved)
+                    self.assertNotIn("**Partial report:**", saved)
+                else:
+                    self.assertEqual(
+                        result.summary["uncertain_checks"][0]["document"],
+                        1,
+                    )
+                    self.assertIn("> **Partial report:**", saved)
+                    self.assertIn(
+                        "No confirmed matches in 1 document.", saved,
+                    )
+                    self.assertIn("Unclear: [1]", saved)
+                    self.assertIn(
+                        "no explicit source-backed negative evidence", saved,
+                    )
+                    self.assertNotIn("None of the 1 documents", saved)
+
     def test_failed_document_and_groups(self) -> None:
         def model(system, prompt, tokens):
             if "Document [2]" in prompt:
@@ -783,8 +845,13 @@ class TestReduce(unittest.TestCase):
         )
         notes[1] = DocumentNotes(1, checks={"Models": Check("no")})
         self.assertEqual(per_document_markdown(section, documents, notes),
-                         "None of the 4 documents. Unclear: [3] (no "
+                         "No confirmed matches among 4 documents. "
+                         "Unclear: [3] (no "
                          "answer). Not read: [4].")
+        notes[3] = DocumentNotes(3, checks={"Models": Check("no")})
+        notes[4] = DocumentNotes(4, checks={"Models": Check("no")})
+        self.assertEqual(per_document_markdown(section, documents, notes),
+                         "None of the 4 documents.")
         self.assertEqual(documents_line(documents[:1]),
                          "1 document, listed at the end of the report [1].")
         self.assertIn("[4] Doc 4 (`4.md`)", documents_list(documents))

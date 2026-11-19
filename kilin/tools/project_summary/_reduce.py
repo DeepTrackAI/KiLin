@@ -1145,7 +1145,8 @@ def per_document_markdown(
         ("Unclear: [4] (the quoted words are not in the document).") and
         those not read; then one "- **Title**: entry [n]" line per matching
         document, or for a table a Markdown table with a Document column.
-        "None of the documents" when none match.
+        "None of the documents" only when every document was checked;
+        otherwise "No confirmed matches" when none are established.
 
     """
 
@@ -1170,6 +1171,9 @@ def per_document_markdown(
     count = (
         f"{len(matching)} of {len(documents)} documents."
         if matching else
+        ("No confirmed matches in 1 document." if len(documents) == 1
+         else f"No confirmed matches among {len(documents)} documents.")
+        if unclear or unread else
         f"None of the {len(documents)} documents."
     )
     if unclear:

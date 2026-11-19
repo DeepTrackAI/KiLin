@@ -378,5 +378,85 @@ class TestEvidenceValidation(unittest.TestCase):
         self.assertEqual(result.checks["Models"].answer, CHECK_NO)
 
 
+    def test_negative_classifications_require_unrestricted_absence(
+        self,
+    ) -> None:
+        ambiguous = (
+            "We did not fail to train a deep-learning model.",
+            "The model was not trained on labeled data.",
+            "Not all documents trained a deep-learning model.",
+            "We did not train all deep-learning models.",
+            "We did not train the deep-learning model.",
+            "We did not train a deep-learning model on labeled data.",
+            "We did not train a deep-learning model in 2025.",
+            "We did not evaluate the deep-learning model training.",
+            "We did not train any model but later trained one.",
+            "We did not train a model, and did train another model.",
+            "We did not train a model, we trained another model.",
+            "We did not train a model even though another was trained.",
+            "The authors did not report training a deep-learning model.",
+        )
+        for quote in ambiguous:
+            with self.subTest(quote=quote):
+                result = parse_notes(
+                    f"CHECK A: NO\nQUOTE A: {quote}",
+                    TEMPLATE, 1, quote, source_passages=(quote,),
+                )
+                check = result.checks["Models"]
+                self.assertEqual(check.answer, CHECK_UNCLEAR)
+                self.assertEqual(
+                    check.why, "no explicit source-backed negative evidence"
+                )
+
+    def test_unqualified_negative_actions_remain_supported(self) -> None:
+        direct = (
+            "We did not train any deep-learning model.",
+            "We did not train a deep-learning model.",
+            "We didn't train a deep-learning model.",
+            "We have not trained a deep-learning model.",
+            "We never trained a deep-learning model.",
+            "We trained no deep-learning model.",
+            "No deep-learning model was trained.",
+        )
+        for quote in direct:
+            with self.subTest(quote=quote):
+                check = parse_notes(
+                    f"CHECK A: NO\nQUOTE A: {quote}",
+                    TEMPLATE, 1, quote, source_passages=(quote,),
+                ).checks["Models"]
+                self.assertEqual(check.answer, CHECK_NO)
+
+        other = "We did not use any public dataset."
+        check = parse_notes(
+            f"CHECK B: NO\nQUOTE B: {other}",
+            TEMPLATE, 1, other, source_passages=(other,),
+        ).checks["Datasets"]
+        self.assertEqual(check.answer, CHECK_NO)
+
+    def test_one_negated_part_does_not_disprove_an_or_condition(
+        self,
+    ) -> None:
+        compound = parse_template("""---
+title: Broad Review
+description: A test of a disjunctive condition.
+max_words: 100
+scope: project
+---
+
+**Documents:** {documents}
+
+## Research (per document)
+
+When: the document reports original research or a dataset.
+Do: name what was reported.
+""", "broad_review", TemplateRules(0.1, 50))
+        quote = "We did not report original research."
+        check = parse_notes(
+            f"CHECK A: NO\nQUOTE A: {quote}",
+            compound, 1, quote, source_passages=(quote,),
+        ).checks["Research"]
+        self.assertEqual(check.answer, CHECK_UNCLEAR)
+
+
 if __name__ == "__main__":
     unittest.main()
