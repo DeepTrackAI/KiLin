@@ -182,21 +182,58 @@
         "indexing": "never",
         "read": false
       }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files and what it does with them: how to add, upload, import, attach, drag, or remove files or folders ('how do I add my papers?', 'how to drag files', 'can I upload a folder?', 'what do you mean by adding files?', 'what do you do with my files?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "(how (do|can|should) i|how to|can i|where (do|should|can) i) (add|upload|import|attach|drag|drop|put|place|remove|delete)( and drop| in)? (my |a |the |some |more |new |these |this |our )?(whole |own |other )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?",
+        "what do you mean( by)? (add|adding|upload|uploading|attach|attaching|import|importing|sources?|files?)( .*)?",
+        "what (do|will|can) you do (with|to|for) (my|the|these|our) (files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
+      ]
     }
   },
   "welcome_prompts": [
     "What research problem shall we approach in a completely unconventional way?",
     "Which established assumption should we overturn today?",
-    "Shall we invent ideas unconstrained by current methods or literature?"
+    "Shall we invent ideas unconstrained by current methods or literature?",
+    "Paste an idea to push further, or ask what I can do for you."
+  ],
+  "welcome_templates": [
+    "What if we rethought {theme} from scratch?",
+    "Which assumption about {theme} should we overturn today?"
   ],
   "suggestions": [
-    "Invent five wildly different hypotheses about ...",
-    "Give me your most audacious, out-of-the-box explanation for ...",
-    "What if the central assumption in this field were exactly backwards?",
-    "Find a surprising connection between ... and an unrelated field",
-    "Go further: make this idea even more radical",
-    "Use my project papers as inspiration for unconventional hypotheses",
-    "Develop the wildest idea into predictions and experiments",
-    "Which factual premises of this speculation are supported by sources?"
-  ]
+    "What can you do for me?",
+    "How do I add my files?",
+    "Invent five wildly different hypotheses about why we dream.",
+    "Invent five wildly different hypotheses about why we yawn.",
+    "Invent five wildly different hypotheses about why some birds migrate at night.",
+    "Invent five wildly different hypotheses about why music gives us chills.",
+    "Invent five wildly different hypotheses about why we laugh."
+  ],
+  "suggestion_templates": {
+    "research_context": "What do the papers say about {topic}?",
+    "open_ideation": "Invent five wildly different hypotheses about {topic}.",
+    "grounded_ideation": [
+      "Use my project papers as inspiration for unconventional hypotheses about {topic}.",
+      "Use {file} as inspiration for three unconventional hypotheses."
+    ],
+    "evidence_check": "Which premises about {topic} are supported by the project sources?",
+    "cross_domain": "Find a surprising connection between {topic} and an unrelated field.",
+    "challenge_assumptions": [
+      "What if the central assumption about {topic} were exactly backwards?",
+      "What if the central assumption of {file} were wrong?"
+    ],
+    "assistant_help": "What can you do for me?"
+  }
 }

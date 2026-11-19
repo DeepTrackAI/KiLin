@@ -89,6 +89,10 @@ Module Structure
 
     Packaged folder with one JSON file per project type.
 
+- ``SUGGESTION_PLACEHOLDERS``
+
+    Names a suggested-question template may fill in, such as ``{file}``.
+
 - ``RETRIEVAL_MODE_SEARCH``, ``RETRIEVAL_MODE_DOCUMENT``,
   ``RETRIEVAL_MODE_REUSE``, and ``RETRIEVAL_MODE_NONE``
 
@@ -215,6 +219,7 @@ __all__ = [
     "RETRIEVAL_STRATEGY_CHOICES",
     "RETRIEVAL_STRATEGY_HYBRID",
     "RETRIEVAL_STRATEGY_SOURCE_FIRST",
+    "SUGGESTION_PLACEHOLDERS",
     "CodeGraphSetting",
     "ConversationMemorySettings",
     "HistoryPolicy",
@@ -238,6 +243,13 @@ PROJECT_TYPES_DIR: Final[Path] = Path(__file__).parent / "project_types"
 # Project type and intent IDs are short, lowercase, and safe in file names
 # and in ``profile.ini``.
 _ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+# What a suggested-question template may fill in: a source file name, a
+# second, different one, a topic of the sources, an exact term in them, and
+# a broad theme of the whole collection.
+SUGGESTION_PLACEHOLDERS: Final[tuple[str, ...]] = (
+    "file", "file2", "topic", "term", "theme",
+)
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"\{([a-z0-9]+)\}")
 
 # Which earlier turns an intent includes as conversation history.
 HistoryPolicy: TypeAlias = Literal["none", "recent", "relevant"]
@@ -515,9 +527,21 @@ class ProjectType:
         Default answer instruction applied by the core to all callers
         unless overridden by the caller or selected intent; empty for none.
     welcome_prompts: tuple[str, ...]
-        Headings the desktop app shows in an empty chat.
+        Headings the desktop app shows in an empty chat when there are no
+        headings about the project's own sources.
+    welcome_templates: tuple[str, ...]
+        Fill-in headings, such as "What would you like to understand about
+        {theme}?", from which ``kilin.question_suggestions`` writes
+        headings about the project's own sources. Empty when the type has
+        none.
     suggestions: tuple[str, ...]
-        Example requests the desktop app shows in an empty chat.
+        Ready-to-send requests the desktop app shows in an empty chat when
+        there are too few questions about the project's own sources.
+    suggestion_templates: tuple[tuple[str, str], ...]
+        Intent ID and fill-in question pairs, in file order (an intent may
+        have several), from which ``kilin.question_suggestions`` writes
+        questions about the project's own sources, such as "Give me a
+        short summary of {file}.". Empty when the type has none.
     source_cards_enabled: bool
         Enable the optional independent source-card index.
     source_card_kind: str | None
@@ -550,7 +574,9 @@ class ProjectType:
     intents: dict[str, Intent]
     answer_guidance: str = ""
     welcome_prompts: tuple[str, ...] = ()
+    welcome_templates: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
+    suggestion_templates: tuple[tuple[str, str], ...] = ()
     document_headers: bool = False
     source_cards_enabled: bool = False
     source_card_kind: str | None = None
@@ -677,6 +703,116 @@ def _texts(type_id: str, data: dict, field: str) -> tuple[str, ...]:
         )
 
     return tuple(item.strip() for item in value)
+
+
+def _suggestion_templates(
+    type_id: str, data: dict, intents: dict[str, Intent]
+) -> tuple[tuple[str, str], ...]:
+    """Return the fill-in suggested questions, checked against the intents.
+
+    Parameters
+    ----------
+    type_id: str
+        Registered project-type identifier to validate.
+    data: dict
+        Project-type JSON object.
+    intents: dict[str, Intent]
+        The type's parsed intents.
+
+    Returns
+    -------
+    tuple[tuple[str, str], ...]
+        Intent ID and stripped template pairs, in file order; an intent
+        with a list of templates gives one pair per template. Empty when
+        the field is missing.
+
+    Raises
+    ------
+    ValueError
+        If the field is not an object, names an unknown intent, or has a
+        value that is not nonblank text or a nonempty list of it, or a
+        placeholder other than ``SUGGESTION_PLACEHOLDERS``.
+
+    """
+
+    field = "suggestion_templates"
+    templates = _object(type_id, data, field)
+    pairs: list[tuple[str, str]] = []
+    for intent_id, value in templates.items():
+        if intent_id not in intents:
+            raise ValueError(
+                f"Project type {type_id!r} {field} names unknown intent "
+                f"{intent_id!r}."
+            )
+        values = value if isinstance(value, list) and value else [value]
+        for template in values:
+            _check_template(type_id, f"{field}.{intent_id}", template)
+            pairs.append((intent_id, template.strip()))
+    return tuple(pairs)
+
+
+def _welcome_templates(type_id: str, data: dict) -> tuple[str, ...]:
+    """Return the fill-in welcome headings, with their placeholders checked.
+
+    Parameters
+    ----------
+    type_id: str
+        Registered project-type identifier to validate.
+    data: dict
+        Project-type JSON object.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Stripped templates, in file order; empty when the field is missing.
+
+    Raises
+    ------
+    ValueError
+        If the field is not a list of nonblank text, or a template has a
+        placeholder other than ``SUGGESTION_PLACEHOLDERS``.
+
+    """
+
+    templates = _texts(type_id, data, "welcome_templates")
+    for position, template in enumerate(templates):
+        _check_template(type_id, f"welcome_templates[{position}]", template)
+    return templates
+
+
+def _check_template(type_id: str, where: str, template: object) -> None:
+    """Check one fill-in suggested question.
+
+    Parameters
+    ----------
+    type_id: str
+        Registered project-type identifier to validate.
+    where: str
+        Location for errors, such as ``suggestion_templates.paper_overview``.
+    template: object
+        Value from the JSON file.
+
+    Raises
+    ------
+    ValueError
+        If the template is not nonblank text or uses a placeholder other
+        than ``SUGGESTION_PLACEHOLDERS``.
+
+    """
+
+    if not isinstance(template, str) or not template.strip():
+        raise ValueError(
+            f"Project type {type_id!r} {where} must be nonblank text."
+        )
+    names = set(_PLACEHOLDER.findall(template))
+    leftover = _PLACEHOLDER.sub("", template)
+    if names - set(SUGGESTION_PLACEHOLDERS) or re.search(r"[{}]", leftover):
+        raise ValueError(
+            f"Project type {type_id!r} {where} may use only the "
+            "placeholders "
+            + ", ".join(f"{{{name}}}" for name in SUGGESTION_PLACEHOLDERS)
+            + "."
+        )
 
 
 def _object(type_id: str, data: dict, field: str) -> dict:
@@ -985,7 +1121,9 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             "intents",
             "answer_guidance",
             "welcome_prompts",
+            "welcome_templates",
             "suggestions",
+            "suggestion_templates",
         ),
     )
     extensions = _texts(type_id, data, "extensions")
@@ -1192,7 +1330,9 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             type_id, data, "answer_guidance", required=False
         ),
         welcome_prompts=_texts(type_id, data, "welcome_prompts"),
+        welcome_templates=_welcome_templates(type_id, data),
         suggestions=_texts(type_id, data, "suggestions"),
+        suggestion_templates=_suggestion_templates(type_id, data, intents),
         document_headers=document_headers,
         source_cards_enabled=source_cards_enabled,
         source_card_kind=source_card_kind,

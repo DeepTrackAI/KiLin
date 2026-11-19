@@ -64,6 +64,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/project_layout.py`](../kilin/project_layout.py) | Plan and materialize a project's core folders and tool resources. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
 | [`kilin/project_type.py`](../kilin/project_type.py) | Load project types from the JSON files in ``kilin/project_types/``. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
 | [`kilin/query_formats.py`](../kilin/query_formats.py) | Define the supported embedding-query formats and Qwen3 query formatter. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
+| [`kilin/question_suggestions.py`](../kilin/question_suggestions.py) | Write suggested questions about a project's own sources. | [Configuration](configuration.md) | [Core tests](../tests/kilin/test_question_suggestions.py) |
 | [`kilin/rag.py`](../kilin/rag.py) | Coordinate retrieval, chat generation, and resumable project conversations. | [Answering pipeline](answering_pipeline.md) | [Core tests](../tests/kilin/) |
 | [`kilin/repository.py`](../kilin/repository.py) | Select local source files and compare content manifests. | [Source pipeline](source_pipeline.md) | [Core tests](../tests/kilin/) |
 | [`kilin/repository_reason_codes.py`](../kilin/repository_reason_codes.py) | Load canonical repository-selection reasons shared with the GUI. | [Source pipeline](source_pipeline.md) | [Core tests](../tests/kilin/) |
@@ -151,6 +152,9 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/_shared/sentences.py`](../kilin/tools/_shared/sentences.py) | Split indexed text into distinct sentences with source positions. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/term_filter.py`](../kilin/tools/_shared/term_filter.py) | Find the passages that mention the exact terms of a question. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/terms.py`](../kilin/tools/_shared/terms.py) | Extract and validate exact search terms for registered tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/assistant_guide/__init__.py`](../kilin/tools/assistant_guide/__init__.py) | Expose the registered ``assistant_guide`` tool. | [Per-tool README](../kilin/tools/assistant_guide/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/assistant_guide/_configuration.py`](../kilin/tools/assistant_guide/_configuration.py) | Validate the defaults owned by the assistant_guide tool. | [Per-tool README](../kilin/tools/assistant_guide/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/assistant_guide/tool.py`](../kilin/tools/assistant_guide/tool.py) | Answer "What can you do for me?" with examples about the project. | [Per-tool README](../kilin/tools/assistant_guide/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/batch_classify/__init__.py`](../kilin/tools/batch_classify/__init__.py) | Expose the registered ``batch_classify`` tool. | [Per-tool README](../kilin/tools/batch_classify/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/batch_classify/_configuration.py`](../kilin/tools/batch_classify/_configuration.py) | Validate the defaults owned by the batch_classify tool. | [Per-tool README](../kilin/tools/batch_classify/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/batch_classify/tool.py`](../kilin/tools/batch_classify/tool.py) | Tool ``batch_classify``: label every exact mention, in batches. | [Per-tool README](../kilin/tools/batch_classify/README.md) | [Tool tests](../tests/kilin/tools/) |
@@ -218,12 +222,12 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | --- | ---: |
 | Answering pipeline | 4 |
 | Architecture | 2 |
-| Configuration | 6 |
+| Configuration | 7 |
 | Conversation ownership | 4 |
 | Conversation memory | 8 |
 | GUI architecture | 10 |
 | Model management | 8 |
-| Per-tool README | 56 |
+| Per-tool README | 59 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 32 |
 | Source pipeline | 23 |
@@ -231,7 +235,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 189.**
+**Total production Python modules: 193.**
 
 ## Non-Python resources and UI assets
 

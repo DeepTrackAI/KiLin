@@ -278,6 +278,15 @@ class ToolContext:
         decoding, such as whether the passages found answer the question;
         the conversation is untouched. None for contexts without it, where
         tools fall back to ``ask_router``. Defaults to ``None``.
+    suggestions: Callable[[], Sequence[object]] | None, optional
+        Returns the project's suggested questions, each with ``intent`` and
+        ``question`` (``kilin.question_suggestions.Suggestion``), possibly
+        several per intent, without those of the intent being answered;
+        empty without sources. None for contexts without them. Defaults to
+        ``None``.
+    fixed_suggestions: tuple[str, ...], optional
+        The project type's fixed example requests, for a project without
+        sources. Defaults to ``()``.
 
     """
 
@@ -304,6 +313,8 @@ class ToolContext:
     source_root: Path | None = None
     card: Callable[[Path], Mapping[str, str] | None] | None = None
     ask_check: Callable[[str, str, int], str] | None = None
+    suggestions: Callable[[], Sequence[object]] | None = None
+    fixed_suggestions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

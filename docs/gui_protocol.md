@@ -449,7 +449,7 @@ can accompany an event.
 | Installation | `installation_started` (`total`, `backend`, `models`: the missing models in download order); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
 | Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether a saved folder is unavailable, `legacy`: previous installed-app root with candidate profiles, or empty); `projects_folder_cancelled` (native Browse dialog dismissed); `projects_folder_failed` (`message`: unable to save or old folder no longer exists) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `source_cards_applied` (validated settings and card counts), `source_cards_regenerated` (card counts); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `project_behavior` (validated project editor, defaults, revision, and correlated saved or error status); `settings_info` (validated core/tool descriptive catalog), `settings_info_failed` (metadata diagnostic only); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
-| Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
+| Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `question_suggestions` (`project`; `questions`, each with `intent` and `question`: ready-to-send example questions about the project's own sources; and `welcome`: headings about the same sources for the top of an empty chat; sent just before every `opened` of that project and before the `conversation_opened` of each new empty chat, chosen anew each time; an empty list keeps the project type's fixed suggestions or welcome prompts); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
 | Conversation memory | `conversation_feedback` (project, revision, entries or error); `message_feedback` (request ID, turn UUID/role, revision/entries or error); `memory_messages` (paged authoritative inventory); `memory_summaries` (request-correlated trace text or error); `memory_exclusion` (correlated exclusion update or error); `memory_status` (last indexed counts, enabled, stale feedback); `memory_sync_started`, `memory_synced`, `memory_sync_failed` (project, embedded count or error status) |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_activity` (`index`, `phase`, `label`, `started_ms`); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |
@@ -457,6 +457,26 @@ can accompany an event.
 | Creation conflict | `workspace_conflict` (`workspace`, `existing_project`, `message`); current session remains active and destination is unchanged |
 | Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`; `resume_released` for saved-project opening failures); `backend_failed` (`message`) |
 | Process recovery | `stopped` (optional `removed_projects`: empty creation claims removed; `preserved_projects`: known workspaces left intact); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
+
+### Source-aware empty-chat questions
+
+The `question_suggestions` event uses **saved** topic and term words only.
+Project activation and creation do not trigger a router-model generation.
+When a valid pool is unavailable, file-name-only questions can still be
+shown immediately; the remaining slots use the configured fixed suggestions.
+The `assistant_guide` tool may generate and save a source-specific pool when
+explicitly invoked. Subsequent empty chats reuse it and vary their choices
+without new model calls. Cache keys include the router model, indexed
+passages, and whether the project prefers code or documents. Existing
+suggestion pools from the previous format are regenerated on demand.
+
+Saved project overrides of `welcome_prompts` or `suggestions` take precedence
+over generated landing content. For mixed-source projects, code projects
+prefer code files, while other project types prefer relevant documents;
+accepted topics and themes must appear together in an indexed passage of
+one of those files. A received suggestion event updates an already visible
+empty chat and remains available for an ensuing `opened` event for the same
+project.
 
 `answered.turn.parameters.model_summary` is a core-produced model
 description that includes the active chat model, thinking, `T=`,

@@ -33,11 +33,15 @@ class TestProjectTypeFrontend(unittest.TestCase):
         source = (_ROOT / "kilin/gui/web/app.js").read_text(encoding="utf-8")
         functions = [
             extract_function(source, name)
-            for name in ("renderProjectTypes", "renderConversationEmpty")
+            for name in (
+                "renderProjectTypes", "chooseSuggestions",
+                "renderConversationEmpty",
+            )
         ]
         state = []
         for prefix in (
             "let activeProjectTypeId", "const lastEmptyPrompt",
+            "const lastEmptySuggestions",
             "let projectTypes", "const genericEmptyChat",
         ):
             start = source.index(prefix)
@@ -66,6 +70,7 @@ const renderSavedProjects = () => {};
 let savedProjects = [];
 let openProjectPath = "";
 let projectPresentation = null;
+let sourceQuestions = [];
 let ready = false;
 '''
         script += "\n".join([*state, *functions])
@@ -106,3 +111,56 @@ console.log("registry rendering passed");
         result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("registry rendering passed", result.stdout)
+
+    def test_source_questions_come_first_and_fixed_ones_fill_up(self):
+        """Offer three source questions, or fill up with fixed ones."""
+
+        source = (_ROOT / "kilin/gui/web/app.js").read_text(encoding="utf-8")
+        script = r'''
+const assert = require("node:assert/strict");
+''' + extract_function(source, "chooseSuggestions") + r'''
+const fixed = ["Fixed first", "Fixed two", "Fixed three"];
+const questions = [
+  {intent: "a", question: "A1"}, {intent: "a", question: "A2"},
+  {intent: "b", question: "B1"}, {intent: "c", question: "C1"},
+  {intent: "d", question: "D1"},
+];
+const intentOf = (text) =>
+  questions.find((item) => item.question === text).intent;
+for (let run = 0; run < 20; run += 1) {
+  const picked = chooseSuggestions(questions, fixed);
+  assert.equal(picked.length, 3);
+  assert.equal(new Set(picked.map(intentOf)).size, 3);
+}
+const seen = new Set();
+for (let run = 0; run < 200; run += 1) {
+  seen.add(...chooseSuggestions(questions.slice(0, 2), []));
+}
+assert.deepEqual([...seen].sort(), ["A1", "A2"]);
+const one = [{intent: "a", question: "A1"}];
+assert.deepEqual(chooseSuggestions(one, fixed).slice(0, 2),
+                 ["A1", "Fixed first"]);
+assert.equal(chooseSuggestions(one, fixed).length, 3);
+// Without source questions: the first two fixed ones, then one other.
+const many = ["Help", "Add files", "X", "Y", "Z"];
+const thirds = new Set();
+for (let run = 0; run < 200; run += 1) {
+  const shown = chooseSuggestions([], many);
+  assert.deepEqual(shown.slice(0, 2), ["Help", "Add files"]);
+  thirds.add(shown[2]);
+}
+assert.deepEqual([...thirds].sort(), ["X", "Y", "Z"]);
+// The next empty chat shows another example than the last one.
+let shown = chooseSuggestions([], many);
+for (let run = 0; run < 50; run += 1) {
+  const next = chooseSuggestions([], many, shown);
+  assert.notEqual(next[2], shown[2]);
+  shown = next;
+}
+assert.deepEqual(chooseSuggestions([], ["Only"]), ["Only"]);
+assert.deepEqual(chooseSuggestions([], []), []);
+console.log("suggestion choice passed");
+'''
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("suggestion choice passed", result.stdout)

@@ -767,6 +767,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "memory_summaries",
             "message_feedback",
             "progress", "projects", "projects_folder", "readiness",
+            "question_suggestions",
             "projects_folder_cancelled", "projects_folder_failed",
             "reference_error",
             "reference_preview", "reset", "settings", "source_changes",

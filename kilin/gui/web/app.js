@@ -183,6 +183,9 @@ let selectedDepthStep = 2;
 let resumeAfterStop = false;
 let activeProjectTypeId = "";
 const lastEmptyPrompt = Object.create(null);
+// Suggestions shown in each type's last empty chat, so the next one
+// shows another fixed example.
+const lastEmptySuggestions = Object.create(null);
 let messageAttachments = [];
 // A question whose attached files are being added to sources; it is asked
 // once the index is refreshed.
@@ -1715,6 +1718,14 @@ function renderToolSettings(data) {
 let projectBehaviorData = null;
 let behaviorSave = { nextId: 0, pending: null };
 let projectPresentation = null;
+// Ready-to-send questions about the open project's sources, as
+// {intent, question}, up to three per intent, and welcome headings about
+// them; empty means none. The question_suggestions event comes just before
+// its project's "opened" event, which takes them from pending, and before
+// each new empty chat of the open project, which uses them at once.
+let sourceQuestions = [];
+let sourceWelcome = [];
+let pendingSourceQuestions = null;
 let feedbackData = { project: "", revision: "", entries: {} };
 let feedbackSave = { nextId: 0, pending: null };
 let memoryIndexState = null;
@@ -2877,13 +2888,43 @@ function pointToProjectsFolder() {
 
 /**
  * Briefly highlight an element (see `.attention` in the styles).
+ * The class is removed when the animation ends; left on, it would replay
+ * whenever the element is shown again, such as when a project opens.
  * @param element Button or message to point to.
+ * @param then Called once the highlight has ended, if given.
  */
-function drawAttention(element) {
+function drawAttention(element, then) {
   // Restarting the animation highlights again on every reminder.
   element.classList.remove("attention");
   void element.offsetWidth;
   element.classList.add("attention");
+  const finish = (event) => {
+    // Animations of child elements bubble up; wait for this one.
+    if (event.target !== element) return;
+    element.removeEventListener("animationend", finish);
+    element.classList.remove("attention");
+    then?.();
+  };
+  element.addEventListener("animationend", finish);
+}
+
+/**
+ * After an assistant_guide answer, which explains how to add files, flash
+ * the composer's + button and then the sources folder in the Workspace
+ * panel.
+ * @param turn The finished turn.
+ */
+function pointToSourceControls(turn) {
+  const parameters = turn.parameters || {};
+  if (parameters.tool?.name !== "assistant_guide") return;
+  const attach = byId("attach-button");
+  // Looked up when its turn comes: the file tree may be redrawn meanwhile.
+  const flashSources = () => {
+    const sources = byId("workspace-source-drop");
+    if (sources) drawAttention(sources);
+  };
+  if (attach) drawAttention(attach, flashSources);
+  else flashSources();
 }
 
 /**
@@ -6308,14 +6349,68 @@ function clearAskingConversation() {
 }
 
 /**
+ * Pick the three questions an empty chat offers.
+ *
+ * With packaged defaults, source-grounded questions come first: three
+ * intents at random, each with one question at random. Project-customized
+ * suggestions suppress generated ones in ``renderConversationEmpty``.
+ * When there are fewer than three intents, for example without
+ * sources, the type's fixed suggestions fill the rest: its first two
+ * ("What can you do for me?" and "How do I add my files?"), then one of
+ * the others at random, so each new chat can show another example.
+ * The examples shown last time are skipped while there are others.
+ *
+ * @param questions Ready-to-send {intent, question} items.
+ * @param fixed The project type's fixed suggestions.
+ * @param shownBefore Texts shown in the last empty chat.
+ * @returns Up to three distinct texts.
+ */
+function chooseSuggestions(questions, fixed, shownBefore = []) {
+  const shuffled = (items) => [...items].sort(() => Math.random() - 0.5);
+  const intents = new Set();
+  const picked = [];
+  for (const item of shuffled(questions)) {
+    if (intents.has(item.intent)) continue;
+    intents.add(item.intent);
+    picked.push(item.question);
+  }
+  const [first, second, ...rest] = fixed;
+  const unseen = rest.filter((text) => !shownBefore.includes(text));
+  const examples = [...shuffled(unseen), ...shuffled(rest)];
+  const pool = [...picked, first, second, ...examples];
+  return [...new Set(pool.filter(Boolean))].slice(0, 3);
+}
+
+/**
+ * Check whether a project's saved landing text overrides the type default.
+ *
+ * Source-generated text is supplemental; an explicit project setting
+ * takes precedence, even if an older generated pool is still in memory.
+ *
+ * @param field Either "suggestions" or "welcome_prompts".
+ * @returns Whether the saved values differ from the packaged type.
+ */
+function hasCustomLandingText(field) {
+  const saved = projectPresentation?.[field];
+  const packaged = projectTypes[activeProjectTypeId]?.[field];
+  return Array.isArray(saved) && Array.isArray(packaged)
+    && (saved.length !== packaged.length
+      || saved.some((item, index) => item !== packaged[index]));
+}
+
+/**
  * Render the project-type welcome screen for an empty conversation.
  */
 function renderConversationEmpty() {
   conversation.replaceChildren();
   const type = projectPresentation && openProjectPath
     ? projectPresentation : projectTypes[activeProjectTypeId] || {};
+  const fixedPrompts = type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts;
   const content = {
-    prompts: type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts,
+    // Headings about the project's own sources replace the fixed ones.
+    prompts: openProjectPath && sourceWelcome.length
+      && !hasCustomLandingText("welcome_prompts")
+      ? sourceWelcome : fixedPrompts,
     suggestions: type.suggestions?.length ? type.suggestions : genericEmptyChat.suggestions,
   };
   let promptIndex = Math.floor(Math.random() * content.prompts.length);
@@ -6329,9 +6424,11 @@ function renderConversationEmpty() {
   prompt.textContent = content.prompts[promptIndex];
   const suggestions = document.createElement("div");
   suggestions.className = "prompt-suggestions";
-  // The type's first suggestion is always shown; two others vary.
-  const [first, ...rest] = content.suggestions;
-  const choices = [first, ...rest.sort(() => Math.random() - 0.5).slice(0, 2)].filter(Boolean);
+  const source = openProjectPath && !hasCustomLandingText("suggestions")
+    ? sourceQuestions : [];
+  const choices = chooseSuggestions(source, content.suggestions,
+    lastEmptySuggestions[activeProjectTypeId] || []);
+  lastEmptySuggestions[activeProjectTypeId] = choices;
   for (const text of choices) {
     const button = document.createElement("button");
     button.type = "button";
@@ -6992,6 +7089,7 @@ function completePendingTurn(turn) {
   bindAnswerSelection(current.answer, current.item, turn);
   renderAnswer(current.answer, turn, current.item, current.thinkingMs);
   addMessageActions(current.item, turn);
+  pointToSourceControls(turn);
   refreshFeedbackControls();
   if (reading?.live) {
     renderConversations(lastConversationData);
@@ -7526,6 +7624,11 @@ function onEvent(raw) {
       displayedMemoryProject = "";
       displayedMemoryRevision = "";
     }
+    const pending = pendingSourceQuestions?.project === data.project
+      ? pendingSourceQuestions : null;
+    sourceQuestions = pending?.questions || [];
+    sourceWelcome = pending?.welcome || [];
+    pendingSourceQuestions = null;
     openProjectPath = data.project;
     projectPresentation = data.behavior_presentation || null;
     requestProjectBehavior();
@@ -7569,6 +7672,15 @@ function onEvent(raw) {
       attachedAsk = null;
       sendQuestion(ask);
     }
+  } else if (data.event === "question_suggestions") {
+    const questions = (data.questions || []).filter((item) => item?.question);
+    const welcome = (data.welcome || []).filter((text) => typeof text === "string" && text);
+    if (data.project === openProjectPath) {
+      sourceQuestions = questions;
+      sourceWelcome = welcome;
+      if (conversation.querySelector(".conversation-empty")) renderConversationEmpty();
+    }
+    pendingSourceQuestions = { project: data.project, questions, welcome };
   } else if (data.event === "conversation_opened") {
     finishStopping();
     reading = null;
@@ -8375,6 +8487,9 @@ function returnToLaunch() {
   bridge.closeProject();
   openProjectPath = "";
   projectPresentation = null;
+  sourceQuestions = [];
+  sourceWelcome = [];
+  pendingSourceQuestions = null;
   projectBehaviorData = null;
   behaviorSave.pending = null;
   feedbackData = { project: "", revision: "", entries: {} };

@@ -236,21 +236,47 @@
       "tool": {
         "name": "writing_check"
       }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files and what it does with them: how to add, upload, import, attach, drag, or remove files or folders ('how do I add my papers?', 'how to drag files', 'can I upload a folder?', 'what do you mean by adding files?', 'what do you do with my files?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "(how (do|can|should) i|how to|can i|where (do|should|can) i) (add|upload|import|attach|drag|drop|put|place|remove|delete)( and drop| in)? (my |a |the |some |more |new |these |this |our )?(whole |own |other )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?",
+        "what do you mean( by)? (add|adding|upload|uploading|attach|attaching|import|importing|sources?|files?)( .*)?",
+        "what (do|will|can) you do (with|to|for) (my|the|these|our) (files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
+      ]
     }
   },
   "welcome_prompts": [
     "I can help locate, verify, and compare evidence, but I cannot evaluate a submission or write a review.",
-    "Which manuscript, proposal, or supporting source would you like to examine?",
-    "What factual information, references, or passages should I check?"
+    "Which document or claim shall we check?",
+    "Add the documents to check, or ask what I can do for you."
+  ],
+  "welcome_templates": [
+    "What would you like to check in this work on {theme}?",
+    "Which claims about {theme} should we examine against the sources?"
   ],
   "suggestions": [
-    "Extract the stated objectives and methods with citations",
-    "List the sample sizes and experimental conditions reported",
-    "Read the document and summarize its factual contents",
-    "Find exact passages about controls and stated limitations",
-    "Check bibliography entries and citation evidence",
-    "Compare reported methods across two sources without evaluating them",
-    "Show the original passage supporting the previous answer",
-    "Proofread my own reviewer comments without adding judgments"
-  ]
+    "What can you do for me?",
+    "How do I add my files?"
+  ],
+  "suggestion_templates": {
+    "question_answering": "What are the stated objectives of {file}?",
+    "fact_finding": "List the sample sizes reported in {file}.",
+    "document_reading": "Read {file} and summarize its factual contents.",
+    "passage_finding": "Find the passages about {topic} in the documents.",
+    "reference_check": "Check the references of {file}.",
+    "compare_sources": "Compare the reported methods of {file} and {file2} without evaluating them.",
+    "writing_check": "Check the grammar and spelling of {file}.",
+    "assistant_help": "What can you do for me?"
+  }
 }
