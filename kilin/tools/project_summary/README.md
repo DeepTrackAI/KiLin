@@ -170,7 +170,10 @@ other documents continue.
   scientific exponents (`5e-3`) and comparison direction. The existing
   word-overlap check uses the clause preceding each citation and
   compares distinctive word stems against the original indexed passages,
-  ignoring vocabulary common to most documents. If the cited document
+  ignoring vocabulary common to most documents. A citation of several
+  documents ("[1, 2, 5]") cites the whole phrase since the previous
+  citation, as a list, so each document needs to share a term with
+  only part of it. If the cited document
   shares no distinctive term while another matches at least two, the
   model is asked to reconsider the citation; it is never silently changed
   by code. In strict mode, a cited phrase with no recognizable source

@@ -927,6 +927,16 @@ class TestReduce(unittest.TestCase):
                 "genomic data [5].", texts,
             ),
         )
+        # A list cited as a whole: each document backs one part of it.
+        listed = (
+            "The documents cover freeware MATLAB network measures, "
+            "reservoir computing and genome-wide association studies "
+            "[1, 2, 5]."
+        )
+        self.assertEqual(support_problem(listed, texts), "")
+        self.assertIn(
+            "cites [3]", support_problem(listed.replace("5]", "3]"), texts)
+        )
         # Too few distinctive words to judge, or no better document.
         self.assertEqual(support_problem("As shown [4].", texts), "")
         self.assertEqual(

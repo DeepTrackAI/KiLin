@@ -766,7 +766,9 @@ def support_problem(
         For the first citation whose phrase (the clause before it: the
         words since the previous citation or the start of the sentence,
         cut after the last comma, semicolon, dash or "such as" when that
-        clause alone has enough distinctive words) has at least
+        clause alone has enough distinctive words; never cut for a
+        citation of several documents, which cites a list as a whole, so
+        each needs to mention only part of it) has at least
         ``_SUPPORT_WORDS_MIN`` distinctive words, none of them in the cited
         document's text, while another document has at least
         ``_SUPPORT_WORDS_MIN``: a problem naming the phrase, the citation
@@ -793,7 +795,8 @@ def support_problem(
             cited = _cited(match.group(1), max(stems, default=0))
             clause = _CLAUSE.split(phrase)[-1]
             threshold = 1 if strict else _SUPPORT_WORDS_MIN
-            if len(_stems(clause) - common) >= threshold:
+            shared = cited is not None and len(cited) > 1
+            if not shared and len(_stems(clause) - common) >= threshold:
                 phrase = clause  # "..., such as reservoir computing [1]"
             words = _stems(phrase) - common
             if not cited or len(words) < threshold:
