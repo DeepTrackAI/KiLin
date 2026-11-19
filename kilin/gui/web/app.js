@@ -2909,11 +2909,9 @@ function drawAttention(element, then) {
 }
 
 /**
- * Flash the controls that add sources after an answer that explains them:
- * first the composer's + button, then the sources folder in the Workspace
+ * After an assistant_guide answer, which explains how to add files, flash
+ * the composer's + button and then the sources folder in the Workspace
  * panel.
- * Every assistant_guide answer ("What can you do for me?", "How do I add
- * my papers?") ends with these steps, so it flashes them.
  * @param turn The finished turn.
  */
 function pointToSourceControls(turn) {

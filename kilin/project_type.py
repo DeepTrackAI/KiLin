@@ -535,13 +535,13 @@ class ProjectType:
         headings about the project's own sources. Empty when the type has
         none.
     suggestions: tuple[str, ...]
-        Example requests the desktop app shows in an empty chat.
+        Ready-to-send requests the desktop app shows in an empty chat when
+        there are too few questions about the project's own sources.
     suggestion_templates: tuple[tuple[str, str], ...]
         Intent ID and fill-in question pairs, in file order (an intent may
-        have several), from which
-        ``kilin.question_suggestions`` writes questions about the
-        project's own sources, such as "Give me a short summary of
-        {file}.". Empty when the type has none.
+        have several), from which ``kilin.question_suggestions`` writes
+        questions about the project's own sources, such as "Give me a
+        short summary of {file}.". Empty when the type has none.
     source_cards_enabled: bool
         Enable the optional independent source-card index.
     source_card_kind: str | None

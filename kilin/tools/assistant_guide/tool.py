@@ -5,11 +5,11 @@ request the project type supports, such as "Give me a short summary of
 tiunn26braph2.pdf." for a paper overview. The examples are the project's
 suggested questions (``kilin.question_suggestions``), so they name the
 project's own files and topics, and they change from one answer to the
-next. Every answer ends with how to add and remove files, and a
-question about files, such as "how to drag files", gets only what
-sources are and these steps. A project without sources is told how
-to add its files first, followed by the project type's fixed
-suggestions. No model is called.
+next. Every answer ends with how to add and remove files, and a question
+about files, such as "how to drag files", gets only what sources are and
+these steps. A project without sources is told how to add its files
+first, followed by the project type's fixed suggestions. No model is
+called.
 
 Key Features
 ------------
@@ -28,8 +28,8 @@ Key Features
 
 - **Empty projects**
 
-    Explain how to add files first, and fall back to the project type's fixed
-    suggestions.
+    Explain how to add files first, and fall back to the project type's
+    fixed suggestions.
 
 Module Structure
 ----------------
@@ -80,11 +80,17 @@ __all__ = [
     "run",
 ]
 
+# With sources: the examples, then how to add more files.
 _WITH_SOURCES: Final[str] = (
     "Here is what I can do with the files in this project, with one "
     "example for each kind of request. Copy an example into the question "
     "box and send it to try it:"
 )
+_CLOSING: Final[str] = (
+    "You can also ask your own question in your own words; I pick the "
+    "right kind of request for it."
+)
+_MORE_SOURCES: Final[str] = "To add more files:"
 # How to add and remove files; ends every answer.
 _FILE_STEPS: Final[tuple[str, ...]] = (
     "1. Drag files or folders onto **sources** in the Workspace panel on "
@@ -95,14 +101,15 @@ _FILE_STEPS: Final[tuple[str, ...]] = (
     "To remove a file, right-click it under **sources** and choose "
     "**Delete**.",
 )
+# Without sources: the steps, then the project type's fixed suggestions.
 _NO_SOURCES: Final[str] = (
     "This project has no sources yet, so I cannot answer from your files. "
     "To add them:"
 )
-_MORE_SOURCES: Final[str] = "To add more files:"
+_WITHOUT_SOURCES: Final[str] = "Here are the kinds of things you can ask:"
+# A question about files, such as "How do I add my papers?": what sources
+# are and the steps only.
 _NO_SOURCES_YET: Final[str] = "This project has no sources yet."
-# What sources are, for a question about files such as "How do I add my
-# papers?" or "What do you mean by adding files?".
 _ABOUT_SOURCES: Final[str] = (
     "Sources are the files I read and answer from. When you add them, I "
     "copy them into this project and index them so I can search them; "
@@ -111,11 +118,6 @@ _ABOUT_SOURCES: Final[str] = (
 _NOW_ASK: Final[str] = (
     'Once they are indexed, ask "What can you do for me?" to see example '
     "questions about your own files."
-)
-_WITHOUT_SOURCES: Final[str] = "Here are the kinds of things you can ask:"
-_CLOSING: Final[str] = (
-    "You can also ask your own question in your own words; I pick the "
-    "right kind of request for it."
 )
 # A question about files rather than about KíLín in general: it names an
 # action on files or the files themselves, such as "how to drag files".

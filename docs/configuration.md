@@ -329,68 +329,52 @@ generation defaults, default intent, intents, welcome prompts and suggestions.
 of them, such as `"paper_overview": "Give me a short summary of {file}."`.
 It may use only `{file}`, `{file2}` (a different file), `{topic}`,
 `{term}` and `{theme}` (a broad subject of the whole collection), and
-must name the type's own intents. Intents that need an
-earlier answer or the user's own text (follow-ups, rephrasing, small
-talk) have no template.
+must name the type's own intents. Intents that need an earlier answer or
+the user's own text (follow-ups, rephrasing, small talk) have no
+template.
 
 `kilin/question_suggestions.py` fills them in two steps:
 
 1. **Once per source change:** the router model reads the first two files
-   (usually the user's own) and a random mix of ten others, and picks the
-   pool of up to three broad themes (one subject of up to four words
-   each, such as "Alzheimer's disease"), ten topics and ten exact terms.
-   A theme, topic or term is kept only when it is printed in the sources.
-   The pool is saved in
+   (usually the user's own) and a random mix of ten others, and picks a
+   pool of up to three themes (one subject of up to four words each, such
+   as "Alzheimer's disease"), ten topics and ten exact terms. A word is
+   kept only when it is printed in the sources. The pool is saved in
    `indexes/suggestion_words.json` and picked again only when the sources
    or the router model change.
 2. **Every time questions are needed** (when a project opens, for each new
    empty chat, and for "What can you do for me?"): each template is filled
    up to three times with files, themes, topics and terms chosen at
-   random from the project and the pool. No model is called, so this is instant and
-   the examples change every time. A question with an unfilled
-   placeholder is left out; a code project's questions name only code
-   files.
-
-The empty chat picks three intents and one of their questions at random;
-clicking one fills the question box, so Enter sends it. Without sources,
-or with fewer than three questions, the fixed `suggestions` fill the rest.
+   random. No model is called, so this is instant and the examples change
+   every time. A question with an unfilled placeholder is left out; a code
+   project's questions name only code files.
 
 `welcome_templates` is a list of fill-in headings for the top of an empty
 chat, such as `"What would you like to understand about {theme}?"`, with
 the same placeholders. The packaged types use only `{theme}`, so the
-heading covers the whole collection, and the specific files and topics are
-left to the questions below it. They are filled from the same pool, one
-heading per template with the themes taken in a random order, and the
-empty chat shows one of them at random, so a new chat may name another
-theme. The fixed
-`welcome_prompts` are shown instead when the project has no sources, when
-no template can be filled, or when the project's own settings change the
-welcome prompts, so a user's own headings always win. In short, the fixed
-`welcome_prompts` and `suggestions` are the generic examples of a type,
-and the templates turn them into prompts about one project's sources.
+heading covers the whole collection. They are filled from the same pool,
+with the themes in a random order, and the empty chat shows one of them.
+
+The empty chat shows three questions about the sources, from three intents
+at random; clicking one fills the question box, so Enter sends it. The
+fixed `welcome_prompts` and `suggestions` are the fallback: they are shown
+when the project has no sources, when nothing can be filled, or when the
+project's own settings change them. Each one can be sent as it is, with no
+"…" to fill in. The suggestions start with "What can you do for me?" and
+"How do I add my files?", which an empty chat always shows, followed by one
+of the others; a type can list several, such as Creative's "Invent five
+wildly different hypotheses about why we dream.", and each new chat shows
+another one.
 
 Every packaged type also has an `assistant_help` intent, routed by
 shortcuts such as "What can you do for me?", "help" and "How do I add my
 papers?". Its `assistant_guide` tool answers with one of these questions
-per intent, so the user sees what each kind of request does with their
-own files, and always ends with how to add files (drag them onto
-**sources** in the Workspace panel, or attach them with **+** in the
-message box) and how to remove one. A question about files, such as "how
-to drag files" or "What do you mean by adding files?", gets only what
-sources are and these steps, without the examples. A project without
-sources is told how to add files first, followed by the fixed
-`suggestions`. No model is called. After the answer, the desktop app
-briefly flashes the **+** button and then the **sources** folder so the
-user sees where they are.
-
-The fixed `welcome_prompts` and `suggestions` are shown when a project has
-no sources, so each one works without sources and can be sent as it is,
-with no "…" to fill in: the suggestions start with "What can you do for
-me?" and "How do I add my files?", which the empty chat always shows
-first, followed by one of the others at random. A type can list several
-complete examples there, such as Creative's "Invent five wildly
-different hypotheses about why we dream.", so each new chat can show
-another one.
+per intent and ends with how to add files (drag them onto **sources** in
+the Workspace panel, or attach them with **+** in the message box) and how
+to remove one. A question about files, such as "how to drag files", gets
+only these steps; a project without sources gets them first, followed by
+the fixed `suggestions`. No model is called. After the answer, the desktop
+app briefly flashes the **+** button and then the **sources** folder.
 
 An intent can override inherited prompt/history/retrieval settings, specify
 shortcut regexes and select a registered tool. The parser gives missing
