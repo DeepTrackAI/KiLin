@@ -1,8 +1,8 @@
-"""Test the event that sends suggested questions to the page.
+"""Test the event that sends saved suggested questions to the page.
 
-The engine sends the project's questions and welcome headings just before
-``opened``. A failure must not stop the project from opening: the page then
-keeps the project type's fixed suggestions and welcome prompts.
+The engine sends available project questions and welcome headings just
+before ``opened``, but must not generate a pool while opening the project.
+Failures leave the type's fixed suggestions and welcome prompts available.
 
 """
 
@@ -47,6 +47,8 @@ class TestQuestionSuggestionsEvent(unittest.TestCase):
         session.welcome_prompts.return_value = ["What about sleep?"]
         engine = _engine(session)
         ChatEngine._send_question_suggestions(engine, PROJECT)
+        session.question_suggestions.assert_called_once_with(generate=False)
+        session.welcome_prompts.assert_called_once_with(generate=False)
         self.assertEqual(
             engine.events,
             [
@@ -71,6 +73,8 @@ class TestQuestionSuggestionsEvent(unittest.TestCase):
         session.question_suggestions.side_effect = RuntimeError("no model")
         engine = _engine(session)
         ChatEngine._send_question_suggestions(engine, PROJECT)
+        session.question_suggestions.assert_called_once_with(generate=False)
+        session.welcome_prompts.assert_not_called()
         self.assertEqual(
             engine.events,
             [

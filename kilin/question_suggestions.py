@@ -11,16 +11,17 @@ as "What would you like to understand about {theme}?", where a theme is
 a broad subject of the whole collection, so the heading covers the
 questions below it.
 
-The work has two steps. Once, when the sources change, the small model
-reads a random mix of the files and picks a pool of up to three themes,
-ten topics, and ten terms, which is saved in the index folder. Then, every
-time questions are needed (a new chat, or "What can you do for me?"), they
-are filled at once from that pool with randomly chosen files, themes,
-topics, and terms, without a model, so each chat shows other ones.
+The work has two steps. On explicit generation (for example, a request
+for assistant guidance), a small model reads a selection of the relevant
+files and picks a pool of up to three themes, ten topics, and ten terms.
+The pool is saved in the index folder. Each new chat fills questions
+from that saved pool, with randomly chosen files, themes, topics, and
+terms, without a model call. Without a saved pool, the empty-chat screen
+still offers file-name questions and the configured fixed suggestions.
 
-Nothing is invented: file names come from the index, and a topic or term is
-kept only when its words are printed in the sources. A question whose
-placeholder has no value is left out.
+File names come from the index, and topics and themes must occur as
+phrases in an indexed passage. A question whose placeholder has no value
+is left out. Document-oriented projects prefer documents over code files.
 
 Key Features
 ------------
@@ -29,19 +30,20 @@ Key Features
 
     Real file names, topics, and terms instead of "…" gaps to fill in.
 
-- **New questions every time**
+- **New questions on each chat**
 
     A saved pool of words, filled at random without waiting for a model.
 
-- **Checked words**
+- **Checked phrases**
 
-    Topics and terms the model suggests must appear in the sources.
+    Topics and themes must occur as whole phrases in a relevant passage;
+    terms must occur in relevant files.
 
 - **Safe fallback**
 
-    Without sources there are no questions; without a model only the
+    Without sources there are no questions; without saved words only the
     questions that need just file names are written. The caller then shows
-    the project type's fixed ``suggestions``.
+    the project's fixed ``suggestions`` when needed.
 
 Module Structure
 ----------------
@@ -60,7 +62,7 @@ Module Structure
 
 - ``suggestion_files``
 
-    Source file names to use in questions, the most telling files first.
+    Source file names to use in questions, selected by project purpose.
 
 - ``ask_for_words``
 
@@ -68,7 +70,7 @@ Module Structure
 
 - ``checked_words``
 
-    Keep only the themes, topics, and terms printed in the sources.
+    Keep only the themes, topics, and terms printed in relevant sources.
 
 - ``fill_templates``
 
@@ -76,8 +78,7 @@ Module Structure
 
 - ``suggestion_words``
 
-    Return the pool of topics and terms, asking the model only when the
-    saved pool is out of date.
+    Return the pool, optionally asking the model when no valid pool exists.
 
 - ``question_suggestions``
 
@@ -133,7 +134,7 @@ __all__ = [
 ]
 
 SUGGESTION_WORDS_FILE: Final[str] = "suggestion_words.json"
-_FORMAT: Final[str] = "suggestion-words-v2"
+_FORMAT: Final[str] = "suggestion-words-v3"
 # Questions written from each template, so chats can show other ones.
 _VARIANTS: Final[int] = 3
 
@@ -153,8 +154,10 @@ _THEME_WORDS: Final[tuple[int, int]] = (1, 4)
 # A theme names one subject, not two joined together.
 _JOINED: Final[re.Pattern[str]] = re.compile(r"\band\b|&|,|/", re.IGNORECASE)
 _TERM_CHARACTERS: Final[int] = 40
-# Words of a topic shorter than this are not checked against the sources.
-_CHECKED_WORD: Final[re.Pattern[str]] = re.compile(r"\w{4,}")
+# Recognize document files before text-only support files in mixed projects.
+_DOCUMENT_SUFFIXES: Final[frozenset[str]] = frozenset(
+    (".pdf", ".doc", ".docx", ".odt", ".rtf", ".tex")
+)
 _JSON_OBJECT: Final[re.Pattern[str]] = re.compile(r"\{.*\}", re.DOTALL)
 # Text that ends where a sentence or line starts, within a few characters.
 _SENTENCE_LOOKBACK: Final[int] = 4
@@ -227,28 +230,29 @@ class SuggestionWords:
     themes: tuple[str, ...] = ()
 
 
-def suggestion_files(chunks: Sequence[Chunk]) -> tuple[str, ...]:
+def suggestion_files(
+    chunks: Sequence[Chunk], *, prefer_code: bool = True
+) -> tuple[str, ...]:
     """Return source file names to use in questions, most telling first.
 
     Parameters
     ----------
     chunks: Sequence[Chunk]
         The project's indexed passages.
+    prefer_code: bool, optional
+        When True, prefer files with code symbols. When False, prefer
+        document files, falling back to other non-code files, then code.
+        Defaults to True for direct callers.
 
     Returns
     -------
     tuple[str, ...]
-        File names in the order of ``_ranked_paths``; when some files hold
-        code, only those, so a code question never names a README. A file
-        is named by its base name, or by its path when two files share a
-        base name.
+        File names ordered by project purpose. A file is named by its base
+        name, or by its path when two selected files share a base name.
 
     """
 
-    paths = _ranked_paths(chunks)
-    code = {chunk.path for chunk in chunks if chunk.symbol}
-    if code:
-        paths = [path for path in paths if path in code]
+    paths = _preferred_paths(chunks, prefer_code)
     names = Counter(path.name for path in paths)
     return tuple(
         path.name if names[path.name] == 1 else path.as_posix()
@@ -261,6 +265,8 @@ def ask_for_words(
     cards: Sequence[SourceCard],
     ask: Callable[[str, str, int], str],
     rng: random.Random | None = None,
+    *,
+    prefer_code: bool = True,
 ) -> SuggestionWords:
     """Ask a model for the themes, topics, and terms of the sources.
 
@@ -277,6 +283,9 @@ def ask_for_words(
     rng: random.Random | None, optional
         Picks the random mix of files the model reads. Defaults to
         ``None``, a shared generator.
+    prefer_code: bool, optional
+        Whether to describe the project's code or documents when both
+        are indexed. Defaults to True.
 
     Returns
     -------
@@ -288,7 +297,9 @@ def ask_for_words(
 
     documents = "\n".join(
         f"- {name}: {text}"
-        for name, text in _descriptions(chunks, cards, rng or _RANDOM).items()
+        for name, text in _descriptions(
+            chunks, cards, rng or _RANDOM, prefer_code=prefer_code
+        ).items()
     )
     reply = ask(_SYSTEM, _PROMPT.format(documents=documents), _REPLY_TOKENS)
     match = _JSON_OBJECT.search(reply)
@@ -306,7 +317,10 @@ def ask_for_words(
 
 
 def checked_words(
-    words: SuggestionWords, chunks: Sequence[Chunk]
+    words: SuggestionWords,
+    chunks: Sequence[Chunk],
+    *,
+    prefer_code: bool = True,
 ) -> SuggestionWords:
     """Keep only the themes, topics, and terms printed in the sources.
 
@@ -316,13 +330,16 @@ def checked_words(
         Topics and terms a model suggested.
     chunks: Sequence[Chunk]
         The project's indexed passages.
+    prefer_code: bool, optional
+        Check terms in the type's relevant files, not an unrelated code
+        file in a document project. Defaults to True.
 
     Returns
     -------
     SuggestionWords
         Topics of one to six words and themes of one to four words, each
-        one subject not joined by "and", whose longer words all appear in
-        the sources, and terms that appear as whole words, ignoring case;
+        one subject not joined by "and", whose complete phrase occurs in
+        a single indexed passage, and terms that occur as whole words;
         at most ten topics, ten terms, and three themes. A term that is only
         a file name is dropped. Each topic and theme word is spelled as the
         sources print it, so "alzheimer's disease" becomes "Alzheimer's
@@ -330,18 +347,21 @@ def checked_words(
 
     """
 
-    printed = "\n".join(chunk.text for chunk in chunks)
+    paths = set(_preferred_paths(chunks, prefer_code))
+    selected = [chunk for chunk in chunks if chunk.path in paths]
+    printed = "\n".join(chunk.text for chunk in selected)
     text = printed.casefold()
-    files = {chunk.path.name.casefold() for chunk in chunks}
+    passages = tuple(chunk.text.casefold() for chunk in selected)
+    files = {chunk.path.name.casefold() for chunk in selected}
     topics = tuple(
         _printed_spelling(topic, printed)
         for topic in words.topics
-        if _is_printed_topic(topic, text, _TOPIC_WORDS)
+        if _is_printed_topic(topic, passages, _TOPIC_WORDS)
     )
     themes = tuple(
         _printed_spelling(theme, printed)
         for theme in words.themes
-        if _is_printed_topic(theme, text, _THEME_WORDS)
+        if _is_printed_topic(theme, passages, _THEME_WORDS)
         and not _JOINED.search(theme)
     )
     terms = tuple(
@@ -414,6 +434,8 @@ def suggestion_words(
     ask: Callable[[str, str, int], str] | None,
     model_id: str | None,
     rng: random.Random | None = None,
+    *,
+    prefer_code: bool = True,
 ) -> SuggestionWords:
     """Return the pool of topics and terms, asking the model only when the
     saved pool is out of date.
@@ -435,6 +457,9 @@ def suggestion_words(
     rng: random.Random | None, optional
         Picks the random mix of files the model reads. Defaults to
         ``None``, a shared generator.
+    prefer_code: bool, optional
+        Prefer code or document sources in mixed collections. Defaults
+        to True; included in the cache fingerprint.
 
     Returns
     -------
@@ -451,7 +476,7 @@ def suggestion_words(
 
     if not chunks:
         return SuggestionWords((), ())
-    fingerprint = _fingerprint(chunks, model_id)
+    fingerprint = _fingerprint(chunks, model_id, prefer_code)
     path = indexes / SUGGESTION_WORDS_FILE
     saved = _read_saved(path, fingerprint)
     if saved is not None:
@@ -459,7 +484,13 @@ def suggestion_words(
     if ask is None:
         return SuggestionWords((), ())
     try:
-        words = checked_words(ask_for_words(chunks, cards, ask, rng), chunks)
+        words = checked_words(
+            ask_for_words(
+                chunks, cards, ask, rng, prefer_code=prefer_code
+            ),
+            chunks,
+            prefer_code=prefer_code,
+        )
     except Exception:  # A failed model leaves file-name questions.
         return SuggestionWords((), ())
     _save(path, fingerprint, words)
@@ -471,6 +502,8 @@ def question_suggestions(
     chunks: Sequence[Chunk],
     words: SuggestionWords,
     rng: random.Random | None = None,
+    *,
+    prefer_code: bool = True,
 ) -> list[Suggestion]:
     """Write fresh questions from the pool, with files and words at random.
 
@@ -485,6 +518,8 @@ def question_suggestions(
     rng: random.Random | None, optional
         Picks the files, topics, and terms. Defaults to ``None``, a shared
         generator.
+    prefer_code: bool, optional
+        Whether to prefer code files over documents. Defaults to True.
 
     Returns
     -------
@@ -498,7 +533,9 @@ def question_suggestions(
 
     if not chunks or not templates:
         return []
-    files, shuffled = _shuffled_values(chunks, words, rng or _RANDOM)
+    files, shuffled = _shuffled_values(
+        chunks, words, rng or _RANDOM, prefer_code=prefer_code
+    )
     return fill_templates(templates, files, shuffled, _VARIANTS)
 
 
@@ -507,6 +544,8 @@ def welcome_prompts(
     chunks: Sequence[Chunk],
     words: SuggestionWords,
     rng: random.Random | None = None,
+    *,
+    prefer_code: bool = True,
 ) -> list[str]:
     """Write fresh welcome headings from the pool, with words at random.
 
@@ -522,6 +561,8 @@ def welcome_prompts(
     rng: random.Random | None, optional
         Picks the files, themes, topics, and terms. Defaults to ``None``,
         a shared generator.
+    prefer_code: bool, optional
+        Whether to prefer code files over documents. Defaults to True.
 
     Returns
     -------
@@ -536,7 +577,9 @@ def welcome_prompts(
 
     if not chunks or not templates:
         return []
-    files, shuffled = _shuffled_values(chunks, words, rng or _RANDOM)
+    files, shuffled = _shuffled_values(
+        chunks, words, rng or _RANDOM, prefer_code=prefer_code
+    )
     filled = fill_templates(
         tuple(("", template) for template in templates), files, shuffled
     )
@@ -544,7 +587,11 @@ def welcome_prompts(
 
 
 def _shuffled_values(
-    chunks: Sequence[Chunk], words: SuggestionWords, rng: random.Random
+    chunks: Sequence[Chunk],
+    words: SuggestionWords,
+    rng: random.Random,
+    *,
+    prefer_code: bool = True,
 ) -> tuple[list[str], SuggestionWords]:
     """Return the file names and the pool's words in a random order.
 
@@ -556,6 +603,8 @@ def _shuffled_values(
         The pool of themes, topics, and terms.
     rng: random.Random
         Picks the order.
+    prefer_code: bool, optional
+        Whether to prefer code files over documents. Defaults to True.
 
     Returns
     -------
@@ -565,7 +614,7 @@ def _shuffled_values(
 
     """
 
-    files = list(suggestion_files(chunks))
+    files = list(suggestion_files(chunks, prefer_code=prefer_code))
     topics = list(words.topics)
     terms = list(words.terms)
     themes = list(words.themes)
@@ -578,6 +627,8 @@ def _descriptions(
     chunks: Sequence[Chunk],
     cards: Sequence[SourceCard],
     rng: random.Random,
+    *,
+    prefer_code: bool = True,
 ) -> dict[str, str]:
     """Return a short description of some of the source files.
 
@@ -589,6 +640,9 @@ def _descriptions(
         The project's source cards.
     rng: random.Random
         Picks the random mix of files.
+    prefer_code: bool, optional
+        Prefer code or document files when both are present. Defaults
+        to True.
 
     Returns
     -------
@@ -608,7 +662,7 @@ def _descriptions(
         first.setdefault(chunk.path, chunk.text)
         if chunk.symbol and chunk.symbol not in symbols.get(chunk.path, []):
             symbols.setdefault(chunk.path, []).append(chunk.symbol)
-    ranked = _ranked_paths(chunks)
+    ranked = _preferred_paths(chunks, prefer_code)
     others = ranked[_FIRST_DESCRIBED:]
     chosen = ranked[:_FIRST_DESCRIBED] + rng.sample(
         others, min(len(others), _DESCRIBED_FILES - _FIRST_DESCRIBED)
@@ -654,6 +708,41 @@ def _ranked_paths(chunks: Sequence[Chunk]) -> list[Path]:
             path.as_posix(),
         ),
     )
+
+
+def _preferred_paths(
+    chunks: Sequence[Chunk], prefer_code: bool
+) -> list[Path]:
+    """Select files relevant to a code or document-oriented project.
+
+    Parameters
+    ----------
+    chunks: Sequence[Chunk]
+        Indexed passages with paths and optional code symbols.
+    prefer_code: bool
+        True for code projects, False for document-oriented projects.
+
+    Returns
+    -------
+    list[pathlib.Path]
+        Ranked code files when available for code projects. For other
+        projects, ranked document files, then other non-code files if
+        there are no recognized documents, then all files as fallback.
+
+    """
+
+    paths = _ranked_paths(chunks)
+    code = {chunk.path for chunk in chunks if chunk.symbol}
+    if prefer_code and code:
+        return [path for path in paths if path in code]
+    if not prefer_code:
+        documents = [
+            path for path in paths
+            if path.suffix.casefold() in _DOCUMENT_SUFFIXES
+        ]
+        other = [path for path in paths if path not in code]
+        return documents or other or paths
+    return paths
 
 
 def _card_text(card: SourceCard) -> str:
@@ -707,30 +796,34 @@ def _texts(value: object) -> tuple[str, ...]:
     return tuple(dict.fromkeys(text for text in texts if text))
 
 
-def _is_printed_topic(topic: str, text: str, length: tuple[int, int]) -> bool:
-    """Return whether a topic has a fitting length and printed words.
+def _is_printed_topic(
+    topic: str, passages: Sequence[str], length: tuple[int, int]
+) -> bool:
+    """Return whether a topic has a fitting length and is printed.
 
     Parameters
     ----------
     topic: str
         Topic or theme as the model wrote it.
-    text: str
-        Lowercase source text.
+    passages: Sequence[str]
+        Lowercase text from each indexed passage.
     length: tuple[int, int]
         Fewest and most words allowed.
 
     Returns
     -------
     bool
-        True when the word count is in range and every word of four or
-        more letters is printed in the sources.
+        True when the word count is in range and the full phrase occurs
+        in at least one passage, ignoring capitalization and whitespace.
 
     """
 
-    return length[0] <= len(topic.split()) <= length[1] and all(
-        _printed(word, text)
-        for word in _CHECKED_WORD.findall(topic.casefold())
-    )
+    words = topic.casefold().split()
+    if not length[0] <= len(words) <= length[1]:
+        return False
+    phrase = r"\s+".join(re.escape(word) for word in words)
+    pattern = re.compile(rf"(?<!\w){phrase}(?!\w)")
+    return any(pattern.search(text) is not None for text in passages)
 
 
 def _printed(word: str, text: str) -> bool:
@@ -881,7 +974,9 @@ def _has_value(name: str, values: dict[str, Sequence[str]]) -> bool:
     return bool(values.get(name))
 
 
-def _fingerprint(chunks: Sequence[Chunk], model_id: str | None) -> str:
+def _fingerprint(
+    chunks: Sequence[Chunk], model_id: str | None, prefer_code: bool
+) -> str:
     """Return what the saved pool depends on, as one digest.
 
     Parameters
@@ -890,6 +985,8 @@ def _fingerprint(chunks: Sequence[Chunk], model_id: str | None) -> str:
         Indexed passages; their identifiers change with their text.
     model_id: str | None
         Model that picks topics and terms.
+    prefer_code: bool
+        Source policy for a code or document-oriented project.
 
     Returns
     -------
@@ -901,6 +998,7 @@ def _fingerprint(chunks: Sequence[Chunk], model_id: str | None) -> str:
     data = {
         "chunks": sorted(chunk.identifier for chunk in chunks),
         "model": model_id,
+        "prefer_code": prefer_code,
     }
     return sha256(json.dumps(data).encode("utf-8")).hexdigest()
 

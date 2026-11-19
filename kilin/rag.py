@@ -1366,10 +1366,10 @@ class RAGSession:
         self.turns = turns
         self.router_model = resolved_router_model
         self._router_session: ChatSession | None = None
-        # The pool of topics and terms for suggested questions, with the
-        # passages it was picked for; see ``question_suggestions``.
+        # Keep the pool with its passages and router model. A GUI read of
+        # saved words does not cache an empty fallback as a generated pool.
         self._suggestion_pool: (
-            tuple[list[Chunk], SuggestionWords] | None
+            tuple[list[Chunk], str | None, SuggestionWords] | None
         ) = None
         self._closed = False
         self.trace.emit(
@@ -3444,8 +3444,17 @@ class RAGSession:
             language_context=language_context,
         )
 
-    def question_suggestions(self: RAGSession) -> list[Suggestion]:
+    def question_suggestions(
+        self: RAGSession, *, generate: bool = True
+    ) -> list[Suggestion]:
         """Return example questions about the project's own sources.
+
+        Parameters
+        ----------
+        generate: bool, optional
+            When False, read only a saved pool and never call the router.
+            GUI project opening uses this non-generating form. Defaults
+            to True for explicitly requested examples.
 
         Returns
         -------
@@ -3456,23 +3465,39 @@ class RAGSession:
 
         Notes
         -----
-        The router model picks a pool of topics and terms once, when the
-        saved pool (``indexes/suggestion_words.json``) is out of date; it
-        is then kept in memory until the sources change. Writing the
-        questions calls no model. See ``kilin.question_suggestions``.
+        When generating, the router picks topics once per source/model
+        fingerprint and the pool is saved in the project index. Existing
+        saved words can be filled into questions without model inference.
 
         """
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
+        config = self._behavior_config()
+        packaged = project_type(self.project.profile.type_id)
+        if (
+            not self.chunks
+            or not config.suggestion_templates
+            or config.suggestions != packaged.suggestions
+        ):
+            return []
         return question_suggestions(
-            self._behavior_config().suggestion_templates,
+            config.suggestion_templates,
             self.chunks,
-            self._suggestion_words(),
+            self._suggestion_words(generate=generate),
+            prefer_code=self.project.profile.type_id == "code",
         )
 
-    def welcome_prompts(self: RAGSession) -> list[str]:
+    def welcome_prompts(
+        self: RAGSession, *, generate: bool = True
+    ) -> list[str]:
         """Return welcome headings about the project's own sources.
+
+        Parameters
+        ----------
+        generate: bool, optional
+            When False, use only a saved pool, without router inference.
+            Defaults to True for explicitly requested headings.
 
         Returns
         -------
@@ -3486,7 +3511,8 @@ class RAGSession:
         Notes
         -----
         Uses the same pool of topics and terms as
-        ``question_suggestions``; writing the headings calls no model.
+        ``question_suggestions``. Filling the headings calls no model;
+        obtaining an unsaved pool may call the router when permitted.
 
         """
 
@@ -3494,39 +3520,70 @@ class RAGSession:
             raise RuntimeError("This RAG session is closed.")
         config = self._behavior_config()
         packaged = project_type(self.project.profile.type_id)
-        if config.welcome_prompts != packaged.welcome_prompts:
+        if (
+            not self.chunks
+            or not config.welcome_templates
+            or config.welcome_prompts != packaged.welcome_prompts
+        ):
             return []
         return welcome_prompts(
-            config.welcome_templates, self.chunks, self._suggestion_words()
+            config.welcome_templates,
+            self.chunks,
+            self._suggestion_words(generate=generate),
+            prefer_code=self.project.profile.type_id == "code",
         )
 
-    def _suggestion_words(self: RAGSession) -> SuggestionWords:
+    def _suggestion_words(
+        self: RAGSession, *, generate: bool = True
+    ) -> SuggestionWords:
         """Return the pool of topics and terms for the current passages.
+
+        Parameters
+        ----------
+        generate: bool, optional
+            Allow one router call when the saved pool is outdated. False
+            reads only saved data and never caches an empty fallback.
+            Defaults to True.
 
         Returns
         -------
         SuggestionWords
-            The pool, kept in memory until the passages change; loaded from
-            ``indexes/suggestion_words.json`` or picked by the router model.
+            The pool, kept in memory until passages or router model change;
+            otherwise loaded from disk or picked by the router when allowed.
 
         """
 
         pool = self._suggestion_pool
-        if pool is None or pool[0] is not self.chunks:
-            cards = tuple(
-                record.result.card
-                for record in getattr(self.source_cards, "records", ())
-                if record.result.card is not None
-            )
-            words = suggestion_words(
+        if (
+            pool is not None
+            and pool[0] is self.chunks
+            and pool[1] == self.router_model
+        ):
+            return pool[2]
+        if not generate:
+            return suggestion_words(
                 self.project.indexes,
                 self.chunks,
-                cards,
-                self._ask_router,
+                (),
+                None,
                 self.router_model,
+                prefer_code=self.project.profile.type_id == "code",
             )
-            pool = self._suggestion_pool = (self.chunks, words)
-        return pool[1]
+        cards = tuple(
+            record.result.card
+            for record in getattr(self.source_cards, "records", ())
+            if record.result.card is not None
+        )
+        words = suggestion_words(
+            self.project.indexes,
+            self.chunks,
+            cards,
+            self._ask_router,
+            self.router_model,
+            prefer_code=self.project.profile.type_id == "code",
+        )
+        self._suggestion_pool = (self.chunks, self.router_model, words)
+        return words
 
     def usage_mark(self: RAGSession) -> dict[int, tuple[int, int]]:
         """Remember the token totals of the loaded model sessions.

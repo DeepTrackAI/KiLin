@@ -245,6 +245,18 @@ profiles are not overwritten. The first suggestion is always displayed
 alongside two others; a "…" in a suggestion is selected when clicked,
 ready to be replaced.
 
+The empty-chat screen can also display source-specific questions and
+headings from a saved pool of phrases, alongside the fixed project-type
+suggestions. Opening a project never starts a model call just to populate
+this screen; it shows file-specific questions or configured defaults
+immediately. Asking "What can you do for me?" can create a new pool through
+the router model, which subsequent empty chats reuse. Source phrases must
+occur in the indexed files, and document-oriented project types prioritize
+documents when source files contain both documents and code. Custom welcome
+prompts and suggested questions saved in the project settings always take
+precedence over generated text. Existing saved pools from older formats
+are generated again when explicitly needed.
+
 Each intent has a description, a system prompt added to the base prompt, an
 optional answer guidance that replaces the type's (and always applies, also
 in notebooks), a `history.policy` (none, recent, or relevant), and

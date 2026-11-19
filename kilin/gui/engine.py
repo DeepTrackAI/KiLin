@@ -2154,8 +2154,9 @@ class ChatEngine:
     ) -> None:
         """Send the ``opened`` event for the prepared core project.
 
-        The suggested questions about its sources are sent just before,
-        in their own event, so the page shows them with the project.
+        Saved source-specific questions are sent before ``opened`` without
+        generating a new topic pool. Opening a project never waits for an
+        optional router-model suggestion generation.
 
         Parameters
         ----------
@@ -2227,21 +2228,22 @@ class ChatEngine:
         Notes
         -----
         Sent before ``opened`` and before ``conversation_opened`` of an
-        empty chat; each time the questions and welcome headings are
-        chosen anew, without a model once the project's pool of topics is
-        known. An empty list, sent when there are no sources or writing
-        them fails, tells the page to keep the project type's fixed
-        suggestions or welcome prompts. A failure is traced and never
-        stops the project from opening.
+        empty chat. This path only reads saved words, never generates
+        them, so a new project opens without an extra model request. An
+        explicit guide request can create the saved pool for later chats.
+        Empty lists retain the configured fixed prompts and suggestions.
+        A failure is traced and never stops the project from opening.
 
         """
 
         try:
             questions = [
                 {"intent": item.intent, "question": item.question}
-                for item in self.session.question_suggestions()
+                for item in self.session.question_suggestions(
+                    generate=False
+                )
             ]
-            welcome = self.session.welcome_prompts()
+            welcome = self.session.welcome_prompts(generate=False)
         except Exception as error:
             self.active_trace.emit(
                 "gui.question_suggestions.failed",

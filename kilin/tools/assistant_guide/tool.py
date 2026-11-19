@@ -8,8 +8,9 @@ project's own files and topics, and they change from one answer to the
 next. Every answer ends with how to add and remove files, and a question
 about files, such as "how to drag files", gets only what sources are and
 these steps. A project without sources is told how to add its files
-first, followed by the project type's fixed suggestions. No model is
-called.
+first, followed by the project type's fixed suggestions. The guide
+answer is deterministic, but its initial suggestion pool can require
+one router-model request. File-help questions never generate that pool.
 
 Key Features
 ------------
@@ -29,7 +30,8 @@ Key Features
 - **Empty projects**
 
     Explain how to add files first, and fall back to the project type's
-    fixed suggestions.
+    fixed suggestions. Indexed sources without usable examples use a
+    different message and keep the configured suggestions.
 
 Module Structure
 ----------------
@@ -105,6 +107,11 @@ _FILE_STEPS: Final[tuple[str, ...]] = (
 _NO_SOURCES: Final[str] = (
     "This project has no sources yet, so I cannot answer from your files. "
     "To add them:"
+)
+# Sources can exist even when no question template can be filled.
+_NO_EXAMPLES: Final[str] = (
+    "This project has sources, but no source-specific example questions "
+    "are available yet. You can still ask about the indexed files."
 )
 _WITHOUT_SOURCES: Final[str] = "Here are the kinds of things you can ask:"
 # A question about files, such as "How do I add my papers?": what sources
@@ -203,6 +210,7 @@ def run(
 
     if _about_files(request.question):
         return _file_steps(context)
+    has_sources = _has_sources(context)
     context.progress("Collecting example questions")
     suggestions = (
         list(context.suggestions()) if context.suggestions is not None else []
@@ -216,7 +224,11 @@ def run(
         ]
         lines += ["", _CLOSING, "", _MORE_SOURCES, "", *_FILE_STEPS]
     else:
-        lines = [_NO_SOURCES, "", *_FILE_STEPS]
+        lines = [
+            _NO_EXAMPLES if has_sources else _NO_SOURCES,
+            "",
+            *_FILE_STEPS,
+        ]
         fixed = _other_requests(context.fixed_suggestions, request.question)
         if fixed:
             lines += ["", _WITHOUT_SOURCES, ""]
@@ -263,8 +275,8 @@ def _file_steps(context: ToolContext) -> ToolResult:
     Parameters
     ----------
     context: ToolContext
-        KíLín's services; ``context.suggestions`` tells whether the
-        project has sources.
+        KíLín's services; its manifest and indexed passages determine
+        whether sources exist.
 
     Returns
     -------
@@ -273,9 +285,7 @@ def _file_steps(context: ToolContext) -> ToolResult:
 
     """
 
-    has_sources = context.suggestions is not None and bool(
-        list(context.suggestions())
-    )
+    has_sources = _has_sources(context)
     lines = [] if has_sources else [_NO_SOURCES_YET, ""]
     lines += [_ABOUT_SOURCES, "", *_FILE_STEPS, "", _NOW_ASK]
     summary: dict[str, object] = {
@@ -293,6 +303,24 @@ def _file_steps(context: ToolContext) -> ToolResult:
     )
     context.done("Explained how to add files", evidence_count=0)
     return ToolResult("\n".join(lines), (), summary)
+
+
+def _has_sources(context: ToolContext) -> bool:
+    """Check the source inventory rather than suggested questions.
+
+    Parameters
+    ----------
+    context: ToolContext
+        The project source manifest and indexed passages.
+
+    Returns
+    -------
+    bool
+        Whether the project has selected source files or indexed passages.
+
+    """
+
+    return bool(context.chunks) or bool(context.source_files())
 
 
 def _one_per_intent(suggestions: Sequence[object]) -> list[tuple[str, str]]:

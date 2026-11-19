@@ -458,6 +458,26 @@ can accompany an event.
 | Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`; `resume_released` for saved-project opening failures); `backend_failed` (`message`) |
 | Process recovery | `stopped` (optional `removed_projects`: empty creation claims removed; `preserved_projects`: known workspaces left intact); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
 
+### Source-aware empty-chat questions
+
+The `question_suggestions` event uses **saved** topic and term words only.
+Project activation and creation do not trigger a router-model generation.
+When a valid pool is unavailable, file-name-only questions can still be
+shown immediately; the remaining slots use the configured fixed suggestions.
+The `assistant_guide` tool may generate and save a source-specific pool when
+explicitly invoked. Subsequent empty chats reuse it and vary their choices
+without new model calls. Cache keys include the router model, indexed
+passages, and whether the project prefers code or documents. Existing
+suggestion pools from the previous format are regenerated on demand.
+
+Saved project overrides of `welcome_prompts` or `suggestions` take precedence
+over generated landing content. For mixed-source projects, code projects
+prefer code files, while other project types prefer relevant documents;
+accepted topics and themes must appear together in an indexed passage of
+one of those files. A received suggestion event updates an already visible
+empty chat and remains available for an ensuing `opened` event for the same
+project.
+
 `answered.turn.parameters.model_summary` is a core-produced model
 description that includes the active chat model, thinking, `T=`,
 and the maximum answer-token setting. The frontend displays it

@@ -33,12 +33,16 @@ SUGGESTIONS = (
 )
 
 
-def _context(suggestions=None, fixed=()) -> SimpleNamespace:
-    """Return the tool context services the guide uses."""
+def _context(
+    suggestions=None, fixed=(), *, chunks=(), files=()
+) -> SimpleNamespace:
+    """Return the tool context with explicit source inventory services."""
 
     return SimpleNamespace(
         suggestions=suggestions,
         fixed_suggestions=fixed,
+        chunks=chunks,
+        source_files=lambda: {path: 0 for path in files},
         progress=Mock(),
         done=Mock(),
         trace=Mock(),
@@ -108,7 +112,10 @@ class TestAssistantGuide(unittest.TestCase):
             "What do you do with my files?",
         ):
             with self.subTest(question=question):
-                answer = _answer(_context(lambda: SUGGESTIONS), question)
+                answer = _answer(
+                    _context(lambda: SUGGESTIONS, files=("a.pdf",)),
+                    question,
+                )
                 self.assertIn("Sources are the files I read", answer)
                 self.assertIn("**Attach folder**", answer)
                 self.assertNotIn("Paper overview", answer)
@@ -143,6 +150,31 @@ class TestAssistantGuide(unittest.TestCase):
         answer = _answer(_context(None))
         self.assertIn("no sources yet", answer)
         self.assertNotIn("- ", answer)
+
+    def test_sources_without_examples_are_not_called_empty(self) -> None:
+        """Read inventory independently of generated question templates."""
+
+        fixed = ("What can you do for me?", "Summarize my sources.")
+        for context in (
+            _context(lambda: [], fixed, files=("paper.pdf",)),
+            _context(lambda: [], fixed, chunks=(object(),)),
+        ):
+            with self.subTest(context=context):
+                answer = _answer(context)
+                self.assertIn("has sources", answer)
+                self.assertNotIn("no sources yet", answer)
+                self.assertIn("Summarize my sources.", answer)
+
+    def test_file_help_uses_inventory_without_generation(self) -> None:
+        """Explaining file operations never calls a suggestion generator."""
+
+        suggestions = Mock(return_value=[])
+        context = _context(
+            suggestions, files=("paper.pdf",)
+        )
+        answer = _answer(context, "How do I add files?")
+        self.assertNotIn("no sources yet", answer)
+        suggestions.assert_not_called()
 
 
 if __name__ == "__main__":

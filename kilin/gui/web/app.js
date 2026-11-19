@@ -6351,10 +6351,10 @@ function clearAskingConversation() {
 /**
  * Pick the three questions an empty chat offers.
  *
- * Questions about the project's own sources come first: three intents
- * at random, each with one of its questions at random, so each new chat
- * shows other things KíLín can do with other files and topics. When
- * there are fewer than three intents, for example in a project without
+ * With packaged defaults, source-grounded questions come first: three
+ * intents at random, each with one question at random. Project-customized
+ * suggestions suppress generated ones in ``renderConversationEmpty``.
+ * When there are fewer than three intents, for example without
  * sources, the type's fixed suggestions fill the rest: its first two
  * ("What can you do for me?" and "How do I add my files?"), then one of
  * the others at random, so each new chat can show another example.
@@ -6382,6 +6382,23 @@ function chooseSuggestions(questions, fixed, shownBefore = []) {
 }
 
 /**
+ * Check whether a project's saved landing text overrides the type default.
+ *
+ * Source-generated text is supplemental; an explicit project setting
+ * takes precedence, even if an older generated pool is still in memory.
+ *
+ * @param field Either "suggestions" or "welcome_prompts".
+ * @returns Whether the saved values differ from the packaged type.
+ */
+function hasCustomLandingText(field) {
+  const saved = projectPresentation?.[field];
+  const packaged = projectTypes[activeProjectTypeId]?.[field];
+  return Array.isArray(saved) && Array.isArray(packaged)
+    && (saved.length !== packaged.length
+      || saved.some((item, index) => item !== packaged[index]));
+}
+
+/**
  * Render the project-type welcome screen for an empty conversation.
  */
 function renderConversationEmpty() {
@@ -6391,7 +6408,9 @@ function renderConversationEmpty() {
   const fixedPrompts = type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts;
   const content = {
     // Headings about the project's own sources replace the fixed ones.
-    prompts: openProjectPath && sourceWelcome.length ? sourceWelcome : fixedPrompts,
+    prompts: openProjectPath && sourceWelcome.length
+      && !hasCustomLandingText("welcome_prompts")
+      ? sourceWelcome : fixedPrompts,
     suggestions: type.suggestions?.length ? type.suggestions : genericEmptyChat.suggestions,
   };
   let promptIndex = Math.floor(Math.random() * content.prompts.length);
@@ -6405,7 +6424,9 @@ function renderConversationEmpty() {
   prompt.textContent = content.prompts[promptIndex];
   const suggestions = document.createElement("div");
   suggestions.className = "prompt-suggestions";
-  const choices = chooseSuggestions(openProjectPath ? sourceQuestions : [], content.suggestions,
+  const source = openProjectPath && !hasCustomLandingText("suggestions")
+    ? sourceQuestions : [];
+  const choices = chooseSuggestions(source, content.suggestions,
     lastEmptySuggestions[activeProjectTypeId] || []);
   lastEmptySuggestions[activeProjectTypeId] = choices;
   for (const text of choices) {
@@ -7657,6 +7678,7 @@ function onEvent(raw) {
     if (data.project === openProjectPath) {
       sourceQuestions = questions;
       sourceWelcome = welcome;
+      if (conversation.querySelector(".conversation-empty")) renderConversationEmpty();
     }
     pendingSourceQuestions = { project: data.project, questions, welcome };
   } else if (data.event === "conversation_opened") {

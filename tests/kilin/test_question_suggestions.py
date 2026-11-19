@@ -51,7 +51,7 @@ CHUNKS = (
 )
 REPLY = (
     "Here you are:\n"
-    '{"themes": ["autoencoders for MRI", "quantum gravity"], '
+    '{"themes": ["variational autoencoders", "quantum gravity"], '
     '"topics": ["variational autoencoders", "quantum gravity"], '
     '"terms": ["MRI", "fMRI"]}'
 )
@@ -76,6 +76,30 @@ class TestFillingQuestions(unittest.TestCase):
             chunk("p1", "def f(): pass", path="pkg/f.py"), symbol="f"
         )
         self.assertEqual(suggestion_files((readme, readme, code)), ("f.py",))
+
+    def test_document_projects_prefer_papers_over_code(self) -> None:
+        """Literature questions name papers, even with code symbols."""
+
+        readme = chunk("r1", "Overview", path="README.md")
+        paper = chunk("d1", "Protein folding", path="papers/study.pdf")
+        code = replace(
+            chunk("c1", "def analyze(): pass", path="analyze.py"),
+            symbol="analyze",
+        )
+        chunks = (readme, paper, code)
+        self.assertEqual(suggestion_files(chunks), ("analyze.py",))
+        self.assertEqual(
+            suggestion_files(chunks, prefer_code=False), ("study.pdf",)
+        )
+        questions = question_suggestions(
+            (("reference_check", "Check references of {file}."),),
+            chunks,
+            SuggestionWords((), ()),
+            prefer_code=False,
+        )
+        self.assertEqual(
+            questions[0].question, "Check references of study.pdf."
+        )
 
     def test_templates_take_values_in_turn(self) -> None:
         """Name different files, and skip questions without a value."""
@@ -155,7 +179,7 @@ class TestModelWords(unittest.TestCase):
         )
         self.assertEqual(words.terms, ("MRI", "fMRI"))
         self.assertEqual(
-            words.themes, ("autoencoders for MRI", "quantum gravity")
+            words.themes, ("variational autoencoders", "quantum gravity")
         )
         system, prompt, tokens = ask.call_args.args
         self.assertIn("JSON", system)
@@ -196,6 +220,53 @@ class TestModelWords(unittest.TestCase):
         )
         self.assertEqual(words.topics, ("variational autoencoders",))
         self.assertEqual(words.terms, ("MRI",))
+
+    def test_topic_must_appear_as_a_phrase_in_one_passage(self) -> None:
+        """Words in separate files cannot form a grounded topic."""
+
+        chunks = (
+            chunk("p", "We study protein folding.", path="folding.pdf"),
+            chunk("d", "Nonlinear dynamics occurs.", path="motion.pdf"),
+        )
+        words = checked_words(
+            SuggestionWords(
+                ("protein dynamics", "protein folding", "not printed"),
+                (),
+                ("protein dynamics", "protein folding"),
+            ),
+            chunks,
+        )
+        self.assertEqual(words.topics, ("protein folding",))
+        self.assertEqual(words.themes, ("protein folding",))
+
+    def test_mixed_sources_check_words_in_relevant_files(self) -> None:
+        """A topic printed only in code cannot ground a paper question."""
+
+        paper = chunk("p", "Protein folding pathways.", path="study.pdf")
+        script = replace(
+            chunk("c", "Nonlinear dynamics analysis.", path="model.py"),
+            symbol="analyze",
+        )
+        words = SuggestionWords(
+            ("protein folding", "nonlinear dynamics"), (),
+        )
+        self.assertEqual(
+            checked_words(
+                words, (paper, script), prefer_code=False
+            ).topics,
+            ("protein folding",),
+        )
+        self.assertEqual(
+            checked_words(words, (paper, script)).topics,
+            ("nonlinear dynamics",),
+        )
+        ask = Mock(return_value="{}")
+        ask_for_words(
+            (paper, script), (), ask, prefer_code=False
+        )
+        prompt = ask.call_args.args[1]
+        self.assertIn("study.pdf", prompt)
+        self.assertNotIn("model.py", prompt)
 
     def test_one_theme_instead_of_a_list_is_read(self) -> None:
         """Read a single "theme" when a model writes no list."""
@@ -261,10 +332,19 @@ class TestWordPool(unittest.TestCase):
         self.assertEqual(pool.terms, ("MRI",))
         self.assertEqual(self._pool(ask), pool)
         ask.assert_called_once()
-        self.assertEqual(pool.themes, ("autoencoders for MRI",))
+        self.assertEqual(pool.themes, ("variational autoencoders",))
         saved = json.loads((self.indexes / SUGGESTION_WORDS_FILE).read_text())
         self.assertEqual(saved["topics"], ["variational autoencoders"])
-        self.assertEqual(saved["themes"], ["autoencoders for MRI"])
+        self.assertEqual(saved["themes"], ["variational autoencoders"])
+
+    def test_model_free_read_does_not_create_an_empty_pool(self) -> None:
+        """Reading without a model must not prevent later generation."""
+
+        ask = Mock(return_value=REPLY)
+        self.assertEqual(self._pool(None), SuggestionWords((), ()))
+        self.assertTrue(self._pool(ask).topics)
+        ask.assert_called_once()
+        self.assertTrue(self._pool(None).topics)
 
     def test_another_model_picks_again(self) -> None:
         """Ask again when the model changes."""
@@ -457,26 +537,41 @@ class TestSessionPool(unittest.TestCase):
             _suggestion_pool=None,
             chunks=list(CHUNKS),
             source_cards=None,
-            project=SimpleNamespace(indexes=Path("/unused")),
+            project=SimpleNamespace(
+                indexes=Path("/unused"),
+                profile=SimpleNamespace(type_id="literature"),
+            ),
             _ask_router=Mock(),
             router_model="small",
             _behavior_config=lambda: SimpleNamespace(
-                suggestion_templates=TEMPLATES
+                suggestion_templates=TEMPLATES,
+                suggestions=("Fixed?",),
             ),
         )
-        session._suggestion_words = lambda: rag.RAGSession._suggestion_words(
-            session
+        session._suggestion_words = (
+            lambda **kwargs: rag.RAGSession._suggestion_words(
+                session, **kwargs
+            )
         )
         words = SuggestionWords(("sleep quality",), ("MRI",))
-        with unittest.mock.patch.object(
-            rag, "suggestion_words", return_value=words
-        ) as pick:
+        with (
+            unittest.mock.patch.object(
+                rag, "suggestion_words", return_value=words
+            ) as pick,
+            unittest.mock.patch.object(
+                rag, "project_type",
+                return_value=SimpleNamespace(suggestions=("Fixed?",)),
+            ),
+        ):
             first = rag.RAGSession.question_suggestions(session)
             rag.RAGSession.question_suggestions(session)
             self.assertEqual(pick.call_count, 1)
             session.chunks = list(CHUNKS)
             rag.RAGSession.question_suggestions(session)
             self.assertEqual(pick.call_count, 2)
+            session.router_model = "another-model"
+            rag.RAGSession.question_suggestions(session)
+            self.assertEqual(pick.call_count, 3)
         self.assertIn(
             "What do the papers say about sleep quality?",
             [item.question for item in first],
@@ -487,11 +582,15 @@ class TestSessionPool(unittest.TestCase):
 
         from kilin import rag
 
-        packaged = SimpleNamespace(welcome_prompts=("Fixed heading?",))
+        packaged = SimpleNamespace(
+            welcome_prompts=("Fixed heading?",),
+            suggestions=("Fixed?",),
+        )
         config = SimpleNamespace(
             welcome_prompts=("Fixed heading?",),
             welcome_templates=("What about {topic}?",),
             suggestion_templates=TEMPLATES,
+            suggestions=("Fixed?",),
         )
         session = SimpleNamespace(
             _closed=False,
@@ -506,8 +605,10 @@ class TestSessionPool(unittest.TestCase):
             router_model="small",
             _behavior_config=lambda: config,
         )
-        session._suggestion_words = lambda: rag.RAGSession._suggestion_words(
-            session
+        session._suggestion_words = (
+            lambda **kwargs: rag.RAGSession._suggestion_words(
+                session, **kwargs
+            )
         )
         words = SuggestionWords(("sleep quality",), ())
         with (
@@ -526,6 +627,69 @@ class TestSessionPool(unittest.TestCase):
             self.assertEqual(pick.call_count, 1)
             config.welcome_prompts = ("My own heading?",)
             self.assertEqual(rag.RAGSession.welcome_prompts(session), [])
+
+    def test_custom_questions_and_empty_templates_never_generate(self) -> None:
+        """Keep user settings and avoid an unused model request."""
+
+        from kilin import rag
+
+        config = SimpleNamespace(
+            suggestion_templates=TEMPLATES,
+            suggestions=("My question?",),
+            welcome_prompts=(),
+            welcome_templates=(),
+        )
+        session = SimpleNamespace(
+            _closed=False,
+            chunks=list(CHUNKS),
+            project=SimpleNamespace(
+                profile=SimpleNamespace(type_id="literature")
+            ),
+            _behavior_config=lambda: config,
+            _suggestion_words=Mock(),
+        )
+        with unittest.mock.patch.object(
+            rag,
+            "project_type",
+            return_value=SimpleNamespace(suggestions=("Fixed?",)),
+        ):
+            self.assertEqual(rag.RAGSession.question_suggestions(session), [])
+            config.suggestions = ("Fixed?",)
+            config.suggestion_templates = ()
+            self.assertEqual(rag.RAGSession.question_suggestions(session), [])
+        session._suggestion_words.assert_not_called()
+
+    def test_non_generating_read_is_not_cached(self) -> None:
+        """An empty GUI read may be followed by explicit generation."""
+
+        from kilin import rag
+
+        session = SimpleNamespace(
+            chunks=list(CHUNKS),
+            source_cards=None,
+            project=SimpleNamespace(
+                indexes=Path("/unused"),
+                profile=SimpleNamespace(type_id="literature"),
+            ),
+            _suggestion_pool=None,
+            _ask_router=Mock(),
+            router_model="small",
+        )
+        words = SuggestionWords(("sleep quality",), ())
+        with unittest.mock.patch.object(
+            rag, "suggestion_words", side_effect=[
+                SuggestionWords((), ()), words,
+            ]
+        ) as pick:
+            self.assertEqual(
+                rag.RAGSession._suggestion_words(session, generate=False),
+                SuggestionWords((), ()),
+            )
+            self.assertEqual(
+                rag.RAGSession._suggestion_words(session), words
+            )
+            self.assertIsNone(pick.call_args_list[0].args[3])
+            self.assertIsNotNone(pick.call_args_list[1].args[3])
 
 
 if __name__ == "__main__":
