@@ -11,7 +11,7 @@ repository's own file.
 
 from __future__ import annotations
 
-import importlib.util
+import ast
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -34,12 +34,24 @@ class TestSetPasskey(unittest.TestCase):
         )
 
     def _constants(self) -> tuple[str, str]:
-        spec = importlib.util.spec_from_file_location(
-            "rewritten_activation", self.module
-        )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module.PASSKEY_SALT, module.PASSKEY_DIGEST
+        """Read rewritten constants without caching executed Python.
+
+        Returns
+        -------
+        tuple[str, str]
+            Current salt and digest from the source file.
+
+        """
+
+        tree = ast.parse(self.module.read_text(encoding="utf-8"))
+        values = {
+            node.target.id: ast.literal_eval(node.value)
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id in {"PASSKEY_SALT", "PASSKEY_DIGEST"}
+        }
+        return values["PASSKEY_SALT"], values["PASSKEY_DIGEST"]
 
     def test_new_passkey_gets_a_new_salt_and_digest(self) -> None:
         old_salt, _ = self._constants()
@@ -53,6 +65,19 @@ class TestSetPasskey(unittest.TestCase):
     def test_off_empties_the_digest_and_on_restores_it(self) -> None:
         passkey.set_passkey(None, self.module)
         self.assertEqual(self._constants()[1], "")
+        passkey.set_passkey("New Key", self.module)
+        salt, digest = self._constants()
+        self.assertEqual(passkey_digest("New Key", salt), digest)
+
+    def test_reenable_after_formatted_off_digest(self) -> None:
+        passkey.set_passkey(None, self.module)
+        source = self.module.read_text(encoding="utf-8")
+        expanded = 'PASSKEY_DIGEST: Final[str] = (\n    ""\n)'
+        compact = 'PASSKEY_DIGEST: Final[str] = ""'
+        self.assertIn(expanded, source)
+        self.module.write_text(
+            source.replace(expanded, compact), encoding="utf-8"
+        )
         passkey.set_passkey("New Key", self.module)
         salt, digest = self._constants()
         self.assertEqual(passkey_digest("New Key", salt), digest)

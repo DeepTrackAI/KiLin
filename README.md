@@ -76,6 +76,11 @@ Try opening a new terminal. If the command is still unavailable, use
 the full executable-path command printed by setup, or add that directory
 to `PATH`.
 
+The desktop prerelease uses a basic passkey access check for invited
+users. The GUI asks for a passkey before its first launch on a user
+account and remembers successful activation for subsequent launches.
+To obtain a GUI passkey, contact the KíLín core developers.
+
 The launcher installs missing GUI/backend dependencies; follow the setup
 panel to download the required models.
 

@@ -14,6 +14,12 @@ sandbox, authenticated multi-user service, encryption system or adversarial
 prompt-injection defense. This document states implemented boundaries and
 where users or deployers remain responsible for security.
 
+The desktop GUI includes a basic passkey-based access check for invited
+prerelease users. It runs before the main desktop window opens and
+remembers successful activation locally. This GUI-level check is not
+project-file encryption; operating-system permissions and other local
+data protections remain important.
+
 | Boundary | What KíLín does | What it does not guarantee |
 | --- | --- | --- |
 | Local source selection | Applies scan exclusions, size limits, path containment checks and explicit import rules. | Comprehensive secret detection; race-free protection against filesystem changes. |

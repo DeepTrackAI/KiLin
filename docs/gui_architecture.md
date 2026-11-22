@@ -98,13 +98,11 @@ different suggested workspace parents. The exact path overrides and
 preferences rules are owned by
 [Configuration](configuration.md#gui-defaults-and-writable-preferences).
 
-`gui/_activation.py` asks for the passkey in `gui/app.py`'s `main`, after
-the Qt application exists and before `ChatWindow` is built, and keeps the
-accepted passkey's hash in `activation.json` beside the preferences file.
-Removing that call removes the prompt. Maintainers change the passkey, or
-switch the prompt off with an empty digest, using the repository script
-`setup/passkey.py` (`--passkey NEW` or `--off`), and commit the rewritten
-module; the script is not part of the released package.
+`gui/_activation.py` implements the desktop passkey check. It is called
+from `gui/app.py`'s `main` after the Qt application exists and before
+`ChatWindow` is constructed. Successful activation is recorded next to
+the user's GUI preferences. The check does not change saved project
+settings or workspace files.
 
 An existing project's profile remains authoritative. `gui/model_settings.py`
 stores GUI-specific effort/search/router choices there rather than replacing

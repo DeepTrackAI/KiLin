@@ -53,16 +53,16 @@ displayed repair command explicitly and restart the application. These
 instructions do not auto-install packages, replace the current project
 backend preference, or download model weights.
 
-### Passkey
+### Desktop passkey
 
-The first launch on a user account asks for a passkey before the window
-opens; the authors give it to the people they invite. Letter case and
-surrounding spaces do not matter, and **Quit** closes KíLín. Once accepted,
-`activation.json` beside the user's preferences remembers it, including
-across updates, until the passkey changes. Only the window asks: the
-command line and notebooks do not. The passkey is a welcome, not access
-control (`kilin/gui/_activation.py`), and the code holds only its salted
-hash.
+The prerelease desktop GUI uses a basic passkey access check before
+opening its main window. To obtain a passkey, contact the KíLín core
+developers. The passkey is requested on the first launch for each
+user account. Letter case and surrounding spaces do not matter;
+select **Quit** to close KíLín.
+
+After successful entry, the desktop interface remembers activation
+for that account and opens directly on subsequent launches.
 
 ## Components and communication
 

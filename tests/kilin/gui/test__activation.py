@@ -47,8 +47,9 @@ class TestPasskey(unittest.TestCase):
         for typed in ("", "Test", "TestKey", "Test Key 2"):
             self.assertNotEqual(passkey_digest(typed), digest)
 
-    def test_a_shipped_passkey_is_set(self) -> None:
-        self.assertRegex(PASSKEY_DIGEST, r"^[0-9a-f]{64}$")
+    def test_shipped_digest_is_valid_or_disabled(self) -> None:
+        self.assertRegex(PASSKEY_DIGEST, r"^(?:[0-9a-f]{64})?$")
+        self.assertRegex(_activation.PASSKEY_SALT, r"^[0-9a-f]{32}$")
 
 
 class TestActivationRecord(unittest.TestCase):

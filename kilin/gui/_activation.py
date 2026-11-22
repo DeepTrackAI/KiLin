@@ -1,35 +1,29 @@
-"""Ask for KíLín's passkey before the desktop window first opens.
+"""Check the desktop passkey before opening KíLín's main window.
 
-The desktop application asks once per user account for a passkey, which
-the authors give to the people they invite. It welcomes invited users; it
-is not access control, since the command line, notebooks and the package
-itself are unaffected. Only the passkey's salted hash is stored here, and
-an accepted passkey is remembered in ``activation.json`` beside the user's
-preferences, so the window opens directly afterwards. A new passkey (a new
-``PASSKEY_DIGEST``) asks every user again.
+The desktop GUI requests an invitation passkey on first launch for a user
+account. Successful activation is remembered in ``activation.json``
+beside GUI preferences, allowing the main window to open directly on
+subsequent launches. The passkey verifier uses PBKDF2-SHA256.
 
 Key Features
 ------------
 
-- **Once per user account**
+- **Per-account activation**
 
-    The record holds the accepted passkey's hash, so an update keeps the
-    activation while a changed passkey asks again.
+    Remember a successful passkey check between desktop launches.
 
 - **Forgiving entry**
 
     Letter case and surrounding spaces do not matter.
 
-- **Changed by maintainers**
+- **Local activation record**
 
-    ``setup/passkey.py``, in the repository only, writes a new salt and
-    digest into this file, or an empty digest that asks no one. The
-    passkey itself is never written.
+    Store accepted activation next to the user's GUI preferences.
 
-- **Separate from the window**
+- **Desktop startup integration**
 
-    ``kilin.gui.app.main`` calls ``ask_passkey`` before building the
-    window; removing that call removes the prompt.
+    ``kilin.gui.app.main`` calls ``ask_passkey`` before constructing
+    the main window.
 
 Module Structure
 ----------------
@@ -81,9 +75,7 @@ __all__ = [
     "remember_activation",
 ]
 
-# PBKDF2-SHA256 of the casefolded, stripped passkey, with this salt.
-# ``setup/passkey.py`` rewrites both (every user is then asked again); an
-# empty digest asks no one.
+# PBKDF2-SHA256 verifier of the normalized passkey with a stored salt.
 PASSKEY_SALT: Final[str] = "ca9f2b0f73fe084676c6b12b7f5d15b8"
 PASSKEY_DIGEST: Final[str] = (
     "8398f6905a89a993838848ed4ff7ef960863b5cc1a0baae937387f6faed7dfae"
@@ -94,7 +86,7 @@ ACTIVATION_FILE: Final[str] = "activation.json"
 _TITLE: Final[str] = "Activate KíLín"
 _MESSAGE: Final[str] = (
     "<b>Welcome to KíLín.</b><br><br>Enter your passkey to activate "
-    "KíLín.<br>If you do not have one, contact the authors for a code."
+    "KíLín.<br>To obtain a passkey, contact the KíLín core developers."
 )
 _WRONG: Final[str] = "That passkey is not right. Please try again."
 
@@ -198,9 +190,8 @@ def ask_passkey() -> bool:
     Returns
     -------
     bool
-        True when the prompt is off (no ``PASSKEY_DIGEST``), the account
-        was already activated or the right passkey was entered (and
-        recorded); False when the user quit.
+        True when no check is required, activation is already present,
+        or the correct passkey was entered; False when the user quit.
 
     """
 

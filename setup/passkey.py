@@ -68,8 +68,10 @@ ACTIVATION_MODULE: Final[Path] = (
 _SALT_LINE: Final[re.Pattern[str]] = re.compile(
     r'^PASSKEY_SALT: Final\[str\] = "[0-9a-f]*"$', re.MULTILINE
 )
+# Black may collapse the empty digest after ``--off`` into one line.
 _DIGEST_LINES: Final[re.Pattern[str]] = re.compile(
-    r'^PASSKEY_DIGEST: Final\[str\] = \(\n    "[0-9a-f]*"\n\)$',
+    r'^PASSKEY_DIGEST: Final\[str\] = '
+    r'(?:\(\n    "[0-9a-f]*"\n\)|"[0-9a-f]*")$',
     re.MULTILINE,
 )
 
