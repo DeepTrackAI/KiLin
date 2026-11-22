@@ -98,6 +98,12 @@ different suggested workspace parents. The exact path overrides and
 preferences rules are owned by
 [Configuration](configuration.md#gui-defaults-and-writable-preferences).
 
+`gui/_activation.py` implements the desktop passkey check. It is called
+from `gui/app.py`'s `main` after the Qt application exists and before
+`ChatWindow` is constructed. Successful activation is recorded next to
+the user's GUI preferences. The check does not change saved project
+settings or workspace files.
+
 An existing project's profile remains authoritative. `gui/model_settings.py`
 stores GUI-specific effort/search/router choices there rather than replacing
 them from current global defaults. Its controlled legacy import is not a

@@ -64,6 +64,10 @@ and use the system-provided option in System Settings, Privacy &
 Security, to allow that particular app. Never advise disabling
 Gatekeeper or removing quarantine indiscriminately.
 
+Before sharing an invitation release, confirm that its desktop passkey
+has been tested on a fresh user account and is communicated to invited
+testers through a separate channel.
+
 Before sharing with trusted testers:
 
 1. Check the package version, authors, and licence with the release
@@ -72,8 +76,11 @@ Before sharing with trusted testers:
 2. Verify the copied `.app` and mounted DMG against the native checker.
    Record the macOS version, architecture, build command, and hash of
    the supplied artifact.
-3. Test first-launch installation, network failures, and the welcome
-   dialog's terms acceptance and failure/retry behavior.
+3. On a fresh user account, check the GUI passkey prompt before the main
+   window. Incorrect input must stay in the dialog; Quit must close the
+   application. Correct input must open the GUI and persist across restarts.
+   Then check first-launch installation, network failures, and the welcome
+   dialog's terms acceptance and retry behavior.
 4. Test the explicitly confirmed projects folder, synchronization
    warning, alternative folders, and discovery of earlier projects.
    Confirm no existing data is moved without user action.

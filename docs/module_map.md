@@ -46,6 +46,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/embeddings.py`](../kilin/embeddings.py) | Load a compatible embedding model and produce normalized text vectors. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
 | [`kilin/gui/__init__.py`](../kilin/gui/__init__.py) | Provide the optional KíLín graphical-interface package. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
 | [`kilin/gui/__main__.py`](../kilin/gui/__main__.py) | Start the optional GUI when invoked as ``python -m kilin.gui``. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
+| [`kilin/gui/_activation.py`](../kilin/gui/_activation.py) | Ask for KíLín's passkey before the desktop window first opens. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
 | [`kilin/gui/_paths.py`](../kilin/gui/_paths.py) | Resolve user-owned GUI data paths without importing Qt. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
 | [`kilin/gui/_report_pdf.py`](../kilin/gui/_report_pdf.py) | Render formatted report Markdown to PDF through optional Qt. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
 | [`kilin/gui/app.py`](../kilin/gui/app.py) | Create and run KíLín's Qt desktop application. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
@@ -225,7 +226,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Configuration | 7 |
 | Conversation ownership | 4 |
 | Conversation memory | 8 |
-| GUI architecture | 10 |
+| GUI architecture | 11 |
 | Model management | 8 |
 | Per-tool README | 59 |
 | Project workspaces | 6 |
@@ -235,7 +236,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 193.**
+**Total production Python modules: 194.**
 
 ## Non-Python resources and UI assets
 
