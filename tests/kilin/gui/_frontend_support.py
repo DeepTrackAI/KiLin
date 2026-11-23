@@ -102,6 +102,8 @@ def run_node(
         input=script,
         capture_output=True,
         text=True,
+        # Node reads and writes UTF-8; Windows would otherwise use cp1252.
+        encoding="utf-8",
         timeout=timeout,
         check=False,
         env=env,

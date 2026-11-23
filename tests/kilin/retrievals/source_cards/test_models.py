@@ -102,10 +102,10 @@ class TestGenericSourceCards(unittest.TestCase):
             Path("."), Path("../outside.txt"), Path("a/../outside.txt"),
             Path("/absolute.txt"), Path("C:/outside.txt"),
         ]
-        # WindowsPath has already normalized a backslash separator, so
-        # that spelling cannot be tested as an invalid Path on Windows.
+        # Windows reads a backslash as a folder separator, so there
+        # this is the valid path a/bad.txt and cannot be tested.
         backslash = Path(r"a\bad.txt")
-        if "\\" in str(backslash):
+        if len(backslash.parts) == 1:
             invalid.append(backslash)
         for value in invalid:
             with self.subTest(path=value):
