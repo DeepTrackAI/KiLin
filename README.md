@@ -53,9 +53,12 @@ artifacts have already been published.
 
 ## Installation
 
-The Python package requires **Python 3.12**. KíLín runs its models locally,
-but installation, dependency resolution, and explicitly requested model
-downloads require network access.
+The current package officially supports **Python 3.12**. The CI matrix
+also runs experimental compatibility tests for Python **3.13 and 3.14** on
+Linux, macOS, and Windows. Those jobs bypass the package's 3.12 requirement
+and do not yet establish official installation support for newer versions.
+The desktop installers use Python 3.12. Model execution is local, but
+installation and explicitly requested downloads require network access.
 
 ### Python package
 
@@ -189,9 +192,11 @@ included only if one is assigned to an archived release.
 
 KíLín's software is available under the
 [Apache License 2.0](https://github.com/DeepTrackAI/KiLin/blob/main/LICENSE).
-Logo and mascot artwork have separate attribution and redistribution
-considerations; see the
+The KíLín name, wordmark, logos, mascot, and other brand artwork have
+[separate branding terms](https://github.com/DeepTrackAI/KiLin/blob/main/kilin/gui/icons/BRAND_LICENSE.md).
+They may accompany authentic, unmodified KíLín releases, while modified
+software must not imply official endorsement. See the
 [brand-asset notes](https://github.com/DeepTrackAI/KiLin/blob/main/assets/brand/README.md)
-and [GUI icon notes](https://github.com/DeepTrackAI/KiLin/blob/main/kilin/gui/icons/README.md).
+for the current artwork and its use.
 Bundled KaTeX assets retain their
 [third-party license](https://github.com/DeepTrackAI/KiLin/blob/main/kilin/gui/web/katex/LICENSE).
