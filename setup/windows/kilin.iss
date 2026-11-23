@@ -117,15 +117,44 @@ begin
   end;
 end;
 
-{ Compare versions such as '0.1.0' and '0.2.0' part by part: negative when
-  A is older, zero when equal, positive when A is newer. }
+{ Extract the suffix from a numeric patch component. }
+function VersionSuffix(Part: String): String;
+var
+  I: Integer;
+begin
+  I := 1;
+  while (I <= Length(Part)) and (Part[I] >= '0') and
+      (Part[I] <= '9') do
+    I := I + 1;
+  Result := LowerCase(Copy(Part, I, Length(Part)));
+end;
+
+{ PEP 440 prerelease order: alpha < beta < release candidate < stable. }
+function PhaseRank(Suffix: String): Integer;
+begin
+  if Suffix = '' then Result := 3
+  else if Copy(Suffix, 1, 2) = 'rc' then Result := 2
+  else if Copy(Suffix, 1, 1) = 'b' then Result := 1
+  else if Copy(Suffix, 1, 1) = 'a' then Result := 0
+  else Result := -1;
+end;
+
+function PhaseNumber(Suffix: String): Integer;
+begin
+  if Copy(Suffix, 1, 2) = 'rc' then Delete(Suffix, 1, 2)
+  else if Suffix <> '' then Delete(Suffix, 1, 1);
+  Result := PartNumber(Suffix);
+end;
+
+{ Compare major/minor/patch, then prerelease phase and its index.
+  Negative means A is older, positive means A is newer. }
 function CompareVersions(A, B: String): Integer;
 var
-  Cut: Integer;
-  PartA, PartB: String;
+  Cut, I: Integer;
+  PartA, PartB, SuffixA, SuffixB: String;
 begin
   Result := 0;
-  while (Result = 0) and ((A <> '') or (B <> '')) do
+  for I := 1 to 3 do
   begin
     Cut := Pos('.', A);
     if Cut = 0 then Cut := Length(A) + 1;
@@ -136,6 +165,15 @@ begin
     PartB := Copy(B, 1, Cut - 1);
     Delete(B, 1, Cut);
     Result := PartNumber(PartA) - PartNumber(PartB);
+    if Result <> 0 then Exit;
+    if I = 3 then
+    begin
+      SuffixA := VersionSuffix(PartA);
+      SuffixB := VersionSuffix(PartB);
+      Result := PhaseRank(SuffixA) - PhaseRank(SuffixB);
+      if Result = 0 then
+        Result := PhaseNumber(SuffixA) - PhaseNumber(SuffixB);
+    end;
   end;
 end;
 

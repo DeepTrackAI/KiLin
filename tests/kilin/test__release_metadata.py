@@ -99,6 +99,27 @@ class TestReleaseMetadata(unittest.TestCase):
             _EXPECTED_AUTHORS,
         )
 
+    def test_prerelease_and_lockfile_versions(self):
+        """Keep the first beta and editable uv package in agreement.
+
+        """
+
+        with (_ROOT / "pyproject.toml").open("rb") as stream:
+            project = tomllib.load(stream)["project"]
+        self.assertEqual(project["version"], "0.1.0b1")
+        with (_ROOT / "uv.lock").open("rb") as stream:
+            lock = tomllib.load(stream)
+        local = [
+            package for package in lock["package"]
+            if package["name"] == "kilin"
+        ]
+        self.assertEqual(len(local), 1)
+        self.assertEqual(local[0]["version"], project["version"])
+        self.assertEqual(
+            project["urls"]["Repository"],
+            "https://github.com/DeepTrackAI/KiLin",
+        )
+
     def test_citation_metadata(self):
         """Validate the CFF structure, author order, and release version.
 
@@ -144,5 +165,5 @@ class TestReleaseMetadata(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn(
-            "https://github.com/giovannivolpe/KiLin/blob/main/LICENSE", page
+            "https://github.com/DeepTrackAI/KiLin/blob/main/LICENSE", page
         )

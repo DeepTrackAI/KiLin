@@ -12,6 +12,7 @@ No application launch, Finder prompt, signing identity, or network is used.
 from __future__ import annotations
 
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -383,6 +384,57 @@ exit 0
             self.log.read_text(),
         )
         self._assert_unrelated_files()
+
+    def test_prerelease_bundle_versions_are_numeric_and_ordered(
+        self,
+    ) -> None:
+        """Distinguish beta, RC and stable without nonnumeric plist keys.
+
+        """
+
+        cases = (
+            ("0.1.0b1", "0.1.0", "0.1.1001"),
+            ("0.1.0b2", "0.1.0", "0.1.1002"),
+            ("0.1.0rc1", "0.1.0", "0.1.2001"),
+            ("0.1.0", "0.1.0", "0.1.3000"),
+            ("0.1.1b1", "0.1.1", "0.1.11001"),
+        )
+        for version, short, build in cases:
+            with self.subTest(version=version):
+                (self.root / "pyproject.toml").write_text(
+                    '[project]\nname = "kilin"\n'
+                    f'version = "{version}"\n',
+                    encoding="utf-8",
+                )
+                result = self._run()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                app = self.dist / "KíLín.app/Contents"
+                with (app / "Info.plist").open("rb") as stream:
+                    info = plistlib.load(stream)
+                self.assertEqual(info["CFBundleShortVersionString"], short)
+                self.assertEqual(info["CFBundleVersion"], build)
+                self.assertRegex(build, r"^\d+\.\d+\.\d+$")
+                launcher = (app / "MacOS/KiLin").read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn(f"kilin[app]=={version}", launcher)
+
+    def test_invalid_release_version_preserves_prior_build(self) -> None:
+        """Reject unsupported suffixes before changing app artifacts.
+
+        """
+
+        self._previous_outputs()
+        for version in ("0.1.0dev1", "0.1.0b1000"):
+            with self.subTest(version=version):
+                (self.root / "pyproject.toml").write_text(
+                    f'[project]\nversion = "{version}"\n',
+                    encoding="utf-8",
+                )
+                result = self._run()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("version", result.stderr.lower())
+                self._assert_previous_outputs()
 
     def test_host_signing_identity_does_not_change_build(self) -> None:
         """Ignore Developer ID identities in the host environment.

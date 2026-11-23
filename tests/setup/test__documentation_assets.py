@@ -19,7 +19,7 @@ import json
 from pathlib import Path
 import re
 import unittest
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 from xml.etree import ElementTree
 
 
@@ -196,6 +196,42 @@ class TestDocumentationAssets(unittest.TestCase):
                     name = document.relative_to(ROOT).as_posix()
                     errors.append(f"{name}: {target}")
         self.assertEqual(errors, [], "Invalid local Markdown targets")
+
+    def test_public_readme_images_and_links_use_repository_urls(
+        self,
+    ) -> None:
+        """Keep the PyPI description independent of relative file paths.
+
+        The public repository is not contacted during this test.
+
+        """
+
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        prefix = "https://raw.githubusercontent.com/DeepTrackAI/KiLin/main/"
+        images = (
+            "assets/brand/10-lockup-horizontal-light.svg",
+            "assets/brand/11-lockup-horizontal-dark.svg",
+        )
+        for path in images:
+            with self.subTest(path=path):
+                self.assertTrue((ROOT / path).is_file())
+                self.assertIn(prefix + path, readme)
+        links = LINK_PATTERN.findall(_without_fences(readme))
+        self.assertTrue(links)
+        source_prefix = "/DeepTrackAI/KiLin/blob/main/"
+        for target in links:
+            with self.subTest(target=target):
+                parsed = urlparse(target)
+                self.assertEqual(parsed.scheme, "https")
+                if (parsed.netloc == "github.com"
+                        and parsed.path.startswith(source_prefix)):
+                    relative = unquote(parsed.path[len(source_prefix):])
+                    self.assertTrue((ROOT / relative).is_file(), target)
+        anchors = _heading_anchors(readme)
+        for anchor in re.findall(r'<a href="#([^"]+)">', readme):
+            self.assertIn(anchor, anchors)
+        self.assertIn("0.1.0b1", readme)
+        self.assertIn("https://github.com/DeepTrackAI/KiLin", readme)
 
     def test_svg_figures_are_valid_and_documented(self) -> None:
         """Require accessible, self-contained SVGs used by owner pages."""

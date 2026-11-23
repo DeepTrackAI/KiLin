@@ -1,165 +1,197 @@
-# KíLín
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)"
+            srcset="https://raw.githubusercontent.com/DeepTrackAI/KiLin/main/assets/brand/11-lockup-horizontal-dark.svg">
+    <img src="https://raw.githubusercontent.com/DeepTrackAI/KiLin/main/assets/brand/10-lockup-horizontal-light.svg"
+         alt="KíLín mosaic qilin mascot and wordmark" width="620">
+  </picture>
+</p>
 
-KíLín is a local, extensible AI assistant for scientific and technical work.
-Its project types cover code, literature, writing, creative and
-source-grounded brainstorming, and researcher-directed reviewing. Source-grounded answers cite project files;
-conversation memory can separately recall eligible prior discussions without
-treating them as scientific evidence. Projects have customizable intents,
-tools, and memory policies.
+<p align="center"><strong>Your AI. Your Knowledge. Your Control.</strong></p>
 
-## Citation
+<p align="center">
+  <a href="https://github.com/DeepTrackAI/KiLin/releases">
+    <img src="https://img.shields.io/badge/release-0.1.0b1%20beta-orange"
+         alt="0.1.0b1 beta release"></a>
+  <img src="https://img.shields.io/badge/Python-3.12-blue"
+       alt="Python 3.12">
+  <a href="https://github.com/DeepTrackAI/KiLin/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/license-Apache--2.0-blue"
+         alt="Apache License 2.0"></a>
+</p>
 
-Please cite KíLín using the metadata in [CITATION.cff](CITATION.cff).
-The citation lists Io̍k-uí Tiunn, Joana B. Pereira, Carlo Manzo, and
-Giovanni Volpe as authors.
+<p align="center">
+  <a href="#overview">Overview</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="#getting-started">Getting started</a> ·
+  <a href="#tutorials-and-documentation">Documentation</a> ·
+  <a href="#citation">Citation</a> ·
+  <a href="#license-and-attribution">License</a>
+</p>
 
-## Install
+## Overview
 
-**macOS app** (Apple Silicon, macOS 14+): open a trusted `KíLín.dmg`,
-drag KíLín to Applications and open it. First launch installs Python 3.12
-and KíLín's dependencies, and therefore needs network access. Model
-weights are downloaded separately when explicitly requested in setup.
+**KíLín** is a local, extensible AI assistant for scientific, technical,
+and general knowledge work. It combines locally run language models,
+project-specific sources, retrieval-augmented generation (RAG), configurable
+tools, and persistent conversations. Users control their models, projects,
+and data instead of depending on a remote AI service for every answer.
 
-Current DMGs are ad-hoc signed **development builds**, not Apple
-Developer ID signed or notarized. macOS may block them. Only if you trust
-the specific build, review the warning in System Settings → Privacy &
-Security after attempting to open it. Do not remove quarantine as a
-general installation step. See the
-[macOS build guide](docs/release.md) for verification and limitations.
+KíLín provides six built-in project types for code, literature, writing,
+grounded brainstorming, creative brainstorming, and researcher-directed
+reviewing. Source-grounded responses reference project files for independent
+inspection. Optional conversation memory can reuse eligible earlier
+interactions without presenting them as independent scientific evidence.
+Scientific interpretation and the final evaluation of reports remain with
+the researcher.
 
-**Windows installer** (64-bit Windows 10 or 11): run
-`KiLin-Setup-<version>.exe`. It needs no administrator rights. While
-installing, it downloads Python 3.12 and KíLín's packages, including the
-CUDA build of PyTorch on computers with an NVIDIA GPU, so it needs network
-access. The installer is not code-signed, so Windows SmartScreen may warn;
-choose **More info → Run anyway** only for a build you trust. See the
-[Windows section of the build guide](docs/release.md#windows-installer).
+**Beta release:** This is the preparation for `0.1.0b1`, the first public
+prerelease. The planned sequence is `0.1.0b1` → `0.1.0rc1` → `0.1.0`.
+Features, public interfaces, and saved formats may change before `0.1.0`.
+A release appearing in this README is not a claim that its distribution
+artifacts have already been published.
 
-**pip** (macOS, Linux, experimental Windows; Python 3.12):
+## Installation
+
+The Python package requires **Python 3.12**. KíLín runs its models locally,
+but installation, dependency resolution, and explicitly requested model
+downloads require network access.
+
+### Python package
+
+On macOS, Linux, or experimental Windows, use a Python 3.12 environment:
 
 ```sh
-pip install "kilin[app]"
+python -m pip install "kilin[app]==0.1.0b1"
 kilin-gui
 ```
 
-## Setup for development
+The `app` extra installs the graphical interface and the computation backend
+appropriate to the platform (MLX on supported Apple Silicon Macs, PyTorch
+elsewhere). For the core without the GUI, use `kilin==0.1.0b1`; to select a
+backend explicitly, see the
+[model-management guide](https://github.com/DeepTrackAI/KiLin/blob/main/docs/model_management.md).
+The beta version is installable from PyPI once its artifacts are published.
 
-After downloading the code, open a terminal in the KíLín folder and run
-the setup command for your operating system.
+### macOS desktop application (Apple Silicon, macOS 14+)
 
-macOS or Linux:
+The experimental `KíLín.dmg`, when provided as a
+[GitHub release asset](https://github.com/DeepTrackAI/KiLin/releases),
+contains a launcher that installs Python 3.12 and dependencies on first use.
+Current builds are signed ad hoc, **not** with an Apple Developer ID, and
+are **not notarized**. macOS may block them. Only use an artifact whose
+origin you have verified; do not disable Gatekeeper or remove quarantine as
+a general installation procedure. See the
+[macOS release guide](https://github.com/DeepTrackAI/KiLin/blob/main/docs/release.md).
+
+### Windows desktop installer (64-bit Windows 10 or 11)
+
+The experimental `KiLin-Setup-<version>.exe`, when available, installs to
+the current user's account without administrator privileges. It downloads
+Python 3.12 and dependencies (including a suitable PyTorch build). The
+installer is **unsigned**, so Windows SmartScreen may warn. Follow the
+[Windows installer guide](https://github.com/DeepTrackAI/KiLin/blob/main/docs/release.md#windows-installer)
+and do not run an unverified executable.
+
+## Getting started
+
+After installation, open `kilin-gui`, select models and a project workspace,
+create a project of the appropriate type, and add source files. Ask a
+question, inspect the retrieved evidence, and save useful conversations.
+
+The desktop beta includes a **local invitation-passkey prompt** on first
+launch for each user account. After successful activation, the GUI remembers
+that user. Contact the project maintainers for a beta passkey. This is a
+client-side access prompt, **not a security boundary or access restriction
+on the open-source Python API**. See the
+[GUI guide](https://github.com/DeepTrackAI/KiLin/blob/main/kilin/gui/README.md)
+for further details.
+
+To run KíLín from a source checkout, on macOS or Linux:
 
 ```sh
 sh setup/setup.sh
+uv run kilin --gui
 ```
 
-Windows (PowerShell):
+On Windows, perform development setup with PowerShell:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File setup/setup.ps1
 ```
 
-For notebooks, select the project's
-`.venv` Python kernel.
+Then run `uv run kilin --gui`. Select the checkout's `.venv` Python
+kernel when following the tutorials. The
+[development guide](https://github.com/DeepTrackAI/KiLin/blob/main/docs/development.md)
+covers setup, dependency and test requirements.
 
-## Graphical User Interface
+## Tutorials and documentation
 
-To open the desktop GUI, run the command:
+KíLín includes **19 progressive Jupyter notebooks** covering models,
+source processing, semantic/lexical/code retrieval, indexing, project chat,
+diagnostic traces, project types, conversation memory, custom tools, and
+an end-to-end research assistant.
 
-```sh
-uv run kilin --gui
-```
+Begin with the
+[complete tutorial guide](https://github.com/DeepTrackAI/KiLin/blob/main/tutorials/README.md),
+or start directly with
+[10 — Setup](https://github.com/DeepTrackAI/KiLin/blob/main/tutorials/10_setup.ipynb),
+[20 — Hugging Face models](https://github.com/DeepTrackAI/KiLin/blob/main/tutorials/20_huggingface_models.ipynb),
+and [140 — Project chat](https://github.com/DeepTrackAI/KiLin/blob/main/tutorials/140_project_chat.ipynb).
+Some notebooks need previously downloaded models; others work offline with
+bundled examples.
 
-If `uv: command not found` appears after setup, `uv` may be installed
-outside this terminal's `PATH` or reused from an earlier installation.
-Try opening a new terminal. If the command is still unavailable, use
-the full executable-path command printed by setup, or add that directory
-to `PATH`.
+The [technical documentation](https://github.com/DeepTrackAI/KiLin/blob/main/docs/README.md)
+explains the architecture, configuration, sources, retrieval, model
+management, tools, GUI, testing, and release procedures. In particular,
+see [workspace ownership](https://github.com/DeepTrackAI/KiLin/blob/main/docs/project_workspaces.md),
+[conversation memory](https://github.com/DeepTrackAI/KiLin/blob/main/docs/conversation_memory.md),
+and [extension interfaces](https://github.com/DeepTrackAI/KiLin/blob/main/docs/extension_interfaces.md).
 
-The desktop prerelease uses a basic passkey access check for invited
-users. The GUI asks for a passkey before its first launch on a user
-account and remembers successful activation for subsequent launches.
-To obtain a GUI passkey, contact the KíLín core developers.
+## Privacy and limitations
 
-The launcher installs missing GUI/backend dependencies; follow the setup
-panel to download the required models.
+KíLín is designed for local control, but local model execution does not
+make installation and all optional actions offline. Conversations, source
+snapshots, and diagnostic traces may contain sensitive material. KíLín
+does not provide encrypted workspaces, an execution sandbox, or guaranteed
+scientific correctness. Never share a workspace or trace archive assuming
+it has been anonymized.
 
-## Tests and formatting
+Read the
+[security notes](https://github.com/DeepTrackAI/KiLin/blob/main/docs/security.md)
+and [trace-recording guide](https://github.com/DeepTrackAI/KiLin/blob/main/docs/trace_recording.md)
+for the implemented guarantees and limitations.
 
-Run these commands from the KíLín folder after setup. `--no-sync` keeps
-the installed backend dependencies unchanged.
+## Development
 
-Run all unit tests:
+Development tests and formatting checks from the checkout include:
 
 ```sh
 uv run --no-sync python -m tests
-```
-
-Format Python code with Black, then check it with Ruff:
-
-```sh
-uv run --no-sync black kilin setup tests
+uv run --no-sync black --check kilin setup tests
 uv run --no-sync ruff check kilin setup tests
 ```
 
-To check formatting without changing files, add `--check` to the Black
-command. Format only the files you changed when preserving existing style.
+Use the [development guide](https://github.com/DeepTrackAI/KiLin/blob/main/docs/development.md)
+for the complete test matrix, style conventions, and release validation.
+Contributions and issue reports can be filed at
+[DeepTrackAI/KiLin](https://github.com/DeepTrackAI/KiLin).
 
-## Diagnostic tracing
+## Citation
 
-KíLín records complete diagnostic events for enabled tracing, including
-available prompts, generated answers, retrieved content, token IDs, errors,
-and local paths. Embedding vectors are opt-in because they can be large.
-There are no selectable trace-detail modes. `RAGSession(trace=None)` enables
-tracing, while `TraceConfig(enabled=False)` disables diagnostic events but
-retains the resumable conversation checkpoint. Both are written to the same
-JSON file when tracing is enabled. Deleting that file also removes the saved
-conversation. Protect local workspaces and do not share raw trace files as
-sanitized reports. See [trace recording](docs/trace_recording.md).
+If KíLín contributes to your research, please cite the **specific version**
+used. The [CITATION.cff](https://github.com/DeepTrackAI/KiLin/blob/main/CITATION.cff)
+file provides GitHub-compatible software citation metadata for Io̍k-uí
+Tiunn, Joana B. Pereira, Carlo Manzo, and Giovanni Volpe. A DOI will be
+included only if one is assigned to an archived release.
 
-## Conversation persistence and exclusive ownership
+## License and attribution
 
-Each active conversation has a single writable `conversation_*.json` record.
-KíLín holds an OS-level advisory lock on a stable `.json.lock` companion
-while an active trace or tracing-disabled RAG session owns that file. A second
-writer targeting the same conversation raises `ConversationLockedError` and
-leaves the saved JSON unchanged. Locks are released on close and by the
-operating system after process termination; the companion files can remain.
-Conversation JSON and related local metadata use unique temporary files and
-atomic replacements, avoiding predictable temporary-file collisions. Active
-GUI metadata changes are written once through the owning trace, rather than
-through two independent snapshots. These guarantees do not replace database
-transactions or a disk-durability protocol. For switching, archival, error
-recovery, and GUI metadata updates, see
-[conversation-file ownership](docs/conversation_ownership.md).
-
-## Tutorials
-
-KíLín includes 19 notebooks introducing the framework, from local models
-and source processing to retrieval, project chat, diagnostic traces, project
-types, conversation memory, custom tools, and a final end-to-end
-research-assistant exercise.
-
-Start with the [tutorial guide](tutorials/README.md) for prerequisites,
-recommended learning paths, model requirements, example datasets, and safe
-handling of generated workspaces.
-
-For a first introduction, we recommend:
-
-1. [10 · Setup](tutorials/10_setup.ipynb): Check your environment and
-   computational backend without loading a model.
-2. [20 · Hugging Face models](tutorials/20_huggingface_models.ipynb): Inspect
-   locally cached models and download models explicitly when needed.
-3. [140 · Project chat](tutorials/140_project_chat.ipynb): Create a project
-   and ask questions about its files with citations and saved history.
-   This example requires local chat and embedding models.
-
-The other notebooks explain individual components in more depth; they are
-not prerequisites for using the graphical interface. Most examples use
-source files distributed with KíLín. Tutorials involving literature can
-optionally use the supplementary article corpus in
-`_si_article_/literature_repo/` and provide bundled PDF fallbacks when
-that corpus is unavailable. The final
-[end-to-end tutorial](tutorials/190_end_to_end_research_assistant.ipynb)
-uses a bundled fictional corpus for offline retrieval checks and an
-optional model-based RAG run.
+KíLín's software is available under the
+[Apache License 2.0](https://github.com/DeepTrackAI/KiLin/blob/main/LICENSE).
+Logo and mascot artwork have separate attribution and redistribution
+considerations; see the
+[brand-asset notes](https://github.com/DeepTrackAI/KiLin/blob/main/assets/brand/README.md)
+and [GUI icon notes](https://github.com/DeepTrackAI/KiLin/blob/main/kilin/gui/icons/README.md).
+Bundled KaTeX assets retain their
+[third-party license](https://github.com/DeepTrackAI/KiLin/blob/main/kilin/gui/web/katex/LICENSE).

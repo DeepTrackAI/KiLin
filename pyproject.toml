@@ -1,13 +1,13 @@
 [project]
 name = "kilin"
-version = "0.1.0"
+version = "0.1.0b1"
 authors = [
     {name = "Io̍k-uí Tiunn"},
     {name = "Joana B. Pereira"},
     {name = "Carlo Manzo"},
     {name = "Giovanni Volpe"},
 ]
-description = "Local, provider-independent question-answering application"
+description = "Private, extensible local AI assistant for research and knowledge work"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -62,7 +62,7 @@ bench = [
 
 
 [project.urls]
-Repository = "https://github.com/giovannivolpe/KiLin"
+Repository = "https://github.com/DeepTrackAI/KiLin"
 
 [project.scripts]
 kilin = "kilin.cli:main"
