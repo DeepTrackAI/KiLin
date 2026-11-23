@@ -124,10 +124,14 @@ class TestFeedbackStore(unittest.TestCase):
         parent_path = self.conversations.state_path(self.parent)
         branch_path = self.conversations.state_path(branch)
         self.assertEqual(
-            conversation_state(json.loads(parent_path.read_text()))[
+            conversation_state(json.loads(parent_path.read_text(
+                encoding="utf-8",
+            )))[
                 "turns"
             ][0]["conversation_turn_uuid"],
-            conversation_state(json.loads(branch_path.read_text()))[
+            conversation_state(json.loads(branch_path.read_text(
+                encoding="utf-8",
+            )))[
                 "turns"
             ][0]["conversation_turn_uuid"],
         )

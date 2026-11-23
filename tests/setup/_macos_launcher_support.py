@@ -237,6 +237,7 @@ class LauncherSandbox:
             text=True,
             check=False,
             timeout=timeout,
+            encoding="utf-8",
         )
 
     def close(self) -> None:

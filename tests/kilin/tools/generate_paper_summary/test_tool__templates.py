@@ -117,10 +117,14 @@ class _Project(unittest.TestCase):
         self.templates.mkdir()
         for source in SHIPPED_TEMPLATES_DIR.glob("*.md"):
             shutil.copy(source, self.templates / source.name)
-        (self.templates / "journal_club.md").write_text(JOURNAL_CLUB)
-        (self.templates / "minutes.md").write_text(MINUTES)
+        (self.templates / "journal_club.md").write_text(
+            JOURNAL_CLUB, encoding="utf-8",
+        )
+        (self.templates / "minutes.md").write_text(MINUTES, encoding="utf-8")
         # A project report, which this tool leaves alone.
-        (self.templates / "lab_overview.md").write_text(LAB_OVERVIEW)
+        (self.templates / "lab_overview.md").write_text(
+            LAB_OVERVIEW, encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.folder.cleanup()
@@ -129,7 +133,9 @@ class _Project(unittest.TestCase):
 class TestGuide(unittest.TestCase):
 
     def test_readme_example_is_a_valid_template(self) -> None:
-        guide = (SHIPPED_TEMPLATES_DIR / "README.md").read_text()
+        guide = (SHIPPED_TEMPLATES_DIR / "README.md").read_text(
+            encoding="utf-8",
+        )
         example = re.search(r"```markdown\n(.*?)```", guide, re.S).group(1)
         template = parse_template(example, "journal_club")
         self.assertEqual(template.title, "Journal Club Handout")
@@ -260,7 +266,7 @@ class TestChoosing(_Project):
         for path in self.templates.glob("*.md"):
             if path.name != "minutes.md":
                 path.unlink()
-        (self.templates / "broken.md").write_text(BROKEN)
+        (self.templates / "broken.md").write_text(BROKEN, encoding="utf-8")
         self.assertEqual(
             choose_template("make a report", self.templates,
                             TEMPLATE_CHOOSE, Mock()).name,
@@ -271,8 +277,10 @@ class TestChoosing(_Project):
             choose_template("make a report", self.templates, TEMPLATE_CHOOSE)
 
     def test_overlapping_names_and_boundaries(self) -> None:
-        (self.templates / "lab.md").write_text(LAB)
-        (self.templates / "lab_notes.md").write_text(LAB_NOTES)
+        (self.templates / "lab.md").write_text(LAB, encoding="utf-8")
+        (self.templates / "lab_notes.md").write_text(
+            LAB_NOTES, encoding="utf-8",
+        )
         for question, expected in (
             ("use lab_notes for smith20", "lab_notes"),
             ("use lab notes for smith20", "lab_notes"),
@@ -290,8 +298,10 @@ class TestChoosing(_Project):
                 self.assertEqual(chosen.name, expected)
 
     def test_ambiguous_names_do_not_silently_choose(self) -> None:
-        (self.templates / "lab.md").write_text(LAB)
-        (self.templates / "lab_notes.md").write_text(LAB_NOTES)
+        (self.templates / "lab.md").write_text(LAB, encoding="utf-8")
+        (self.templates / "lab_notes.md").write_text(
+            LAB_NOTES, encoding="utf-8",
+        )
         question = "use lab_notes and lab for smith20"
         choose = Mock()
         with self.assertRaisesRegex(
@@ -305,8 +315,8 @@ class TestChoosing(_Project):
     def test_broken_longer_name_is_reported_not_shorter_one(
         self,
     ) -> None:
-        (self.templates / "lab.md").write_text(LAB)
-        (self.templates / "lab_notes.md").write_text(BROKEN)
+        (self.templates / "lab.md").write_text(LAB, encoding="utf-8")
+        (self.templates / "lab_notes.md").write_text(BROKEN, encoding="utf-8")
         with self.assertRaisesRegex(ValueError, r"lab_notes.*author"):
             choose_template("use lab_notes.md", self.templates, "lab")
         result = templates_answer(self.templates)
@@ -338,7 +348,7 @@ class TestListingAndChecking(_Project):
         return result, choose_paper
 
     def test_list(self) -> None:
-        (self.templates / "broken.md").write_text(BROKEN)
+        (self.templates / "broken.md").write_text(BROKEN, encoding="utf-8")
         (self.templates / "README.md").unlink()  # An older project.
         answer = templates_answer(self.templates)
         self.assertIn(
@@ -363,7 +373,7 @@ class TestListingAndChecking(_Project):
         self.assertTrue(result.summary["listed_templates"])
 
     def test_check(self) -> None:
-        (self.templates / "broken.md").write_text(BROKEN)
+        (self.templates / "broken.md").write_text(BROKEN, encoding="utf-8")
         result, choose_paper = self._run("check my journal_club template")
         choose_paper.assert_not_called()
         self.assertIn("**Journal Club Handout** (`journal_club.md`) can be "
@@ -381,8 +391,10 @@ class TestListingAndChecking(_Project):
         self.assertEqual(result.answer, "No template was chosen.")
 
     def test_overlapping_names_in_template_check(self) -> None:
-        (self.templates / "lab.md").write_text(LAB)
-        (self.templates / "lab_notes.md").write_text(LAB_NOTES)
+        (self.templates / "lab.md").write_text(LAB, encoding="utf-8")
+        (self.templates / "lab_notes.md").write_text(
+            LAB_NOTES, encoding="utf-8",
+        )
         for question, expected in (
             ("check lab_notes template", "lab_notes.md"),
             ("check lab notes template", "lab_notes.md"),

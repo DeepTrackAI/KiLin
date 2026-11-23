@@ -198,6 +198,7 @@ with ConversationFileLock(sys.argv[1]) as owner:
             capture_output=True,
             text=True,
             check=False,
+            encoding="utf-8",
         )
         self.assertEqual(child.returncode, 0, child.stderr)
 
@@ -226,6 +227,7 @@ with ConversationFileLock(sys.argv[1]) as owner:
                 capture_output=True,
                 text=True,
                 check=False,
+                encoding="utf-8",
             )
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("ConversationLockedError", rejected.stderr)
@@ -234,6 +236,7 @@ with ConversationFileLock(sys.argv[1]) as owner:
             capture_output=True,
             text=True,
             check=False,
+            encoding="utf-8",
         )
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
@@ -246,6 +249,7 @@ with ConversationFileLock(sys.argv[1]) as owner:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
         )
         try:
             self.assertEqual(process.stdout.readline().strip(), "LOCKED")

@@ -80,6 +80,7 @@ print("KILIN_API_RESULTS=" + json.dumps(results))
             capture_output=True,
             timeout=120,
             check=False,
+            encoding="utf-8",
         )
         self.assertEqual(
             process.returncode,

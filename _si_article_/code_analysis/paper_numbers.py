@@ -111,7 +111,8 @@ def _run(command: Sequence[str]) -> str:
 
     try:
         result = subprocess.run(
-            list(command), capture_output=True, text=True, check=True
+            list(command), capture_output=True, text=True, check=True,
+            encoding="utf-8",
         )
     except (OSError, subprocess.CalledProcessError):
         return ""

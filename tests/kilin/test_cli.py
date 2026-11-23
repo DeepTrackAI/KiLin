@@ -469,6 +469,7 @@ class TestLazyCLIImport(unittest.TestCase):
             capture_output=True,
             text=True,
             check=False,
+            encoding="utf-8",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 

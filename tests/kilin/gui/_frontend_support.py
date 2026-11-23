@@ -97,4 +97,5 @@ def run_node(
         timeout=timeout,
         check=False,
         env=env,
+        encoding="utf-8",
     )

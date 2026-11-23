@@ -596,7 +596,9 @@ class TestWritingCheckRun(unittest.TestCase):
         self.assertNotIn("line 1", result.answer)
         report = self.root / "outputs" / "question_writing_check.md"
         self.assertTrue(report.exists())
-        self.assertIn("text supplied in the question", report.read_text())
+        self.assertIn("text supplied in the question", report.read_text(
+            encoding="utf-8",
+        ))
         context.done.assert_called_once_with(
             "Checked 1 paragraph", evidence_count=0
         )

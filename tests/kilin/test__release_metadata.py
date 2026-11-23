@@ -67,6 +67,7 @@ class TestReleaseMetadata(unittest.TestCase):
             text=True,
             timeout=30,
             check=True,
+            encoding="utf-8",
         )
         with (_ROOT / "pyproject.toml").open("rb") as stream:
             expected = tomllib.load(stream)["project"]["version"]
@@ -94,6 +95,7 @@ class TestReleaseMetadata(unittest.TestCase):
             text=True,
             timeout=30,
             check=True,
+            encoding="utf-8",
         )
         with (_ROOT / "pyproject.toml").open("rb") as stream:
             expected = tomllib.load(stream)["project"]["version"]

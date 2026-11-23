@@ -310,6 +310,7 @@ class TestTraceBenchmarkNotebook(unittest.TestCase):
             capture_output=True,
             check=False,
             timeout=30,
+            encoding="utf-8",
         )
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertIn("Benchmark disabled", process.stdout)

@@ -187,6 +187,7 @@ class TestMacOSLauncherLock(unittest.TestCase):
         first = subprocess.Popen(
             [str(self.launcher)], env=configured,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            encoding="utf-8",
         )
         try:
             deadline = time.monotonic() + 5
@@ -228,6 +229,7 @@ class TestMacOSLauncherLock(unittest.TestCase):
         first = subprocess.Popen(
             [str(self.launcher)], env=configured,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            encoding="utf-8",
         )
         second = None
         try:
@@ -241,6 +243,7 @@ class TestMacOSLauncherLock(unittest.TestCase):
             second = subprocess.Popen(
                 [str(self.launcher)], env=self.environment,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8",
             )
             time.sleep(0.15)
             self.assertIsNone(second.poll())

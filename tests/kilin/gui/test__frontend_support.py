@@ -60,6 +60,7 @@ class TestFrontendSupport(unittest.TestCase):
             timeout=15,
             check=False,
             env=None,
+            encoding="utf-8",
         )
 
     @patch("tests.kilin.gui._frontend_support.subprocess.run")
@@ -77,6 +78,7 @@ class TestFrontendSupport(unittest.TestCase):
             timeout=4,
             check=False,
             env=options,
+            encoding="utf-8",
         )
 
     @patch("tests.kilin.gui._frontend_support.subprocess.run")
@@ -94,6 +96,7 @@ class TestFrontendSupport(unittest.TestCase):
             timeout=15,
             check=False,
             env=None,
+            encoding="utf-8",
         )
 
     @patch("tests.kilin.gui._frontend_support.shutil.which")

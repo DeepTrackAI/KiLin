@@ -41,7 +41,7 @@ class TestRAGHistoricalRecall(unittest.TestCase):
             parameters={"intent": "writing"},
         )
         path = self.store.state_path(previous)
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         conversation_state(data)["turns"] = [
             rag._turn_to_data(self.turn)
         ]

@@ -907,7 +907,10 @@ class TestGUIProtocolBridge(unittest.TestCase):
                              "user data")
             self.assertEqual((partial / "notes.txt").read_text(), "keep")
             self.assertEqual(cleanup(parent, parent / "link", 0), ([], []))
-            self.assertEqual(cleanup(parent, Path("/"), 0), ([], ["/"]))
+            # The file-system root as this system writes it ("D:\\" on
+            # Windows).
+            root = str(Path("/").resolve())
+            self.assertEqual(cleanup(parent, Path("/"), 0), ([], [root]))
 
     def test_stop_keeps_committed_project_before_queued_opened(self):
         """A delayed Qt event must not turn a published project into trash."""
@@ -1050,9 +1053,12 @@ class TestGUIProtocolBridge(unittest.TestCase):
             window, "available_legacy_workspace_directory", return_value=None,
         ):
             self.bridge.requestProjectsFolder()
+        # Folders are sent as this system writes them ("\\sandbox" on
+        # Windows).
+        sandbox = str(Path("/sandbox"))
         self.assertEqual(json.loads(self.events[-1]), {
-            "event": "projects_folder", "folder": "/sandbox",
-            "standard": "/sandbox", "saved": "/Gone/Projects",
+            "event": "projects_folder", "folder": sandbox,
+            "standard": sandbox, "saved": "/Gone/Projects",
             "legacy": "", "missing": True,
         })
         with patch.object(

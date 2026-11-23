@@ -142,14 +142,15 @@ class TestWorkspaceSourceManagement(unittest.TestCase):
         source.mkdir()
         changed = source / "changed.py"
         kept = source / "kept.py"
-        changed.write_text("x = 1\n", encoding="utf-8")
-        kept.write_text("y = 1\n", encoding="utf-8")
+        # Unix line endings on every system, so file sizes match.
+        changed.write_text("x = 1\n", encoding="utf-8", newline="\n")
+        kept.write_text("y = 1\n", encoding="utf-8", newline="\n")
         for path in (changed, kept):
             os.utime(path, ns=(1_000_000_000, 1_000_000_000))
         prepare_sources_workspace([source], "code", self.destination)
         before = self._records()[0]["stamps"]
 
-        changed.write_text("x = 22\n", encoding="utf-8")
+        changed.write_text("x = 22\n", encoding="utf-8", newline="\n")
         os.utime(changed, ns=(2_000_000_000, 2_000_000_000))
         add_project_sources(
             self.destination, [source],

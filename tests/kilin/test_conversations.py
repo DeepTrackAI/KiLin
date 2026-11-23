@@ -1271,12 +1271,14 @@ class TestStoreArchiving(ConversationStoreFixture):
             rejected = subprocess.run(
                 command, capture_output=True, text=True,
                 timeout=15, check=False,
+                encoding="utf-8",
             )
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("ConversationLockedError", rejected.stderr)
         accepted = subprocess.run(
             command, capture_output=True, text=True,
             timeout=15, check=False,
+            encoding="utf-8",
         )
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
 

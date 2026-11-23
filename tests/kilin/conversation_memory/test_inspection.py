@@ -44,7 +44,7 @@ class TestMemoryInspection(unittest.TestCase):
             parameters={"intent": "writing"},
         )
         path = self.store.state_path(self.conversation)
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         conversation_state(data)["turns"] = [rag._turn_to_data(self.turn)]
         path.write_text(json.dumps(data), encoding="utf-8")
         self.config = project_type("writing")

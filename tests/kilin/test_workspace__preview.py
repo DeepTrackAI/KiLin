@@ -83,7 +83,9 @@ class TestSourceImportPreview(unittest.TestCase):
         self.assertEqual(plan["skipped"], [])
         add_project_sources(self.project.root, plan["sources"])
         self.assertEqual(
-            (self.project.source / "data.other").read_text(), "usable"
+            (self.project.source / "data.other").read_text(
+                encoding="utf-8",
+            ), "usable"
         )
 
     def test_missing_link_and_workspace_paths_are_rejected(self) -> None:
@@ -126,10 +128,14 @@ class TestSourceImportPreview(unittest.TestCase):
         ])
         add_project_sources(self.project.root, plan["sources"])
         self.assertEqual(
-            (self.project.source / "note.txt").read_text(), "first"
+            (self.project.source / "note.txt").read_text(
+                encoding="utf-8",
+            ), "first"
         )
         self.assertEqual(
-            (self.project.source / renamed).read_text(), "second"
+            (self.project.source / renamed).read_text(
+                encoding="utf-8",
+            ), "second"
         )
 
     def test_existing_source_and_skipped_folder(self) -> None:
@@ -159,7 +165,7 @@ class TestSourceImportPreview(unittest.TestCase):
         occupied.write_text("keep", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "distinct source name"):
             preview_project_sources(self.project, [source])
-        self.assertEqual(occupied.read_text(), "keep")
+        self.assertEqual(occupied.read_text(encoding="utf-8"), "keep")
         with patch(
             "kilin.workspace.scan_repository",
             return_value={"complete": False},

@@ -106,6 +106,7 @@ class TestSetupScript(unittest.TestCase):
             text=True,
             timeout=10,
             check=False,
+            encoding="utf-8",
         )
 
     def test_supported_platforms(self) -> None:
@@ -160,6 +161,7 @@ class TestSetupScript(unittest.TestCase):
             text=True,
             timeout=10,
             check=False,
+            encoding="utf-8",
         )
         self.assertEqual(launch.returncode, 0, launch.stderr)
         launch_call = self.log.read_text(

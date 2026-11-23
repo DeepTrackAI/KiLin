@@ -186,7 +186,9 @@ class TestBenchmarkArtifacts(unittest.TestCase):
                     source_file = ROOT / name
                     self.assertTrue(source_file.is_file())
                     if cell_number is not None:
-                        notebook = json.loads(source_file.read_text())
+                        notebook = json.loads(source_file.read_text(
+                            encoding="utf-8",
+                        ))
                         text = "".join(
                             notebook["cells"][int(cell_number) - 1]["source"]
                         )
@@ -253,9 +255,13 @@ class TestBenchmarkArtifacts(unittest.TestCase):
             base = Path(folder)
             source = base / "external"
             source.mkdir()
-            (source / "small.py").write_text("value = 1\n")
-            (source / "large.py").write_text("x = 1\n" * 200_000)
-            (source / "config.json").write_text('{"valid": true}\n')
+            (source / "small.py").write_text("value = 1\n", encoding="utf-8")
+            (source / "large.py").write_text(
+                "x = 1\n" * 200_000, encoding="utf-8",
+            )
+            (source / "config.json").write_text(
+                '{"valid": true}\n', encoding="utf-8",
+            )
             project = prepare_project_workspace(
                 source, CODE_BENCHMARK_TYPE, base / "workspaces"
             )
@@ -290,7 +296,9 @@ class TestOpenOrInitialize(unittest.TestCase):
             project = open_or_initialize(root, CODE_BENCHMARK_TYPE)
             configure_project(project.root, {"extensions": ".py"})
             project.source.mkdir(parents=True, exist_ok=True)
-            (project.source / "kept.py").write_text("value = 1\n")
+            (project.source / "kept.py").write_text(
+                "value = 1\n", encoding="utf-8",
+            )
             reopened = open_or_initialize(root, CODE_BENCHMARK_TYPE)
             self.assertEqual(reopened.profile.extensions, (".py",))
             self.assertTrue((reopened.source / "kept.py").is_file())
@@ -299,7 +307,9 @@ class TestOpenOrInitialize(unittest.TestCase):
         with TemporaryDirectory() as folder:
             root = Path(folder) / "benchmark"
             (root / "repository").mkdir(parents=True)
-            (root / "repository" / "stale.py").write_text("value = 1\n")
+            (root / "repository" / "stale.py").write_text(
+                "value = 1\n", encoding="utf-8",
+            )
             project = open_or_initialize(root, CODE_BENCHMARK_TYPE)
             self.assertTrue((root / "profile.ini").is_file())
             self.assertFalse((project.source / "stale.py").exists())

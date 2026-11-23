@@ -283,6 +283,7 @@ exit 0
             text=True,
             check=False,
             timeout=12,
+            encoding="utf-8",
         )
 
     def _previous_outputs(self) -> None:
@@ -381,7 +382,7 @@ exit 0
         )
         self.assertIn(
             "file -b " + str(self.uv_real.resolve()),
-            self.log.read_text(),
+            self.log.read_text(encoding="utf-8"),
         )
         self._assert_unrelated_files()
 
@@ -462,7 +463,7 @@ exit 0
             self.dist / "KíLín.app/Contents/MacOS/KiLin"
         ).read_text(encoding="utf-8")
         self.assertIn("kilin[app]==0.1.0", launcher)
-        self.assertNotIn("uv build", self.log.read_text())
+        self.assertNotIn("uv build", self.log.read_text(encoding="utf-8"))
         self._assert_unrelated_files()
 
     def test_wheel_failure_keeps_prior_distributions(self) -> None:

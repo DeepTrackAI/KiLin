@@ -72,6 +72,7 @@ class TestCodeAnalysis(unittest.TestCase):
                         text=True,
                         timeout=30,
                         check=False,
+                        encoding="utf-8",
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn("--ref", result.stdout)
@@ -94,6 +95,7 @@ class TestCodeAnalysis(unittest.TestCase):
                     text=True,
                     timeout=30,
                     check=False,
+                    encoding="utf-8",
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("--ref", result.stdout)
@@ -123,6 +125,7 @@ class TestCodeAnalysis(unittest.TestCase):
             text=True,
             timeout=30,
             check=False,
+            encoding="utf-8",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -249,6 +252,7 @@ class TestCodeAnalysisExport(unittest.TestCase):
             text=True,
             check=True,
             timeout=30,
+            encoding="utf-8",
         )
         return result.stdout
 

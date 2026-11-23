@@ -258,7 +258,9 @@ class TestIndependentRecovery(unittest.TestCase):
             self.assertEqual(result.summary["found"], 1)
             self.assertEqual(result.summary["batches_completed"], 1)
             self.assertEqual(context.ask_model.call_count, 2)
-            text = (context.project_root / result.summary["saved"]).read_text()
+            text = (context.project_root / result.summary["saved"]).read_text(
+                encoding="utf-8",
+            )
             self.assertIn("useful result", text)
             self.assertIn("Incomplete items", text)
             self.assertIn("partial list", result.answer)
@@ -339,7 +341,7 @@ class TestIndependentRecovery(unittest.TestCase):
             self.assertEqual(result.summary["status"], "partial")
             self.assertEqual(result.summary["verdicts"]["failed"], 1)
             report_path = context.project_root / result.summary["report"]
-            text = report_path.read_text()
+            text = report_path.read_text(encoding="utf-8")
             self.assertIn("Incomplete items", text)
             self.assertIn("token_limit", text)
             self.assertNotIn("UNSAFE", text)

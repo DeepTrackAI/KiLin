@@ -55,8 +55,12 @@ class TestSourceCardPolicy(unittest.TestCase):
         self.assertEqual(read_source_card_policy(
             self.root, project_type("literature")
         ), changed)
-        self.assertIn("type_id = literature", self.profile.read_text())
-        self.assertIn("automatic = false", self.profile.read_text())
+        self.assertIn("type_id = literature", self.profile.read_text(
+            encoding="utf-8",
+        ))
+        self.assertIn("automatic = false", self.profile.read_text(
+            encoding="utf-8",
+        ))
 
     def test_partial_ini_overrides_inherit_project_defaults(self):
         self.profile.write_text(
@@ -159,7 +163,7 @@ class TestSourceCardPolicy(unittest.TestCase):
         write_source_card_overrides(self.root, choices)
         self.assertEqual(json.loads((
             self.root / "source_card_sources.json"
-        ).read_text())["sources"]["a.pdf"], {"enabled": False})
+        ).read_text(encoding="utf-8"))["sources"]["a.pdf"], {"enabled": False})
 
 
 if __name__ == "__main__":

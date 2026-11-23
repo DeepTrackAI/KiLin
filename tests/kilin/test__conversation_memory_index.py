@@ -246,11 +246,11 @@ class TestConversationMemoryIndex(unittest.TestCase):
 
     def test_index_symlink_is_rejected_without_deleting_target(self):
         outside = self.root / "target.json"
-        outside.write_text("private")
+        outside.write_text("private", encoding="utf-8")
         memory_index_path(self.root).symlink_to(outside)
         with self.assertRaisesRegex(ValueError, "cannot be a link"):
             self._sync()
-        self.assertEqual(outside.read_text(), "private")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "private")
 
     def test_embedding_dimension_mismatch_preserves_previous_index(self):
         self._sync()
@@ -276,7 +276,7 @@ class TestConversationMemoryIndex(unittest.TestCase):
         changed = self._sync(model="model-B")
         self.assertEqual(changed.embedded_count, 1)
         self.assertEqual(len(self.embedding.embedded), current_count + 1)
-        memory_index_path(self.root).write_text("corrupt")
+        memory_index_path(self.root).write_text("corrupt", encoding="utf-8")
         rebuilt = self._sync(model="model-B")
         self.assertTrue(rebuilt.changed)
         self.assertEqual(rebuilt.embedded_count, 1)

@@ -69,7 +69,8 @@ class TestSourceChanges(unittest.TestCase):
 
         """
 
-        path.write_text(content, encoding="utf-8")
+        # Unix line endings on every system, so file sizes match.
+        path.write_text(content, encoding="utf-8", newline="\n")
         os.utime(path, ns=(second * 10**9, second * 10**9))
         return path
 
@@ -232,7 +233,9 @@ class TestSourceChanges(unittest.TestCase):
             {"added": [], "changed": [], "deleted": [], "edited": []},
         )
         self.assertEqual(
-            (second.source / "repository/lib/c.py").read_text(),
+            (second.source / "repository/lib/c.py").read_text(
+                encoding="utf-8",
+            ),
             "z = 1\n",
         )
 
@@ -391,7 +394,9 @@ class TestSourceChanges(unittest.TestCase):
         self.assertFalse((self.copies / "repository/b.py").exists())
         self._changes()
         manifest = self.project.root / "sources.json"
-        for record in json.loads(manifest.read_text())["sources"]:
+        for record in json.loads(manifest.read_text(
+            encoding="utf-8",
+        ))["sources"]:
             self.assertEqual(record["files"], [])
             self.assertEqual(record["stamps"], {})
 
@@ -521,7 +526,9 @@ class TestSourceChanges(unittest.TestCase):
         self.assertEqual(done["changed"], ["sources/repository/a.py"])
         self.assertEqual(done["added"], [])
         self.assertEqual(
-            (self.copies / "repository/b.py").read_text(), "x = 1\n"
+            (self.copies / "repository/b.py").read_text(
+                encoding="utf-8",
+            ), "x = 1\n"
         )
         self._changes(changed=["repository/b.py"])
         self.assertEqual(
@@ -540,7 +547,9 @@ class TestSourceChanges(unittest.TestCase):
                 "sources/repository/b.py": "delete",
             })
         self.assertEqual(
-            (self.copies / "repository/a.py").read_text(), "x = 1\n"
+            (self.copies / "repository/a.py").read_text(
+                encoding="utf-8",
+            ), "x = 1\n"
         )
         with self.assertRaises(ValueError):
             sync_project_sources(self.project, decisions={
@@ -557,7 +566,9 @@ class TestSourceChanges(unittest.TestCase):
         })
         self.assertEqual(done["changed"], ["sources/repository/a.py"])
         self.assertEqual(
-            (self.copies / "repository/a.py").read_text(), "value = 2\n"
+            (self.copies / "repository/a.py").read_text(
+                encoding="utf-8",
+            ), "value = 2\n"
         )
         first = list_source_versions(self.project)
         self.assertEqual(len(first), 1)
@@ -565,7 +576,9 @@ class TestSourceChanges(unittest.TestCase):
         self.assertTrue(first[0]["version"].endswith(".py"))
         self.assertIn("/.kilin_versions/", "/" + first[0]["version"])
         self.assertEqual(
-            (self.project.root / first[0]["version"]).read_text(),
+            (self.project.root / first[0]["version"]).read_text(
+                encoding="utf-8",
+            ),
             "x = 1\n",
         )
         self._write(self.folder / "a.py", "value = 3\n", 3)
@@ -577,12 +590,14 @@ class TestSourceChanges(unittest.TestCase):
         self.assertNotEqual(versions[0]["version"], versions[1]["version"])
         self.assertEqual(
             {
-                (self.project.root / item["version"]).read_text()
+                (self.project.root / item["version"]).read_text(
+                    encoding="utf-8",
+                )
                 for item in versions
             }, {"x = 1\n", "value = 2\n"}
         )
         manifest = json.loads(
-            (self.project.root / "sources.json").read_text()
+            (self.project.root / "sources.json").read_text(encoding="utf-8")
         )
         folder = next(
             item for item in manifest["sources"]
@@ -600,10 +615,12 @@ class TestSourceChanges(unittest.TestCase):
         sync_project_sources(self.project, decisions={
             "sources/repository/a.py": "keep_both",
         })
-        self.assertEqual(target.read_text(), "upstream\n")
+        self.assertEqual(target.read_text(encoding="utf-8"), "upstream\n")
         version = list_source_versions(self.project)[0]
         self.assertEqual(
-            (self.project.root / version["version"]).read_text(),
+            (self.project.root / version["version"]).read_text(
+                encoding="utf-8",
+            ),
             "my edit\n",
         )
 
@@ -634,14 +651,16 @@ class TestSourceChanges(unittest.TestCase):
         self.assertEqual(sync_project_sources(self.project), {
             "added": [], "changed": [], "deleted": [], "edited": [],
         })
-        self.assertEqual(copy.read_text(), "x = 1\n")
+        self.assertEqual(copy.read_text(encoding="utf-8"), "x = 1\n")
         sync_project_sources(self.project, decisions={
             "sources/repository/a.py": "keep_both",
         })
-        self.assertEqual(copy.read_text(), "new upstream\n")
+        self.assertEqual(copy.read_text(encoding="utf-8"), "new upstream\n")
         version = list_source_versions(self.project)[0]
         self.assertEqual(
-            (self.project.root / version["version"]).read_text(),
+            (self.project.root / version["version"]).read_text(
+                encoding="utf-8",
+            ),
             "x = 1\n",
         )
         self._changes()
@@ -661,11 +680,11 @@ class TestSourceChanges(unittest.TestCase):
         self._write(self.single, "notes restored\n", 3)
         self._changes(changed=["notes.md"])
         sync_project_sources(self.project)
-        self.assertEqual(copy.read_text(), "notes\n")
+        self.assertEqual(copy.read_text(encoding="utf-8"), "notes\n")
         sync_project_sources(self.project, decisions={
             "sources/notes.md": "replace",
         })
-        self.assertEqual(copy.read_text(), "notes restored\n")
+        self.assertEqual(copy.read_text(encoding="utf-8"), "notes restored\n")
         self._changes()
 
     def test_delete_only_direct_file_keeps_managed_sources(self) -> None:
@@ -715,7 +734,9 @@ class TestSourceChanges(unittest.TestCase):
             "sources/notes.md": "import",
         })
         self._changes()
-        self.assertEqual((self.copies / "notes.md").read_text(),
+        self.assertEqual((self.copies / "notes.md").read_text(
+            encoding="utf-8",
+        ),
                          "notes restored\n")
 
     def test_archive_failure_does_not_overwrite_original_copy(self) -> None:
@@ -731,7 +752,9 @@ class TestSourceChanges(unittest.TestCase):
                     "sources/repository/a.py": "keep_both",
                 })
         self.assertEqual(
-            (self.copies / "repository/a.py").read_text(), "x = 1\n"
+            (self.copies / "repository/a.py").read_text(
+                encoding="utf-8",
+            ), "x = 1\n"
         )
         self._changes(changed=["repository/a.py"])
 
@@ -759,7 +782,7 @@ class TestSourceChanges(unittest.TestCase):
             "sources/repository/a.py": "keep_both",
         })
         manifest = self.project.root / "sources.json"
-        payload = json.loads(manifest.read_text())
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
         payload["sources"][0]["versions"][0]["path"] = (
             ".kilin_versions/repository/../../private.py"
         )

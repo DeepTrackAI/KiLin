@@ -67,7 +67,7 @@ class TestStoppedCreationCleanup(unittest.TestCase):
 
         project = self.parent / "committed"
         (project / "sources").mkdir(parents=True)
-        (project / "profile.ini").write_text("[project]\n")
+        (project / "profile.ini").write_text("[project]\n", encoding="utf-8")
         (project / "sources" / "user.txt").write_bytes(b"user content")
         removed, preserved = cleanup_stopped_creation(
             self.parent, project, 42
@@ -83,14 +83,16 @@ class TestStoppedCreationCleanup(unittest.TestCase):
         """Presence of profile or any other entry blocks removal."""
 
         project = self.make_claim("published")
-        (project / "profile.ini").write_text("[project]\n")
-        (project / "notes.txt").write_text("do not remove")
+        (project / "profile.ini").write_text("[project]\n", encoding="utf-8")
+        (project / "notes.txt").write_text("do not remove", encoding="utf-8")
         removed, preserved = cleanup_stopped_creation(
             self.parent, None, 42
         )
         self.assertEqual(removed, [])
         self.assertEqual(preserved, [str(project)])
-        self.assertEqual((project / "notes.txt").read_text(), "do not remove")
+        self.assertEqual((project / "notes.txt").read_text(
+            encoding="utf-8",
+        ), "do not remove")
         self.assertTrue((project / ".kilin-creating").exists())
 
     def test_partial_source_files_are_retained_for_manual_recovery(self):
@@ -98,7 +100,9 @@ class TestStoppedCreationCleanup(unittest.TestCase):
 
         project = self.make_claim("copying")
         (project / "sources").mkdir()
-        (project / "sources" / "partial.py").write_text("value = 1\n")
+        (project / "sources" / "partial.py").write_text(
+            "value = 1\n", encoding="utf-8",
+        )
         removed, preserved = cleanup_stopped_creation(
             self.parent, None, 42
         )
@@ -106,7 +110,7 @@ class TestStoppedCreationCleanup(unittest.TestCase):
         self.assertEqual(preserved, [str(project)])
         self.assertTrue((project / ".kilin-creating").exists())
         self.assertEqual(
-            (project / "sources" / "partial.py").read_text(),
+            (project / "sources" / "partial.py").read_text(encoding="utf-8"),
             "value = 1\n",
         )
 
@@ -155,7 +159,7 @@ class TestStoppedCreationCleanup(unittest.TestCase):
         existing = self.parent / "existing"
         existing.mkdir()
         with claim_workspace(existing):
-            marker = (existing / ".kilin-creating").read_text()
+            marker = (existing / ".kilin-creating").read_text(encoding="utf-8")
             self.assertEqual(
                 marker, f"pid={os.getpid()}\ncreated=0\n"
             )
@@ -170,7 +174,7 @@ class TestStoppedCreationCleanup(unittest.TestCase):
 
         fresh = self.parent / "fresh"
         with claim_workspace(fresh):
-            marker = (fresh / ".kilin-creating").read_text()
+            marker = (fresh / ".kilin-creating").read_text(encoding="utf-8")
             self.assertEqual(
                 marker, f"pid={os.getpid()}\ncreated=1\n"
             )
@@ -220,7 +224,7 @@ class TestStoppedCreationCleanup(unittest.TestCase):
         outside.mkdir()
         self.addCleanup(lambda: outside.rmdir())
         other = outside / "notes.txt"
-        other.write_text("keep")
+        other.write_text("keep", encoding="utf-8")
         self.addCleanup(lambda: other.unlink())
         linked_folder = self.parent / "linked"
         linked_marker = self.parent / "marker-link"
@@ -237,7 +241,7 @@ class TestStoppedCreationCleanup(unittest.TestCase):
         self.assertEqual(preserved, [str(outside)])
         self.assertTrue(linked_folder.is_symlink())
         self.assertTrue((linked_marker / ".kilin-creating").is_symlink())
-        self.assertEqual(other.read_text(), "keep")
+        self.assertEqual(other.read_text(encoding="utf-8"), "keep")
 
     def test_new_file_added_while_stopping_is_never_deleted(self):
         """If a concurrent entry appears, rmdir must fail closed."""
@@ -248,7 +252,7 @@ class TestStoppedCreationCleanup(unittest.TestCase):
 
         def add_file_before_unlink(path, *args, **kwargs):
             if path == marker:
-                (project / "notes.txt").write_text("keep me")
+                (project / "notes.txt").write_text("keep me", encoding="utf-8")
             return unlink(path, *args, **kwargs)
 
         with patch.object(Path, "unlink", add_file_before_unlink):
@@ -257,7 +261,9 @@ class TestStoppedCreationCleanup(unittest.TestCase):
             )
         self.assertEqual(removed, [])
         self.assertEqual(preserved, [str(project)])
-        self.assertEqual((project / "notes.txt").read_text(), "keep me")
+        self.assertEqual((project / "notes.txt").read_text(
+            encoding="utf-8",
+        ), "keep me")
 
     def test_reported_custom_workspace_does_not_authorize_deletion(self):
         """A workspace outside the default parent can only be reported."""
@@ -266,7 +272,7 @@ class TestStoppedCreationCleanup(unittest.TestCase):
         outer = self.parent.parent / (self.parent.name + "-custom")
         outer.mkdir()
         self.addCleanup(outer.rmdir)
-        (outer / "profile.ini").write_text("[project]\n")
+        (outer / "profile.ini").write_text("[project]\n", encoding="utf-8")
         self.addCleanup(lambda: (outer / "profile.ini").unlink())
         removed, preserved = cleanup_stopped_creation(
             self.parent, outer, 0

@@ -516,6 +516,7 @@ class TestGraphDeterminismRegression(unittest.TestCase):
             process = subprocess.run(
                 [sys.executable, "-c", program],
                 check=True, capture_output=True, text=True, env=env,
+                encoding="utf-8",
             )
             outputs.append(process.stdout.strip())
         self.assertEqual(len(set(outputs)), 1)

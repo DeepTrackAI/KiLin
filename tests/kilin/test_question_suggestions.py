@@ -333,7 +333,9 @@ class TestWordPool(unittest.TestCase):
         self.assertEqual(self._pool(ask), pool)
         ask.assert_called_once()
         self.assertEqual(pool.themes, ("variational autoencoders",))
-        saved = json.loads((self.indexes / SUGGESTION_WORDS_FILE).read_text())
+        saved = json.loads((self.indexes / SUGGESTION_WORDS_FILE).read_text(
+            encoding="utf-8",
+        ))
         self.assertEqual(saved["topics"], ["variational autoencoders"])
         self.assertEqual(saved["themes"], ["variational autoencoders"])
 
@@ -367,7 +369,9 @@ class TestWordPool(unittest.TestCase):
     def test_damaged_saved_file_is_picked_again(self) -> None:
         """Ignore a saved file that cannot be read."""
 
-        (self.indexes / SUGGESTION_WORDS_FILE).write_text("not json")
+        (self.indexes / SUGGESTION_WORDS_FILE).write_text(
+            "not json", encoding="utf-8",
+        )
         ask = Mock(return_value=REPLY)
         self.assertTrue(self._pool(ask).topics)
         ask.assert_called_once()

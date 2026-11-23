@@ -69,7 +69,9 @@ class TestReportRecovery(unittest.TestCase):
         output = self.root / "outputs"
         output.mkdir()
         complete = output / "paper_summary.md"
-        complete.write_text("Keep the earlier complete report.")
+        complete.write_text(
+            "Keep the earlier complete report.", encoding="utf-8",
+        )
         pdf = output / "paper_summary.pdf"
         pdf.write_bytes(b"Existing PDF")
         result = self._run()
@@ -77,14 +79,18 @@ class TestReportRecovery(unittest.TestCase):
         self.assertEqual(result.summary["status"], "partial")
         self.assertFalse(result.summary["valid"])
         self.assertIn("_summary_partial.md", result.summary["saved"])
-        text = (self.root / result.summary["saved"]).read_text()
+        text = (self.root / result.summary["saved"]).read_text(
+            encoding="utf-8",
+        )
         self.assertIn("First completed", text)
         self.assertIn("Third completed", text)
         self.assertIn("Not completed:", text)
         self.assertNotIn("TRUNCATED UNSAFE TEXT", text)
         self.assertNotIn("Done:", result.answer)
         self.assertEqual(
-            complete.read_text(), "Keep the earlier complete report."
+            complete.read_text(
+                encoding="utf-8",
+            ), "Keep the earlier complete report."
         )
         self.assertEqual(pdf.read_bytes(), b"Existing PDF")
         self.pdf.assert_not_called()
@@ -111,7 +117,9 @@ class TestReportRecovery(unittest.TestCase):
         self.assertEqual(result.summary["status"], "partial")
         failures = result.summary["incomplete_items"]
         self.assertEqual({f["item"] for f in failures}, {"First", "Second"})
-        text = (self.root / result.summary["saved"]).read_text()
+        text = (self.root / result.summary["saved"]).read_text(
+            encoding="utf-8",
+        )
         self.assertNotIn("\nInvalid\n", text)
         self.assertIn("Third completed", text)
         self.assertIn("Not completed:", text)
@@ -160,7 +168,9 @@ class TestReportRecovery(unittest.TestCase):
         result = self._run()
         self.assertEqual(self.context.ask_model.call_count, 4)
         self.assertEqual(result.summary["status"], "partial")
-        text = (self.root / result.summary["saved"]).read_text()
+        text = (self.root / result.summary["saved"]).read_text(
+            encoding="utf-8",
+        )
         self.assertIn("Second section", text)
         self.assertIn("Third section", text)
         self.assertNotIn("\nShort\n", text)

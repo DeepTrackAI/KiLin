@@ -277,10 +277,14 @@ class TestExclusiveProjectCreation(unittest.TestCase):
                 )
                 self.assertEqual(mirror.source, mirror.root / "sources")
                 self.assertEqual(
-                    (mirror.source / "data.py").read_text(), "value = 1\n"
+                    (mirror.source / "data.py").read_text(
+                        encoding="utf-8",
+                    ), "value = 1\n"
                 )
                 self.assertFalse((mirror.root / name / "data.py").exists())
-                self.assertEqual(original.read_text(), "value = 1\n")
+                self.assertEqual(original.read_text(
+                    encoding="utf-8",
+                ), "value = 1\n")
         with patch("kilin.project.scan_repository") as scan:
             with self.assertRaisesRegex(ValueError, "not the drive"):
                 kilin.prepare_project_workspace(
@@ -479,6 +483,7 @@ print(json.dumps(result), flush=True)
                  str(self.destination), "1" if default else "0"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True,
+                encoding="utf-8",
             )
             for _ in range(4)
         ]

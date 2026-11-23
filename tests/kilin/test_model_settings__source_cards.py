@@ -111,7 +111,7 @@ class TestSourceCardModelSettings(unittest.TestCase):
             DEFAULT_SOURCE_CARD_MODEL_TORCH,
         )
         parsed = ConfigParser(interpolation=None)
-        parsed.read(self.file)
+        parsed.read(self.file, encoding="utf-8")
         self.assertEqual(parsed.get("generation", "temperature"), "0.5")
         self.assertEqual(parsed.get("project", "type_id"), "literature")
 

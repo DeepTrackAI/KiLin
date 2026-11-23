@@ -235,9 +235,9 @@ class TestSavedCards(unittest.TestCase):
             load_source_card_vectors(self.vector_file, self.cards),
             self.vectors,
         )
-        payload = json.loads(self.card_file.read_text())
+        payload = json.loads(self.card_file.read_text(encoding="utf-8"))
         payload["format"] = "obsolete"
-        self.card_file.write_text(json.dumps(payload))
+        self.card_file.write_text(json.dumps(payload), encoding="utf-8")
         with self.assertRaises(ValueError):
             load_source_cards(self.card_file)
 
@@ -260,17 +260,17 @@ class TestSavedCards(unittest.TestCase):
 
     def test_corrupt_complete_cards_are_regenerated(self):
         self._save()
-        data = json.loads(self.card_file.read_text())
+        data = json.loads(self.card_file.read_text(encoding="utf-8"))
         data["records"][0]["card"]["statements"] = []
-        self.card_file.write_text(json.dumps(data))
+        self.card_file.write_text(json.dumps(data), encoding="utf-8")
         with self.assertRaises(ValueError):
             load_source_cards(self.card_file)
 
     def test_invalid_loaded_vectors_keep_valid_card_text(self):
         self._save()
-        data = json.loads(self.vector_file.read_text())
+        data = json.loads(self.vector_file.read_text(encoding="utf-8"))
         data["records"][0]["embeddings"][0][0] = "NaN"
-        self.vector_file.write_text(json.dumps(data))
+        self.vector_file.write_text(json.dumps(data), encoding="utf-8")
         with self.assertRaises(ValueError):
             load_source_card_vectors(self.vector_file, self.cards)
         self.assertEqual(load_source_cards(self.card_file), self.cards)

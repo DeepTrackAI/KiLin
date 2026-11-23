@@ -483,7 +483,9 @@ class TestRAGSourcePreparation(unittest.TestCase):
             {item.path for item in indexes.semantic.chunks}, expected
         )
         manifest = json.loads(
-            (project.indexes / "source_manifest.json").read_text()
+            (project.indexes / "source_manifest.json").read_text(
+                encoding="utf-8",
+            )
         )
         self.assertEqual(set(manifest["files"]), {
             item.as_posix() for item in expected

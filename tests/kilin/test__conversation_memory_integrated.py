@@ -222,7 +222,7 @@ class TestMemoryLifecycle(unittest.TestCase):
     def test_diagnostic_only_changes_are_read_once_per_process(self):
         self._sync()
         path = self.store.state_path(self.first)
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         data["diagnostics"] = {"not_a_turn": "progress"}
         path.write_text(json.dumps(data), encoding="utf-8")
         import kilin.conversation_memory.index as index_module
@@ -242,11 +242,11 @@ class TestMemoryLifecycle(unittest.TestCase):
     def test_checkpoint_edit_invalidates_diagnostic_stat_cache(self):
         self._sync()
         path = self.store.state_path(self.first)
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         data["diagnostics"] = {"progress": 1}
         path.write_text(json.dumps(data), encoding="utf-8")
         self._sync()
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         conversation_state(data)["turns"][0]["question"] = (
             "Could optical tweezers measure protein kinetics?"
         )

@@ -275,11 +275,15 @@ class TestProjectBehavior(ProjectBehaviorFixture):
         )
         self.assertEqual(effective_project_type(self.second).document_headers,
                          defaults["document_headers"])
-        saved = json.loads((self.first / PROJECT_BEHAVIOR_FILE).read_text())
+        saved = json.loads((self.first / PROJECT_BEHAVIOR_FILE).read_text(
+            encoding="utf-8",
+        ))
         self.assertEqual(saved["capabilities"], values)
         self.save_global(description="Separate global edit")
         save_project_behavior(self.first, "capabilities", defaults)
-        saved = json.loads((self.first / PROJECT_BEHAVIOR_FILE).read_text())
+        saved = json.loads((self.first / PROJECT_BEHAVIOR_FILE).read_text(
+            encoding="utf-8",
+        ))
         self.assertEqual(saved["capabilities"], {})
         self.assertEqual(effective_project_type(self.first).code_graph,
                          defaults["code_graph"])
@@ -378,7 +382,7 @@ class TestProjectBehavior(ProjectBehaviorFixture):
         self.assertTrue(item["values"]["thinking"])
         self.save_intent_memory("question_answering", indexing="explicit")
         state = json.loads(
-            (self.first / PROJECT_BEHAVIOR_FILE).read_text()
+            (self.first / PROJECT_BEHAVIOR_FILE).read_text(encoding="utf-8")
         )
         self.assertEqual(state["intents"]["question_answering"], {
             "thinking": True,
@@ -406,7 +410,9 @@ class TestProjectBehavior(ProjectBehaviorFixture):
             self.first, "intent_memory", item["memory"]["defaults"],
             intent_id="question_answering",
         )
-        state = json.loads((self.first / PROJECT_BEHAVIOR_FILE).read_text())
+        state = json.loads((self.first / PROJECT_BEHAVIOR_FILE).read_text(
+            encoding="utf-8",
+        ))
         self.assertNotIn("question_answering", state["intents"])
         self.assertEqual(effective_project_type(self.first).recent_turns, 8)
 

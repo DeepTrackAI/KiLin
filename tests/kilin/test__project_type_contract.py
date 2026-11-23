@@ -216,6 +216,7 @@ print(json.dumps({"type_ids": kilin.PROJECT_TYPE_IDS, "ok": True}))
                 [sys.executable, "-c", script], cwd=root,
                 env={**os.environ, "PYTHONPATH": str(root)},
                 capture_output=True, text=True, timeout=60, check=False,
+                encoding="utf-8",
             )
             self.assertEqual(result.returncode, 0,
                              result.stdout + result.stderr)

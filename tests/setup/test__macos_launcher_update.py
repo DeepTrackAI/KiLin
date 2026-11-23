@@ -349,6 +349,7 @@ class TestMacOSLauncherUpdate(unittest.TestCase):
         first = subprocess.Popen(
             [str(self.sandbox.launcher)], env=configured,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            encoding="utf-8",
         )
         try:
             deadline = time.monotonic() + 5

@@ -32,7 +32,10 @@ _LAUNCHER = (
 class TestMacOSBackendRepair(unittest.TestCase):
     """Pass the versioned install source and bundled uv to the GUI."""
 
-    @unittest.skipUnless(shutil.which("bash"), "bash is required")
+    @unittest.skipUnless(
+        os.name == "posix" and shutil.which("bash"),
+        "The macOS launcher tests require Bash on a POSIX system",
+    )
     def test_launcher_exports_its_original_installation_source(self) -> None:
         """Do not direct a wheel-based application to an unrelated PyPI."""
 
@@ -100,6 +103,7 @@ class TestMacOSBackendRepair(unittest.TestCase):
                         check=False,
                         timeout=10,
                         env=environment,
+                        encoding="utf-8",
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(
@@ -107,7 +111,10 @@ class TestMacOSBackendRepair(unittest.TestCase):
                         [str(uv), expanded],
                     )
 
-    @unittest.skipUnless(shutil.which("bash"), "bash is required")
+    @unittest.skipUnless(
+        os.name == "posix" and shutil.which("bash"),
+        "The macOS launcher tests require Bash on a POSIX system",
+    )
     def test_versioned_release_passes_bundled_repair_context(self) -> None:
         """The active release must inherit the app's original wheel.
 

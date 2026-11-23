@@ -59,7 +59,7 @@ class TestRouterSettings(unittest.TestCase):
                     model_settings.read_router_model(self.root, backend),
                     packaged[backend],
                 )
-        self.assertNotIn("[router]", self.profile.read_text())
+        self.assertNotIn("[router]", self.profile.read_text(encoding="utf-8"))
 
     def test_saved_router_precedes_override_default_and_legacy(self) -> None:
         """Saved router IDs are authoritative for core and GUI users."""
