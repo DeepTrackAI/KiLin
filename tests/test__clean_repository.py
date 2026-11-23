@@ -113,7 +113,45 @@ class TestCleanRepository(unittest.TestCase):
         choices = self.helpers["ZIP_TOP_LEVEL_SELECTION"]
         self.assertTrue(choices["_si_article_/"])
         self.assertIs(choices["LICENSE"], True)
+        self.assertIs(choices["README.pypi.md"], True)
+        self.assertIs(choices["MANIFEST.in"], True)
         self.assertNotIn("benchmarks/", choices)
+
+    def test_source_zip_includes_packaging_readmes_and_manifest(self):
+        """Retain tagged PyPI metadata files in clean source exports.
+
+        """
+
+        import zipfile
+
+        for name, content in (
+            ("README.pypi.md", "# PyPI description\n"),
+            ("MANIFEST.in", "include README.pypi.md\n"),
+        ):
+            (self.root / name).write_text(content, encoding="utf-8")
+        self.git("init", "-q")
+        self.git("add", "LICENSE", "README.pypi.md", "MANIFEST.in")
+        selection = {
+            "LICENSE": True,
+            "README.pypi.md": True,
+            "MANIFEST.in": True,
+        }
+        files, untracked = self.helpers["list_source_files"](
+            self.root, selection
+        )
+        self.assertEqual(untracked, [])
+        self.assertEqual(set(files), set(selection))
+
+        output = self.root.parent / "distribution-export.zip"
+        self.helpers["export_source_zip"](
+            self.root, output, files, selection
+        )
+        with zipfile.ZipFile(output) as archive:
+            for name in selection:
+                with self.subTest(name=name):
+                    self.assertEqual(
+                        archive.read(name), (self.root / name).read_bytes()
+                    )
 
     def test_source_zip_requires_licence_selection(self) -> None:
         """Reject archive creation when the licence is disabled.

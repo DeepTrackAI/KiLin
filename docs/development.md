@@ -100,6 +100,9 @@ settings and usage; tutorials for executable examples. Link to the owner of
 a mutable setting or contract rather than duplicating values in every page.
 Editable SVGs are indexed in [Architecture diagrams](diagrams.md) and
 maintained alongside the technical documents that explain them.
+Maintain only the root `README.md` by hand; the version-pinned PyPI
+copy and its update rules are owned by
+[README publication](readme_publication.md).
 
 `tests/setup/test__documentation_assets.py` runs using only the standard
 library, without importing the application or loading models. It checks
@@ -150,6 +153,11 @@ python -m tests
 ```
 
 The independent `tests/__main__.py` uses Python `unittest` discovery.
+On a developer machine, `python -m tests` regenerates
+`README.pypi.md` before discovery; `python -m pytest` does not.
+In CI (`CI=true`), both runners leave generated files untouched
+and the README synchronization test detects stale content. Review
+and commit any locally regenerated README with its source changes.
 Keep new tests discoverable by **both** runners. Its naming convention is
 `test_<module>.py` for a module, `test_<module>__<aspect>.py` for a focused
 aspect, and `test__<topic>.py` for a cross-module concern. Tests under
@@ -264,8 +272,8 @@ into five independent workflows under `.github/workflows/`:
 | Workflow | Validation | Required checks |
 | --- | --- | --- |
 | `tests.yml` | Core tests, newer Python probes, isolated Qt/PDF tests | Python 3.12 on Ubuntu and macOS; Qt/PDF on the same systems (Windows runs but does not block yet) |
-| `package.yml` | Wheel and source distribution, isolated wheel installation | Ubuntu / Python 3.12 |
-| `docs.yml` | Local links/anchors, SVG metadata, source-backed inventories and examples | Ubuntu / Python 3.12 |
+| `package.yml` | Wheel/sdist, installed package and PyPI description verification | Ubuntu / Python 3.12 |
+| `docs.yml` | Documentation contracts and generated PyPI README freshness | Ubuntu / Python 3.12 |
 | `macos_app.yml` | Real Apple Silicon .app/.dmg build, signature, mounted-image inspection and installer regression tests | macOS / Python 3.12, ad-hoc signing |
 | `windows_app.yml` | Real Inno Setup build, silent install, runtime and shortcut checks, uninstall | Windows x64, unsigned installer smoke |
 
@@ -367,29 +375,42 @@ beta or RC iterations are needed, increment their sequence numbers. Do
 not upload `0.1.0` to PyPI until it is the intended stable release.
 Public prereleases remain subject to the security and platform limits in
 [Release guidance](release.md); a public package is not a signed native app.
+The [README publication contract](readme_publication.md) governs the
+generated PyPI description and all tag-pinned documentation URLs.
 
-1. On the **exact release commit**, update the package version in
-   `pyproject.toml`, synchronize the root entry in `uv.lock`, and match
-   `CITATION.cff`. Keep the `Repository` project URL and all public README
-   links on `https://github.com/DeepTrackAI/KiLin`.
-   Confirm the public repository exists and its raw logo URLs load:
-   `https://raw.githubusercontent.com/DeepTrackAI/KiLin/main/assets/brand/`.
-   Verify the artwork's redistribution rights before making it public.
+1. Prepare beta and RC versions on `develop`; prepare stable versions
+   on `main` after merging the accepted release candidate. Update
+   `pyproject.toml`, `uv.lock` and `CITATION.cff` consistently. Keep
+   repository-owned links relative in `README.md`; regenerate and
+   commit `README.pypi.md` with:
+
+   ```sh
+   python -m setup.generate_pypi_readme
+   python -m setup.generate_pypi_readme --check
+   ```
+
+   The generated description points to `v<version>`, not to `main` or
+   `develop`. Review its tag-pinned images and links, and confirm the
+   current artwork's redistribution rights before publication.
 2. Run both complete test suites on Python 3.12, the formatting checks,
-   documentation checks, and the package/installation CI workflows. Build
+   documentation checks, and the package/installation CI workflows.
+   Check that the generated README matches before building. Build
    the distributions with `uv build`; review their contents and metadata.
    Install the wheel into a fresh Python 3.12 environment using
    `uv pip install "dist/kilin-<version>-py3-none-any.whl[app]"`, and open
    `kilin-gui`. Run `twine check dist/*` when Twine is available. This
    checks rendering syntax, not whether external image URLs resolve.
-3. Merge the reviewed commit to `main`, verify the GitHub checks against
-   that commit, and create the matching `v<version>` tag. Create a GitHub
-   release marked **prerelease** for `b` and `rc` versions. Do not mark
+3. For `b` and `rc` releases, tag the validated commit on `develop`.
+   For a stable release, merge to `main`, validate the merge commit
+   and tag it there. Create a GitHub Release marked **prerelease** for
+   beta and RC versions, not for the stable version. Do not mark
    the stable `0.1.0` tag as prerelease. Keep tags pointing at the tested
    commit; this repository does not currently publish automatically on
    a tag push.
-4. Publish the two **reviewed** files to the existing PyPI `kilin`
-   project with an account authorized to publish it:
+4. Check that the tag points to the exact source commit used for the
+   built wheel and sdist, then publish both **reviewed** files to PyPI.
+   Upload only after the GitHub release tag exists. Use the `kilin`
+   project and an account authorized to publish it:
 
    ```sh
    uv publish dist/kilin-<version>-py3-none-any.whl dist/kilin-<version>.tar.gz
@@ -490,6 +511,12 @@ archive/commit, not an earlier working directory. Provide a Git patch and a
 ZIP of only changed/new files in repository-relative paths, with explicit
 deletions when needed. A separate full source export is useful when requested
 for release or transfer; it is not needed to apply a focused revision.
+
+Clean source ZIP exports must also include the tracked root files
+`README.pypi.md` and `MANIFEST.in`: they are required to rebuild the
+PyPI distribution description. Keep their top-level selection enabled in
+`assets/clean_repository.ipynb`; see the
+[README publication contract](readme_publication.md).
 
 The root `LICENSE` holds the Apache License 2.0 text declared by
 `pyproject.toml`. It must be committed to Git and present in source ZIPs,

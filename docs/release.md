@@ -181,15 +181,17 @@ Apple Developer Program account. No developer credentials or
 notarization commands are needed for the documented build and
 verification workflow.
 
-For the public source/PyPI prerelease, release maintainers must also check
-that GitHub's migrated `DeepTrackAI/KiLin` repository is public, the README
-images load at the `raw.githubusercontent.com` URLs, and the current mascot
-artwork has documented redistribution permission. GitHub/PyPI do not host
-arbitrary local image paths from the wheel. Use the same tagged source for
-GitHub and PyPI artifacts; follow the [release checklist](development.md#public-prerelease-sequence).
+Before publishing a source/PyPI release, validate the generated
+`README.pypi.md` against `README.md` and `pyproject.toml`. The repository
+README uses relative paths; the PyPI version must link to the same
+immutable release tag, including raw logo images. Validate the exact
+tagged source and artwork rights before upload. Follow the
+[README publication contract](readme_publication.md) and the
+[release checklist](development.md#public-prerelease-sequence).
 
 
 ## Related
 
-[Development](development.md), [GUI architecture](gui_architecture.md),
+[Development](development.md), [README publication](readme_publication.md),
+[GUI architecture](gui_architecture.md),
 [Configuration](configuration.md), [Security](security.md).
