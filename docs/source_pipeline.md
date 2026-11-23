@@ -61,34 +61,36 @@ also set selection rules; see [Configuration](configuration.md).
 
 ## 2. Snapshot and provenance alternatives
 
-KíLín retains two source-management workflows, with creation separated from
-updates in both:
+Source processing can read managed copies from two distinct workflows:
 
-- `prepare_sources_workspace(...)` creates a fresh managed `sources/` tree.
-  `add_project_sources(project_directory, source_paths, ...)` subsequently
-  imports cumulatively using the saved profile and `sources.json` provenance.
-  Existing snapshots are preserved unless `replace_existing=True` is chosen.
-  Removed or deselected originals never remove previous copies implicitly.
-  `remove_workspace_sources()` deletes selected managed copies, not originals.
-- `prepare_project_workspace(source_directory, type_id, workspace_root)`
-  always creates a fresh single-source mirror. To compare source manifests
-  and synchronize a saved copy, call
-  `synchronize_project_workspace(source_directory, project_directory)`.
-  This explicit operation may restore edits to the mirror and remove files
-  deleted from the original, preserving the established mirroring policy.
+| Workflow | Creation API and provenance | Explicit update path |
+| --- | --- | --- |
+| Cumulative imports | `prepare_sources_workspace()`; `sources.json` records imported copies. | `add_project_sources()`, managed removal and `sync_project_sources()`. |
+| Single-source mirror | `prepare_project_workspace()`; `source_snapshot.json` records the mirror. | `synchronize_project_workspace()`. |
 
-`initialize_project()` creates a new project in a nonexistent or empty folder
-using the type's source-directory convention. It never adopts nonempty source
-folders or reopens a project. `open_project()` reads saved profiles without
-creating folders. The GUI uses explicit import/removal operations and requests
-index refresh afterward. `project_files.py` separately manages `outputs/` and
-`templates/`; those folders are not newly indexed as ordinary source material.
+Their replacement/deletion semantics are not interchangeable. The complete
+[workspace contract](project_workspaces.md#explicit-imports-and-source-selection)
+owns those semantics, collision handling, original-file protection and
+partial-failure behavior. Source readers should consume the resulting
+validated selection, not perform another implicit import or synchronization.
 
-Source additions/removals are **not** a multi-file atomic transaction. In the
-cumulative route an earlier successful source remains even if a later import
-fails. The source-provenance file is updated as successful operations are
-completed. Project initialization has a separate rollback journal and
-creates its profile last; see [Project workspaces](project_workspaces.md).
+An empty newly created managed workspace is valid. It uses the same
+[core source-directory convention](project_workspaces.md#source-directory-convention)
+as a populated project; no example corpus is invented. Creation eligibility
+and later import APIs are documented with
+[workspace creation](project_workspaces.md#creation-opening-and-explicit-updates).
+Opening a saved profile retains its source path. Outputs/templates are
+separately managed user files, not automatically added to source indexing.
+
+After explicit source changes, the GUI asks the core to refresh indexes.
+Imports and indexing are not a single multi-file transaction: successful
+copies can remain when a later import or index refresh fails. Do not infer
+that a valid source manifest proves a completed retrieval rebuild.
+
+The optional source-card channel runs *after* ordinary chunk, semantic,
+lexical and graph indexing. It selects eligible documents, reuses cached
+cards and embeds missing summaries without replacing original passage
+evidence. See [Automatic source-card indexing](retrieval_pipeline.md#automatic-source-card-indexing).
 
 ## 3. Reading files and retaining source coordinates
 
@@ -98,7 +100,15 @@ non-files and paths escaping the selected root, then uses a suffix-specific
 reader if one exists. Other inputs are decoded as UTF-8. Binary content is
 not automatically made readable by giving it a textual suffix. A PDF uses
 its dedicated selectable-text reader and may require installed PDF
-extraction dependencies.
+extraction dependencies. A Word `.docx` file is read with `python-docx`
+into Markdown-style text: headings become `#` lines, numbered or bulleted
+items become indented `-` lines, and each table row becomes one line of
+cells separated by ` | `. Indented paragraphs without numbering are not
+turned into list items. An old binary
+Word `.doc` file is read with `olefile`: the body text, paragraphs and
+table rows are kept the same way, but headings are not recognized. Word
+files are recognized by their first bytes, so a `.doc` renamed to `.docx`
+(or the reverse) is still read by the right reader.
 
 `SourceFile` contains a relative path and extracted text; `SourceUnit`
 contains a path, text, inclusive line range, kind, optional symbol/section,
@@ -113,7 +123,79 @@ It does **not execute source files or notebook cells**.
 | `sources_md.py` | ATX Markdown headings and sections |
 | `sources_ipynb.py` | Notebook JSON, code/Markdown cell text and cell coordinates |
 | `sources_pdf.py` | Page-oriented selectable PDF text; page/section coordinates |
+| `sources_docx.py` | Word body text in reading order; Markdown heading sections |
+| `sources_doc.py` | Old Word 97-2003 body text in reading order; no headings |
+| `sources_html.py` | HTML page text with heading sections; as code, source markup split at main HTML elements |
+| `sources_js.py` | JavaScript line-leading functions, classes, and direct methods; lexical masking and balanced braces prevent spurious declarations and scope crossings |
+| `sources_r.py` | R top-level functions, classes, and S4 methods, with attached comment blocks and class-method children |
+| `sources_json.py` | JSON preserved as written; top-level object keys become child units for large files |
+| `sources_tex.py` | LaTeX front matter and sections at `\part` to `\subsubsection`; setup before `\begin{document}` left out |
+| `sources_bib.py` | BibTeX entries and macros as independently indexed units with citation keys |
+| `sources_bbl.py` | Compiled LaTeX `\bibitem` references with original line and key provenance |
 | `sources_txt.py` | Nonblank paragraph text units |
+
+JavaScript extraction uses lexical masking within `sources_js.py` to keep
+comments, strings, template literals, and likely regex literals out of
+structural matching. It preserves source offsets and balances braces to
+separate declarations from unrelated statements. This is a conservative
+heuristic, not an ECMAScript parser: inline/mixed-line declarations,
+dynamic code, and executable template interpolations are not fully
+analyzed. Unrecognized text remains searchable as source context.
+
+R extraction similarly preserves the original source text and line
+provenance. Top-level `r_function`, `r_class`, and `r_method` units include
+their associated comments. A comment-only line between a function's
+parameter list and its opening brace does not terminate the function.
+Other statements remain in `r_script` units. R readers use structural
+heuristics rather than executing R or building a complete syntax tree.
+
+JSON extraction retains the original file text and line coordinates.
+Large top-level objects can be divided into child units at their
+keys, while arrays and single-line objects remain whole. The reader
+is a structural scan, not JSON validation; malformed JSON can still
+be searched. Projects selecting `.json` record `json_source_units`
+(`top-level-keys-v2`) in index metadata. Key line coordinates follow
+Python's `splitlines` boundaries, including Unicode separators inside JSON
+strings. Existing JSON indexes with an older version (or no version) are
+rebuilt once to correct section provenance. Profiles not selecting `.json`
+retain their previous index identity.
+
+Word title and author properties are read separately for literature
+search headers and the paper-summary tool. The property reader handles OLE
+(`.doc`) and OOXML (`.docx`) containers based on their signatures, returning
+missing metadata on unreadable documents. It does not invent bibliographic
+information or change the stored-file size policy. The stable
+`tests/kilin/sources/extensions/fixtures/sample.docx` fixture was converted
+from `sample.doc` with LibreOffice and has explicit title/author properties;
+it complements generated tests for specific Word list styles.
+
+**HTML as text or as code.** A project reads its files as code when its
+type's `code_graph` capability is `true`, as for Code projects;
+`"auto"` and `false` read them as text. HTML is the one format read
+differently: as text, `read_source_file` keeps what a reader sees, with
+headings, lists and tables, and leaves out scripts, styles and tags, like
+a Word file; as code, `read_repository_files(..., as_code=True)` keeps the
+file as written and `extract_source_units(..., as_code=True)` uses the
+reader's `extract_code_units`. Citation line numbers refer to the text
+that was indexed, so the reference preview reads the file the same way.
+The index records `html_as_code` for projects that select `.html`, and
+HTML cached as code has a separate identity from HTML cached as page text;
+other file types keep their existing cache identities. In a Code project,
+a page imports its local scripts and follows leading direct calls from
+inline `on...` handlers. The graph reader ignores HTML comments, inert
+templates, and JavaScript string contents. HTML read as page text does not
+contribute code-graph relationships, even when it contains examples of
+markup. JavaScript functions and methods link their plain calls.
+
+Literature profiles now allow `.bib` and `.bbl` alongside `.tex`.
+Selected bibliography files are ordinary indexed sources, not hidden
+auxiliary resources: a BibTeX entry and a compiled `\bibitem` can each
+be searched with its original source provenance. The lightweight
+extractors do not compile LaTeX or prove that a cited paper supports a
+scientific claim. Bibliographic declarations in a `.tex` document are
+resolved by `reference_check` only against files explicitly included
+in the workspace source inventory. See the
+[workspace source-access policy](security.md#workspace-source-access-policy).
 
 The implementation uses the actual suffix-to-reader dispatch in
 `sources/sources.py` and its `extensions/` directory. An unsupported suffix
@@ -124,9 +206,11 @@ implicit features of this pipeline.
 **Coordinate conventions:** `Chunk.start_line`/`end_line` are one-based
 inclusive and refer to the source unit's coordinate system, not necessarily
 a single physical file-wide line number. Notebook positions are cell-local;
-PDF text is page-local with section provenance. Citations and source previews
-must preserve these distinctions. Altering a reader's coordinate convention
-is a compatibility-sensitive change; update tests and evidence consumers.
+PDF text is page-local with section provenance. Word (`.docx` and `.doc`)
+line numbers refer to the extracted Markdown-style text, not to Word
+pages. Citations and source previews must preserve these distinctions.
+Altering a reader's coordinate convention is a compatibility-sensitive
+change; update tests and evidence consumers.
 
 ## 4. Chunk boundaries and identifiers
 
@@ -149,18 +233,16 @@ projects; the active RAG pipeline passes its project's saved values.
 ## 5. Refreshing sources and avoiding unnecessary embeddings
 
 A repository manifest records selected file fingerprints for change
-comparison. `RAGSession.refresh_sources(project)` updates chunk/index state
-after source changes. Where saved indexing settings and the embedding model
-snapshot match, changed source content can be re-extracted and re-embedded
-while unchanged chunk vectors are reused. Removed source files are dropped.
-The lexical statistics and global code graph are rebuilt to represent the
-new complete set of chunks. Incompatible settings, missing snapshot
-identity, corrupt indexes or other mismatches trigger a full rebuild.
+comparison. After a source update, `RAGSession.refresh_sources(project)`
+connects the new inventory to extraction, chunking and index reuse. Changes
+to a reader's text or coordinates can change chunk identity even when the
+original file is unchanged, so reader changes need cache/evidence tests too.
 
-`retrievals.persistence` stores validated index data and a content
-fingerprint/checksum; do not confuse source manifest equality with index
-payload integrity. The exact reindex/reuse contract is described in
-[Retrieval pipeline](retrieval_pipeline.md).
+The [incremental-index contract](retrieval_pipeline.md#incremental-updates)
+owns reuse eligibility, model identity, full-rebuild fallback and which
+indexes are rebuilt. Source manifest equality is not index-payload integrity;
+`retrievals.persistence` validates that separate boundary. A refresh should
+not silently reuse vectors merely because a path or model ID looks familiar.
 
 ## Errors, boundaries and validation
 
@@ -175,23 +257,27 @@ payload integrity. The exact reindex/reuse contract is described in
 - Changing extraction or chunk identity affects cache reuse, evidence
   coordinates and citation reproducibility; test these together.
 
-## Relevant tests and cross-references
+## Change impact and verification
 
-Start with the test files matching `repository`, `sources`, `chunking`,
-`workspace`, `project` and `rag` under `tests/kilin/`. The GUI selection
-contract is additionally tested under `tests/kilin/gui/`. The latter also
-covers reason-code independence from human-readable messages.
+Selection, decoding and structural extraction are separate so a policy change
+does not silently become a content transformation. When adding a reader,
+follow the [extension checklist](extension_interfaces.md#source-readerextractor-contract)
+and preserve exact text, stable ordering and the declared coordinate system.
+Changes to unit boundaries or chunk IDs require review of cache reuse,
+code graphs and citation previews together.
 
-Related: [Project workspaces](project_workspaces.md),
+Run [scanner tests](../tests/kilin/test_repository__scan.py),
+[source reader tests](../tests/kilin/sources/),
+[chunking](../tests/kilin/test_chunking.py),
+[index provenance](../tests/kilin/test_rag__index_provenance.py) and
+[reference previews](../tests/kilin/gui/test_engine__references.py).
+The [source-selection suite](../tests/kilin/gui/test__source_selection.py)
+checks reason-code independence from human-readable wording. Real malformed
+PDFs and optional readers may require additional format-specific fixtures;
+no reader should execute notebook or source code to obtain text.
+
+## Related
+
+[Project workspaces](project_workspaces.md),
 [Retrieval pipeline](retrieval_pipeline.md),
 [GUI protocol](gui_protocol.md), [Security](security.md).
-
-## Empty initial source collections
-
-`prepare_sources_workspace([], type_id, workspace_directory)` initializes
-a valid managed `sources/` tree without importing files. The destination
-must be explicit and unoccupied. Adding sources later uses the explicit
-`add_project_sources()` API with the same selection validation. In contrast,
-`initialize_project()` creates the configured `source_directory` subfolder in
-a fresh destination. Existing profile source settings remain authoritative
-when the project is opened explicitly.

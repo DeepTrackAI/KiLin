@@ -1,7 +1,11 @@
 # KíLín
 
-KíLín runs locally to answer questions about your code and literature,
-with citations to your files and customizable project types, intents, and tools.
+KíLín is a local, extensible AI assistant for scientific and technical work.
+Its project types cover code, literature, writing, creative and
+source-grounded brainstorming, and researcher-directed reviewing. Source-grounded answers cite project files;
+conversation memory can separately recall eligible prior discussions without
+treating them as scientific evidence. Projects have customizable intents,
+tools, and memory policies.
 
 ## Citation
 
@@ -9,7 +13,36 @@ Please cite KíLín using the metadata in [CITATION.cff](CITATION.cff).
 The citation lists Io̍k-uí Tiunn, Joana B. Pereira, Carlo Manzo, and
 Giovanni Volpe as authors.
 
-## Setup
+## Install
+
+**macOS app** (Apple Silicon, macOS 14+): open a trusted `KíLín.dmg`,
+drag KíLín to Applications and open it. First launch installs Python 3.12
+and KíLín's dependencies, and therefore needs network access. Model
+weights are downloaded separately when explicitly requested in setup.
+
+Current DMGs are ad-hoc signed **development builds**, not Apple
+Developer ID signed or notarized. macOS may block them. Only if you trust
+the specific build, review the warning in System Settings → Privacy &
+Security after attempting to open it. Do not remove quarantine as a
+general installation step. See the
+[macOS build guide](docs/release.md) for verification and limitations.
+
+**Windows installer** (64-bit Windows 10 or 11): run
+`KiLin-Setup-<version>.exe`. It needs no administrator rights. While
+installing, it downloads Python 3.12 and KíLín's packages, including the
+CUDA build of PyTorch on computers with an NVIDIA GPU, so it needs network
+access. The installer is not code-signed, so Windows SmartScreen may warn;
+choose **More info → Run anyway** only for a build you trust. See the
+[Windows section of the build guide](docs/release.md#windows-installer).
+
+**pip** (macOS, Linux, experimental Windows; Python 3.12):
+
+```sh
+pip install "kilin[app]"
+kilin-gui
+```
+
+## Setup for development
 
 After downloading the code, open a terminal in the KíLín folder and run
 the setup command for your operating system.
@@ -36,6 +69,17 @@ To open the desktop GUI, run the command:
 ```sh
 uv run kilin --gui
 ```
+
+If `uv: command not found` appears after setup, `uv` may be installed
+outside this terminal's `PATH` or reused from an earlier installation.
+Try opening a new terminal. If the command is still unavailable, use
+the full executable-path command printed by setup, or add that directory
+to `PATH`.
+
+The desktop prerelease uses a basic passkey access check for invited
+users. The GUI asks for a passkey before its first launch on a user
+account and remembers successful activation for subsequent launches.
+To obtain a GUI passkey, contact the KíLín core developers.
 
 The launcher installs missing GUI/backend dependencies; follow the setup
 panel to download the required models.
@@ -91,21 +135,31 @@ recovery, and GUI metadata updates, see
 
 ## Tutorials
 
-Follow these notebooks in order, or open the one you need.
+KíLín includes 19 notebooks introducing the framework, from local models
+and source processing to retrieval, project chat, diagnostic traces, project
+types, conversation memory, custom tools, and a final end-to-end
+research-assistant exercise.
 
-- [10 · Setup](tutorials/10_setup.ipynb): Check the environment and computation backend without loading a model.
-- [20 · Hugging Face models](tutorials/20_huggingface_models.ipynb): Inspect the model cache and optionally download a chat model.
-- [30 · Model chat](tutorials/30_model_chat.ipynb): Load a model, exchange messages, and release it.
-- [40 · Repository files](tutorials/40_repository_files.ipynb): Select the files KíLín will read from a repository.
-- [50 · Source structure](tutorials/50_source_structure.ipynb): Read source files and split their structural units into searchable chunks.
-- [60 · Embeddings](tutorials/60_embeddings.ipynb): Convert chunks and questions into vectors with an embedding model.
-- [70 · Semantic retrieval](tutorials/70_semantic_retrieval.ipynb): Rank chunks by similarity in meaning.
-- [80 · Lexical retrieval](tutorials/80_lexical_retrieval.ipynb): Rank chunks by matching words and identifiers without an embedding model.
-- [90 · Code-aware retrieval](tutorials/90_code_aware_retrieval.ipynb): Find code through symbols and relationships such as calls and imports.
-- [100 · Persistent indexes](tutorials/100_persistent_indexes.ipynb): Save retrieval indexes and reuse them when their inputs are unchanged.
-- [110 · Hybrid ranking](tutorials/110_hybrid_ranking.ipynb): Combine semantic, lexical, and code-aware rankings.
-- [120 · Retrieval expansion](tutorials/120_context_expansion.ipynb): Add context for explicitly named files, functions, and code relationships.
-- [130 · Project chat](tutorials/130_project_chat.ipynb): Prepare or resume a project and ask questions with citations and saved history.
-- [140 · Execution traces](tutorials/140_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
-- [150 · Project types](tutorials/150_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.
-- [160 · Custom tools](tutorials/160_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
+Start with the [tutorial guide](tutorials/README.md) for prerequisites,
+recommended learning paths, model requirements, example datasets, and safe
+handling of generated workspaces.
+
+For a first introduction, we recommend:
+
+1. [10 · Setup](tutorials/10_setup.ipynb): Check your environment and
+   computational backend without loading a model.
+2. [20 · Hugging Face models](tutorials/20_huggingface_models.ipynb): Inspect
+   locally cached models and download models explicitly when needed.
+3. [140 · Project chat](tutorials/140_project_chat.ipynb): Create a project
+   and ask questions about its files with citations and saved history.
+   This example requires local chat and embedding models.
+
+The other notebooks explain individual components in more depth; they are
+not prerequisites for using the graphical interface. Most examples use
+source files distributed with KíLín. Tutorials involving literature can
+optionally use the supplementary article corpus in
+`_si_article_/literature_repo/` and provide bundled PDF fallbacks when
+that corpus is unavailable. The final
+[end-to-end tutorial](tutorials/190_end_to_end_research_assistant.ipynb)
+uses a bundled fictional corpus for offline retrieval checks and an
+optional model-based RAG run.

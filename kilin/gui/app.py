@@ -2,8 +2,10 @@
 
 ``main`` imports the optional Qt components, builds the main window, and runs
 the application event loop. Missing GUI dependencies produce an explanatory
-message and a nonzero return code rather than triggering installation. The
-window module owns communication with the separate engine process.
+message and a nonzero return code rather than triggering installation. Before
+the first window, a user account that has not entered the passkey is asked
+for it (``kilin.gui._activation``). The window module owns communication with
+the separate engine process.
 
 Key Features
 ------------
@@ -54,24 +56,31 @@ def main(arguments: Sequence[str] | None = None) -> int:
     Returns
     -------
     int
-        Qt's exit code, or one when the GUI dependency is missing.
+        Qt's exit code, one when the GUI dependency is missing, or zero
+        when the user quits the passkey dialog.
 
     """
 
     try:
         from PySide6.QtWidgets import QApplication
 
+        from kilin.gui._activation import ask_passkey
         from kilin.gui.window import ChatWindow
     except ImportError as error:
+        from kilin.gui._paths import gui_install_command
+        from kilin.runtime import BACKEND_AUTO, choose_backend
+
         print(
             f"GUI dependency missing: {error}. Install with "
-            "uv sync --extra gui --extra mlx (or --extra torch).",
+            f"{gui_install_command(choose_backend(BACKEND_AUTO))}.",
             file=sys.stderr,
         )
         return 1
 
     app = QApplication(list(arguments) if arguments is not None else sys.argv)
     app.setApplicationName("KíLín")
+    if not ask_passkey():
+        return 0
     window = ChatWindow()
     window.show()
     return app.exec()

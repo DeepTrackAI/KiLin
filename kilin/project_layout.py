@@ -75,26 +75,28 @@ from kilin.project_type import project_type
 from kilin.tools._registry import TOOL_REGISTRY
 from kilin.workspace_resources import (
     OUTPUTS_FOLDER,
+    PROJECT_SOURCES_DIRECTORY,
     TEMPLATES_FOLDER,
     WorkspaceResource,
 )
 
 __all__ = [
     "ProjectLayout",
+    "CORE_PROJECT_FOLDERS",
     "ensure_project_folders",
     "install_project_resources",
     "plan_project_layout",
     "source_scan_exclusions",
 ]
 
-_CORE_FOLDERS: Final[tuple[str, ...]] = (
-    "indexes", "logs", OUTPUTS_FOLDER, TEMPLATES_FOLDER
+CORE_PROJECT_FOLDERS: Final[tuple[str, ...]] = (
+    "indexes", "logs", "memory", OUTPUTS_FOLDER, TEMPLATES_FOLDER
 )
 _RESERVED_RESOURCE_ROOTS: Final[frozenset[str]] = frozenset(
-    ("sources", "indexes", "logs", "outputs")
+    (PROJECT_SOURCES_DIRECTORY, "indexes", "logs", "memory", "outputs")
 )
 _PROJECT_SOURCE_EXCLUDES: Final[tuple[str, ...]] = (
-    *_CORE_FOLDERS,
+    *CORE_PROJECT_FOLDERS,
     "profile.ini",
     "sources.json",
     "source_snapshot.json",
@@ -297,7 +299,7 @@ def ensure_project_folders(root: Path) -> None:
     """
 
     root = Path(root)
-    for name in _CORE_FOLDERS:
+    for name in CORE_PROJECT_FOLDERS:
         _safe_directory(root / name)
 
 
@@ -369,18 +371,24 @@ def source_scan_exclusions(root: Path, source: Path) -> tuple[str, ...]:
     -------
     tuple[str, ...]
         Managed top-level folders to exclude when source is the project
-        root, or an empty tuple when sources live in a separate directory.
+        root; the reserved version folder for managed sources; otherwise
+        an empty tuple.
 
     Notes
     -----
     Source folders of unrelated repositories named ``templates`` or
-    ``outputs`` are not excluded globally; only KíLín-owned root folders
-    are skipped in the root-as-source profile layout.
+    ``outputs`` are not excluded globally. Managed version files are added
+    separately from ``sources.json`` so only recorded versions are indexed.
 
     """
 
-    return (
-        _PROJECT_SOURCE_EXCLUDES
-        if Path(root).resolve() == Path(source).resolve()
-        else ()
-    )
+    resolved_root = Path(root).resolve()
+    resolved_source = Path(source).resolve()
+    if resolved_root == resolved_source:
+        return _PROJECT_SOURCE_EXCLUDES
+    if (
+        resolved_source == resolved_root / PROJECT_SOURCES_DIRECTORY
+        and (resolved_root / "sources.json").is_file()
+    ):
+        return (".kilin_versions",)
+    return ()

@@ -11,13 +11,47 @@ and deterministic execution behavior.
 
 from __future__ import annotations
 
-from dataclasses import fields
 import json
-from pathlib import Path
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
+from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
+from kilin.tools import ToolRequest
 from kilin.tools import find_fact as tool
-from kilin.tools._registry import TOOL_REGISTRY
+from kilin.tools.find_fact.tool import _cited
+from kilin.tools._shared.planning import PLAN_CHOICE_QUICK
+
+from tests.kilin.tools._contract_support import (
+    assert_packaged_defaults,
+    assert_registry_entry,
+)
+from tests.kilin.tools._shared._support import chunk
+
+
+def _quick_context(passages, terms):
+    """Return tool services that choose the quick answer."""
+
+    reply = json.dumps({"terms": list(terms)})
+    return SimpleNamespace(
+        chunks=passages,
+        ask_router=Mock(return_value=reply),
+        ask_check=None,
+        rank=Mock(return_value=[
+            HybridResult(1.0, passage, ("semantic",))
+            for passage in reversed(passages)
+        ]),
+        retrieval_count=2,
+        confirm=Mock(return_value=PLAN_CHOICE_QUICK),
+        write=Mock(return_value=(
+            'It is "implemented in MATLAB with C++" [1].'
+        )),
+        progress=Mock(),
+        done=Mock(),
+        trace=SimpleNamespace(emit=Mock(), include_content=True),
+        trace_turn_id="test",
+        model_id="fake",
+    )
 
 
 class TestFindFact(unittest.TestCase):
@@ -28,38 +62,18 @@ class TestFindFact(unittest.TestCase):
 
         """
 
-        entry = TOOL_REGISTRY["find_fact"]
-        self.assertIs(entry.parse_settings, tool.parse_settings)
-        self.assertIs(entry.run, tool.run)
-        self.assertIsNone(entry.workspace_resources)
+        assert_registry_entry(
+            self, "find_fact", tool
+        )
 
     def test_packaged_defaults_and_project_type_overrides(self) -> None:
         """Use the tool-local JSON when settings are not supplied.
 
         """
 
-        package = Path(tool.__file__).parent
-        data = json.loads(
-            (package / "defaults.json").read_text(encoding="utf-8")
+        assert_packaged_defaults(
+            self, tool, tool.FactSettings,
         )
-        readme = (package / "README.md").read_text(encoding="utf-8")
-        for section, values in data.items():
-            with self.subTest(section=section):
-                self.assertIn("`" + section + "`", readme)
-            for key in values:
-                with self.subTest(section=section, key=key):
-                    self.assertIn("`" + key + "`", readme)
-        defaults = tool.FactSettings()
-        self.assertEqual(defaults, tool.parse_settings({}, "example"))
-        self.assertEqual(
-            {field.name for field in fields(defaults)},
-            {name.lower() for name in data["SETTINGS"]},
-        )
-        for field in fields(defaults):
-            expected = data["SETTINGS"][field.name.upper()]
-            if isinstance(expected, list):
-                expected = tuple(expected)
-            self.assertEqual(getattr(defaults, field.name), expected)
 
     def test_invalid_project_type_settings(self) -> None:
         """Reject out-of-range, mistyped and unknown overrides.
@@ -92,6 +106,145 @@ class TestFindFact(unittest.TestCase):
         self.assertIn("Notes by document", full)
         self.assertIn("Passages by document", quick)
         self.assertIn("Be brief", quick)
+
+    def test_evidence_uses_only_valid_bounded_citations(self) -> None:
+        """Reject oversized ranges without admitting partial evidence.
+
+        """
+
+        self.assertEqual(_cited("Found [1, 3-9]", 3), {1})
+        self.assertEqual(_cited("Found [1-99999999]", 2), set())
+        self.assertEqual(_cited("Found [1–2]", 2), {1, 2})
+
+    def test_invalid_ranges_are_reported_in_tool_summary(self) -> None:
+        """Preserve numeric diagnostics and report invalid range parts.
+
+        """
+
+        passages = [
+            chunk("a", "An observation.", path="a.md"),
+            chunk("b", "Another observation.", path="a.md"),
+        ]
+        context = _quick_context(passages, ["unmatched phrase"])
+        context.write.return_value = "Supported [1, 2-9] and [7]."
+        result = tool.run(
+            tool.FactSettings(),
+            ToolRequest("Which evidence?", "Which evidence?"),
+            context,
+        )
+        self.assertEqual(result.summary["invalid_citations"], [7])
+        self.assertEqual(
+            result.summary["invalid_citation_groups"], ["2-9"]
+        )
+        self.assertEqual([e["citation"] for e in result.evidence], [1])
+
+    def test_quick_answer_ranks_when_no_passage_has_the_terms(self) -> None:
+        """Answer from ranked passages when the exact terms are absent.
+
+        """
+
+        passages = [
+            chunk("a", "Introduction to brain networks.", path="a.md"),
+            chunk("b", "Graph measures and statistics.", path="a.md"),
+            chunk("c", "Implemented in MATLAB with C++ parts.", path="a.md"),
+        ]
+        question = "Which languages does metadata table C6 list?"
+        context = _quick_context(passages, ["metadata table C6"])
+
+        result = tool.run(
+            tool.FactSettings(), ToolRequest(question, question), context
+        )
+
+        context.write.assert_called_once()
+        prompt = context.write.call_args.args[1]
+        self.assertIn("Passages by document", prompt)
+        # Ranked passages are numbered 1, 2... in reading order.
+        self.assertIn("[1] Graph measures", prompt)
+        self.assertIn("[2] Implemented in MATLAB", prompt)
+        self.assertNotIn("Introduction to brain networks", prompt)
+        # The quote is in passage [2], so the citation moves there.
+        self.assertIn('C++" [2].', result.answer)
+        self.assertEqual(
+            result.summary["quote_citations"], {"moved": 1, "unplaced": 0}
+        )
+        self.assertIn("best-ranked passages", result.answer)
+        self.assertIn("“metadata table C6”", result.answer)
+        self.assertEqual(
+            result.summary["terms_without_hits"], ["metadata table C6"]
+        )
+        self.assertEqual(
+            [(item["citation"], item["text"]) for item in result.evidence],
+            [(2, "Implemented in MATLAB with C++ parts.")],
+        )
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual(plan.quick_label, "Quick answer")
+        self.assertIn("No passage mentions", plan.quick_note)
+
+    def test_quick_plan_estimates_optional_extra_page(self) -> None:
+        """Show a worst-case passage count before the user confirms."""
+
+        passages = [
+            chunk(str(i), f"Passage number {i}", path="paper.md")
+            for i in range(5)
+        ]
+        context = _quick_context(passages, [])
+        context.retrieval_count = 2
+        context.ask_check = Mock(return_value="yes")
+        tool.run(
+            tool.FactSettings(), ToolRequest("Which?", "Which?"),
+            context,
+        )
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual(plan.quick_items, 4)
+        self.assertIn("up to 4 passages", plan.quick_note)
+        self.assertGreater(plan.quick_seconds, 0)
+        context.ask_check.assert_called_once()
+
+    def test_quick_search_zero_disables_check(self) -> None:
+        """One extra page is a default, not a mandatory model call."""
+
+        passages = [
+            chunk(str(i), f"Passage number {i}", path="paper.md")
+            for i in range(5)
+        ]
+        context = _quick_context(passages, [])
+        context.ask_check = Mock(return_value="no")
+        result = tool.run(
+            tool.FactSettings(extra_searches=0),
+            ToolRequest("Which?", "Which?"), context,
+        )
+        context.ask_check.assert_not_called()
+        self.assertEqual(result.summary["extra_searches"], 0)
+        self.assertEqual(context.confirm.call_args.args[0].quick_items, 2)
+
+    def test_quick_answer_reads_further_when_not_enough(self) -> None:
+        """Add the next-ranked passages when the router says no.
+
+        """
+
+        passages = [
+            chunk("a", "Introduction to brain networks.", path="a.md"),
+            chunk("b", "Graph measures and statistics.", path="a.md"),
+            chunk("c", "Implemented in MATLAB with C++ parts.", path="a.md"),
+        ]
+        question = "Which languages are used?"
+        context = _quick_context(passages, [])
+        context.retrieval_count = 1
+        context.ask_check = Mock(return_value="No.")
+
+        result = tool.run(
+            tool.FactSettings(), ToolRequest(question, question), context
+        )
+
+        prompt = context.write.call_args.args[1]
+        self.assertIn("[1] Graph measures", prompt)
+        self.assertIn("[2] Implemented in MATLAB", prompt)
+        self.assertEqual(result.summary["extra_searches"], 1)
+        check = context.ask_check.call_args.args[1]
+        self.assertIn("not the whole documents", check)
+        self.assertIn("[1] Implemented in MATLAB", check)
+        self.assertNotIn("Graph measures", check)
+        context.ask_router.assert_called_once()  # Only to name terms.
 
 
 if __name__ == "__main__":

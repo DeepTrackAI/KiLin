@@ -1,0 +1,1139 @@
+{
+  "description": "Questions about the KíLín code base for the paper's code example. Each question names code entities (except the location questions) and lists the functions a complete answer must draw on (gold), identified by file and symbol rather than line numbers, so the set stays valid while line numbers change. Facts are for grading answers by hand. The 35 questions in set 'development' were written in successive rounds (field 'round': development, held_out_1, held_out_2, held_out_3, evaluation); each round's results led to retrieval, routing, or prompt changes, so all of them are development questions. The ten questions in set 'evaluation' (round 'evaluation_2') were written after the last change (more fused results for source-code intents), in parts of the code base no earlier question covers, mostly as location questions, and were not run before the evaluation.",
+  "questions": [
+    {
+      "id": "routing",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "development",
+      "question": "Explain how route_question assigns a question to an intent, and what happens when the router reply cannot be used.",
+      "gold": [
+        {
+          "path": "kilin/answering.py",
+          "symbol": "route_question"
+        },
+        {
+          "path": "kilin/answering.py",
+          "symbol": "_parse_route"
+        },
+        {
+          "path": "kilin/answering.py",
+          "symbol": "side_reply"
+        }
+      ],
+      "facts": [
+        "A message that fully matches an intent's shortcut pattern is routed without calling the model.",
+        "Otherwise the router model is called through side_reply with a router prompt.",
+        "The reply is parsed by _parse_route into a RouteDecision.",
+        "If the router call fails or its reply is unusable, the project type's default intent is used.",
+        "Related earlier turns proposed by the router are kept only if the question refers back or shares a distinctive term."
+      ]
+    },
+    {
+      "id": "index_reuse",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "development",
+      "question": "Explain how RAGSession decides whether to reuse the saved retrieval indexes or to rebuild them.",
+      "gold": [
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._prepare_retrieval"
+        },
+        {
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "load_indexes"
+        }
+      ],
+      "facts": [
+        "The saved index is reused only if the index file, its metadata and the source manifest exist, the configuration is unchanged, and the sources match.",
+        "The embedding-model identity of the saved index must match the current model.",
+        "If the sources changed but the configuration did not, unchanged files keep their saved chunks and vectors and only new or changed files are embedded.",
+        "Any problem with the saved index leads to embedding everything again."
+      ]
+    },
+    {
+      "id": "index_storage",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "development",
+      "question": "Explain how build_semantic_index embeds the chunks, and how save_indexes and load_indexes protect the saved index.",
+      "gold": [
+        {
+          "path": "kilin/retrievals/strategies/retrieval_semantic.py",
+          "symbol": "build_semantic_index"
+        },
+        {
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "save_indexes"
+        },
+        {
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "load_indexes"
+        }
+      ],
+      "facts": [
+        "Chunk texts are embedded in batches, and the backend cache is cleared after each batch.",
+        "The resulting vectors are validated (count, dimension, finite values, nonzero norm).",
+        "save_indexes validates the records and the source fingerprint and stores a payload checksum.",
+        "load_indexes verifies the checksum, the embedding-model identity and the fingerprint.",
+        "The checksum detects accidental corruption; it is not an authenticity guarantee."
+      ]
+    },
+    {
+      "id": "strip_thinking_callers",
+      "kind": "dependency",
+      "set": "development",
+      "round": "development",
+      "question": "Explain which functions call strip_thinking, and why each of them needs to remove the model's reasoning.",
+      "gold": [
+        {
+          "path": "kilin/answering.py",
+          "symbol": "turn_representation"
+        },
+        {
+          "path": "kilin/answering.py",
+          "symbol": "side_reply"
+        },
+        {
+          "path": "kilin/answering.py",
+          "symbol": "history_messages"
+        }
+      ],
+      "facts": [
+        "turn_representation removes reasoning (and citations) from an earlier answer to build the compact representation shown to the router.",
+        "side_reply returns the reply of an auxiliary model call, such as the router's, without reasoning.",
+        "history_messages removes reasoning from earlier answers before they are included as conversation history."
+      ]
+    },
+    {
+      "id": "hybrid_callers",
+      "kind": "dependency",
+      "set": "development",
+      "round": "development",
+      "question": "Explain which RAGSession methods call hybrid_search, and how each of them uses the fused ranking.",
+      "gold": [
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._retrieve"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._rank_everything"
+        },
+        {
+          "path": "kilin/retrievals/strategies/retrieval_hybrid.py",
+          "symbol": "hybrid_search"
+        }
+      ],
+      "facts": [
+        "_retrieve fuses the semantic, lexical and code-graph rankings for the configured retrieval count to select the evidence for an answer.",
+        "_rank_everything ranks every chunk with the same fused channels, for uses that need a complete ranking, such as tools.",
+        "hybrid_search combines the rankings by reciprocal-rank fusion."
+      ]
+    },
+    {
+      "id": "citation_check",
+      "kind": "location",
+      "set": "development",
+      "round": "development",
+      "question": "Explain where KíLín checks that the citation numbers in an answer refer to the supplied evidence, and what happens when they do not.",
+      "gold": [
+        {
+          "path": "kilin/rag.py",
+          "symbol": "_invalid_citations"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession.ask"
+        }
+      ],
+      "facts": [
+        "_invalid_citations returns the citation numbers in the answer that do not match any supplied evidence.",
+        "RAGSession.ask records them in the turn parameters as invalid_citations.",
+        "The answer is neither modified nor regenerated.",
+        "The check is syntactic: it does not verify that the cited evidence supports the claim."
+      ]
+    },
+    {
+      "id": "chunking",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "development",
+      "question": "Explain how chunk_source_units handles a source unit that is longer than the maximum chunk size, and how the overlap between consecutive chunks is kept.",
+      "gold": [
+        {
+          "path": "kilin/chunking.py",
+          "symbol": "chunk_source_units"
+        },
+        {
+          "path": "kilin/chunking.py",
+          "symbol": "_chunk_source_unit"
+        },
+        {
+          "path": "kilin/chunking.py",
+          "symbol": "_split_unit"
+        },
+        {
+          "path": "kilin/chunking.py",
+          "symbol": "_overlap_start"
+        }
+      ],
+      "facts": [
+        "A unit within the maximum size is kept whole as one chunk.",
+        "An oversized unit is split through its children only when the children cover all of its non-whitespace text.",
+        "Otherwise it is split along line boundaries, and within a single line if that line is too long.",
+        "The target size guides where to split; the maximum size is the bound every chunk must respect.",
+        "Overlap with the previous chunk is kept as whole source lines or a character suffix, up to the overlap token limit."
+      ]
+    },
+    {
+      "id": "rank_everything_callers",
+      "kind": "dependency",
+      "set": "development",
+      "round": "development",
+      "question": "Explain which RAGSession methods call _rank_everything, and why each of them needs a ranking of every chunk.",
+      "gold": [
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._retrieve"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._run_tool"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._read_document"
+        }
+      ],
+      "facts": [
+        "_retrieve ranks every chunk when the question names exactly one document, and keeps that document's best passages, which may not be in the project-wide top results.",
+        "_run_tool gives tools a rank function, so a tool can rank all chunks for any text.",
+        "_read_document ranks all chunks to choose the document to read within the token budget."
+      ]
+    },
+    {
+      "id": "history_selection",
+      "kind": "location",
+      "set": "development",
+      "round": "development",
+      "question": "Explain where KíLín decides which earlier turns of a conversation are given to the model as history, and what determines how many.",
+      "gold": [
+        {
+          "path": "kilin/answering.py",
+          "symbol": "select_history"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession.ask"
+        }
+      ],
+      "facts": [
+        "select_history chooses the earlier turns, and RAGSession.ask calls it for each question.",
+        "The intent's history policy decides: none includes nothing, recent includes the last few turns, relevant also adds the turns the router marked as related.",
+        "The number of recent turns comes from the project type (history.recent_turns).",
+        "A question the router judged standalone still receives the previous turn, without its evidence."
+      ]
+    },
+    {
+      "id": "conversation_lock",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "development",
+      "question": "Explain how ConversationFileLock prevents two sessions from writing the same conversation file at the same time.",
+      "gold": [
+        {
+          "path": "kilin/conversation_ownership.py",
+          "symbol": "ConversationFileLock.acquire"
+        },
+        {
+          "path": "kilin/conversation_ownership.py",
+          "symbol": "conversation_write_ownership"
+        }
+      ],
+      "facts": [
+        "The lock is an operating-system advisory lock on a companion .json.lock file, so it survives atomic replacement of the conversation file.",
+        "Acquisition does not wait: if another writer holds the lock, ConversationLockedError is raised.",
+        "A registry within the process rejects a second owner of the same path before the file is opened.",
+        "The operating system releases the lock when the owning process exits.",
+        "It coordinates KíLín writers only; programs that ignore the lock are not prevented from writing."
+      ]
+    },
+    {
+      "id": "backend_choice",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "held_out_1",
+      "question": "Explain how choose_backend selects the computation backend, and which PyTorch device is used when PyTorch is selected.",
+      "gold": [
+        {
+          "path": "kilin/runtime.py",
+          "symbol": "choose_backend"
+        },
+        {
+          "path": "kilin/runtime.py",
+          "symbol": "torch_device"
+        }
+      ],
+      "facts": [
+        "The requested value must be auto, mlx, or torch; anything else raises an error.",
+        "auto selects MLX on a native Apple silicon Mac (macOS on arm64) and PyTorch otherwise.",
+        "Requesting mlx explicitly on any other platform raises an error.",
+        "With PyTorch, the device is CUDA if available, otherwise Apple MPS if available, otherwise the CPU."
+      ]
+    },
+    {
+      "id": "tool_confirmation",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "held_out_1",
+      "question": "Explain how needs_confirmation and confirm_plan decide whether a tool asks the user before running, and what happens with the user's answer.",
+      "gold": [
+        {
+          "path": "kilin/tools/_shared/planning.py",
+          "symbol": "needs_confirmation"
+        },
+        {
+          "path": "kilin/tools/_shared/planning.py",
+          "symbol": "confirm_plan"
+        }
+      ],
+      "facts": [
+        "A plan with no items never asks, and the policy never never asks.",
+        "The policy always always asks; when_large asks only when the plan's model calls exceed the tool's large-batch threshold.",
+        "confirm_plan asks only when a confirmation callback is available and needs_confirmation says so; otherwise it continues.",
+        "The answer can be continue, quick, or cancel; any other answer is treated as cancel.",
+        "The proposed plan and the decision are both recorded in the trace."
+      ]
+    },
+    {
+      "id": "ask_choice_callers",
+      "kind": "dependency",
+      "set": "development",
+      "round": "held_out_1",
+      "question": "Explain which functions call ask_choice, and what each of them asks the user to choose.",
+      "gold": [
+        {
+          "path": "kilin/tools/_shared/long_lists.py",
+          "symbol": "offer_export"
+        },
+        {
+          "path": "kilin/tools/_shared/choose_document.py",
+          "symbol": "choose_document"
+        }
+      ],
+      "facts": [
+        "offer_export asks whether to save a long list as a Markdown file in outputs/ or to show only the first items in the chat.",
+        "choose_document asks the user which of several candidate files the question refers to.",
+        "If the user cancels the document choice, the tool stops and says which files matched."
+      ]
+    },
+    {
+      "id": "readable_trace",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "held_out_1",
+      "question": "Explain when TraceLogger rewrites the human-readable trace file, and how it avoids leaving a partially written file.",
+      "gold": [
+        {
+          "path": "kilin/trace_logging.py",
+          "symbol": "TraceLogger._write_readable_trace"
+        },
+        {
+          "path": "kilin/trace_logging.py",
+          "symbol": "TraceLogger._write_event"
+        },
+        {
+          "path": "kilin/trace_logging.py",
+          "symbol": "TraceLogger.update_conversation"
+        }
+      ],
+      "facts": [
+        "The file is rewritten after each recorded event; progress updates rewrite it at most every half second.",
+        "It is also rewritten when the conversation data is updated.",
+        "A new temporary file replaces the target in one step, while the exclusive lock on the companion file is held.",
+        "Repeated writes replace this run's part of the file without duplicating it or overwriting earlier runs.",
+        "If writing fails, the event stays in memory and the failure is handled rather than raised."
+      ]
+    },
+    {
+      "id": "workspace_sync",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "held_out_1",
+      "question": "Explain how synchronize_project_workspace keeps its copy of a source folder up to date with the original folder.",
+      "gold": [
+        {
+          "path": "kilin/project.py",
+          "symbol": "synchronize_project_workspace"
+        },
+        {
+          "path": "kilin/project.py",
+          "symbol": "_synchronize_snapshot"
+        },
+        {
+          "path": "kilin/project.py",
+          "symbol": "_snapshot_matches_manifest"
+        }
+      ],
+      "facts": [
+        "It opens the existing workspace and refuses a source inside the workspace or a source that differs from the one recorded in source_snapshot.json; it never creates or changes the project profile.",
+        "A manifest with SHA-256 hashes of the selected source files is built and compared with the saved manifest (source_snapshot.json) to find added, modified, and removed files.",
+        "Before using that comparison, the copied files are rehashed and checked against the saved manifest; if the copy was changed, it is rebuilt from the original.",
+        "Otherwise only added and modified files are copied and removed files deleted, then empty folders are removed.",
+        "The new manifest, with the source folder's path, is saved for the next synchronization. The original folder is never modified."
+      ]
+    },
+    {
+      "id": "cached_model_callers",
+      "kind": "dependency",
+      "set": "development",
+      "round": "held_out_2",
+      "question": "Explain which functions call cached_model_snapshot, and when each of them uses it instead of downloading the model.",
+      "gold": [
+        {
+          "path": "kilin/chat.py",
+          "symbol": "ChatSession._load"
+        },
+        {
+          "path": "kilin/embeddings.py",
+          "symbol": "_model_source"
+        }
+      ],
+      "facts": [
+        "ChatSession._load (chat model) and _model_source (embedding model) call it.",
+        "Both use a local directory directly when the model ID is a folder that exists.",
+        "Both call cached_model_snapshot only when downloads are not allowed and the model ID is not a local folder.",
+        "When downloads are allowed, _model_source calls snapshot_download with local_files_only=False, and ChatSession._load passes the model ID to the backend loader, which may fetch missing files.",
+        "cached_model_snapshot never downloads (local_files_only=True) and raises FileNotFoundError if the cached snapshot has no config.json."
+      ]
+    },
+    {
+      "id": "file_selection",
+      "kind": "location",
+      "set": "development",
+      "round": "held_out_2",
+      "question": "Where does KíLín decide which files of a source folder are indexed, and which files does it always leave out?",
+      "gold": [
+        {
+          "path": "kilin/repository.py",
+          "symbol": "scan_repository"
+        },
+        {
+          "path": "kilin/repository.py",
+          "symbol": "_skip_reason"
+        }
+      ],
+      "facts": [
+        "scan_repository walks the folder and asks _skip_reason about every entry, recording a reason code for each skipped one.",
+        "Links are never followed.",
+        "Environment, cache, and generated folders (such as .git, .venv, __pycache__, node_modules, build, logs, weights) are skipped.",
+        "Potentially secret files (.env and .env.*, credentials.json, secrets.json, SSH keys) and model weights or key files by suffix (.safetensors, .pt, .gguf, .pem, .key, ...) are always skipped.",
+        "Otherwise files are skipped when excluded by the user's selection, outside the included paths, not regular files, of an unselected file type, empty, or larger than the size limit."
+      ]
+    },
+    {
+      "id": "query_format",
+      "kind": "location",
+      "set": "development",
+      "round": "held_out_2",
+      "question": "How is a question turned into the text that is embedded for semantic search, and does this depend on the project type?",
+      "gold": [
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._format_query"
+        },
+        {
+          "path": "kilin/query_formats.py",
+          "symbol": "format_qwen3_query"
+        }
+      ],
+      "facts": [
+        "With the plain query format in the project profile, the question is embedded unchanged.",
+        "Otherwise the text has two lines, 'Instruct: <instruction>' and 'Query: <question>', the format used by Qwen3 embedding models.",
+        "The instruction is the project type's retrieval instruction, so it depends on the project type.",
+        "The instruction must be a single nonempty line; surrounding whitespace is removed from both parts.",
+        "Documents are embedded without this instruction."
+      ]
+    },
+    {
+      "id": "conversation_delete",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "held_out_2",
+      "question": "Explain what happens to a saved conversation when ChatEngine.delete_conversation is called. Is the conversation file really deleted?",
+      "gold": [
+        {
+          "path": "kilin/gui/engine.py",
+          "symbol": "ChatEngine.delete_conversation"
+        },
+        {
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore.archive"
+        }
+      ],
+      "facts": [
+        "The file is not deleted: ConversationStore.archive moves it into a deleted folder under logs/traces, so it can be recovered.",
+        "If a file with the same name is already there, the moved file gets a _2, _3, ... suffix.",
+        "The conversation's write lock is held while the file is moved, and the conversation is removed from the store's list.",
+        "If it was the last conversation, a new empty one is created; if it was the active one, the most recently updated remaining conversation becomes active.",
+        "The engine detaches the trace when the active conversation is deleted, switches to the replacement, and records a conversation.deleted event; on errors the list is refreshed and the error reported."
+      ]
+    },
+    {
+      "id": "torch_embedding",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "held_out_2",
+      "question": "Explain how EmbeddingSession computes vectors with the PyTorch backend, which token's hidden state it uses, and how the vectors are checked before they are returned.",
+      "gold": [
+        {
+          "path": "kilin/embeddings.py",
+          "symbol": "EmbeddingSession._embed_torch"
+        },
+        {
+          "path": "kilin/embeddings.py",
+          "symbol": "_check_vectors"
+        },
+        {
+          "path": "kilin/embeddings.py",
+          "symbol": "EmbeddingSession.embed_documents"
+        }
+      ],
+      "facts": [
+        "Texts are tokenized together with padding and without truncation, and the model runs in inference mode.",
+        "The vector is the hidden state of each text's last non-padding token, found from the attention mask (last-token pooling).",
+        "Vectors are L2-normalized.",
+        "_check_vectors requires one vector per text, the same nonzero dimension for all, finite numeric values, and no all-zero vector; otherwise it raises RuntimeError.",
+        "embed_documents rejects empty or blank texts and a closed session, and does not truncate inputs."
+      ]
+    },
+    {
+      "id": "notebook_extraction",
+      "kind": "location",
+      "set": "development",
+      "round": "held_out_3",
+      "question": "Where does KíLín turn a Jupyter notebook into searchable text, and which parts of a notebook are left out?",
+      "gold": [
+        {
+          "path": "kilin/sources/extensions/sources_ipynb.py",
+          "symbol": "_notebook_units"
+        },
+        {
+          "path": "kilin/sources/extensions/sources_ipynb.py",
+          "symbol": "extract_source_units"
+        }
+      ],
+      "facts": [
+        "The notebook extension (sources_ipynb.py) reads the notebook JSON; extract_source_units returns the units built by _notebook_units.",
+        "Only code and Markdown cells become source units; outputs, execution state, attachments, metadata, and raw cells are not indexed.",
+        "Empty cells are skipped.",
+        "Each kept cell is one unit with its one-based position in the original cell list (skipped cells included) and line numbers local to the cell; a Markdown cell's first heading becomes its section.",
+        "A malformed notebook raises ValueError."
+      ]
+    },
+    {
+      "id": "atomic_files",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "held_out_3",
+      "question": "Explain how atomic_write_text and atomic_create_text write a file so that it is never left half-written, and how the two differ.",
+      "gold": [
+        {
+          "path": "kilin/atomic_writes.py",
+          "symbol": "atomic_write_text"
+        },
+        {
+          "path": "kilin/atomic_writes.py",
+          "symbol": "atomic_create_text"
+        }
+      ],
+      "facts": [
+        "Both write the full UTF-8 text to a new uniquely named temporary file in the same folder (.<name>.*.tmp) and only then publish it.",
+        "atomic_write_text replaces the destination with the temporary file (Path.replace), overwriting an existing file.",
+        "atomic_create_text publishes with a hard link (os.link), so it fails with FileExistsError if the destination already exists and never overwrites; unsupported hard links fail instead of falling back.",
+        "The temporary file is removed in all cases, including failures.",
+        "Neither takes a lock nor forces the data to disk (no fsync)."
+      ]
+    },
+    {
+      "id": "claim_passages_callers",
+      "kind": "dependency",
+      "set": "development",
+      "round": "held_out_3",
+      "question": "Explain which functions call claim_passages, and what each of them uses the selected passages for.",
+      "gold": [
+        {
+          "path": "kilin/tools/reference_check/tool.py",
+          "symbol": "_verify"
+        },
+        {
+          "path": "kilin/tools/suggest_reference/tool.py",
+          "symbol": "run"
+        }
+      ],
+      "facts": [
+        "The reference_check tool's _verify calls it for each citing claim, with the citing sentence (citation marks removed) and what the reference is cited for, over the cited file's passages; verify_claim then has the model judge whether they support the claim.",
+        "The suggest_reference tool's run calls it for each candidate paper with the user's statement; judge_support then has the model judge whether that paper supports the statement.",
+        "claim_passages fuses the rankings of its texts by reciprocal rank, keeps at most count passages within a token budget (the best one is always kept), and returns them in reading order."
+      ]
+    },
+    {
+      "id": "model_identity",
+      "kind": "location",
+      "set": "development",
+      "round": "held_out_3",
+      "question": "How does KíLín identify the embedding model that built a saved index, so that it can tell when the model has changed?",
+      "gold": [
+        {
+          "path": "kilin/retrievals/model_identity.py",
+          "symbol": "embedding_model_identity"
+        },
+        {
+          "path": "kilin/retrievals/model_identity.py",
+          "symbol": "_hub_snapshot_commit"
+        },
+        {
+          "path": "kilin/retrievals/model_identity.py",
+          "symbol": "_directory_digest"
+        }
+      ],
+      "facts": [
+        "A standard Hugging Face cache snapshot is identified by repository and commit (huggingface:<model>@<commit>).",
+        "Any other model folder is identified by a SHA-256 digest over its files' relative names and content hashes (local-sha256:...).",
+        "Per-file hashes are cached in a manifest outside the model folder and reused when file size, times, device, and inode are unchanged; force_verify rehashes every file.",
+        "The identity is stored with the index; a different identity means the saved vectors are not reused.",
+        "It is meant for index compatibility, not authentication."
+      ]
+    },
+    {
+      "id": "conversation_branch",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "held_out_3",
+      "question": "Explain how ConversationStore creates a branch of a conversation: what is copied from the parent, how the branch is named, and how it avoids overwriting an existing file.",
+      "gold": [
+        {
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore.create"
+        },
+        {
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore._branch_name"
+        }
+      ],
+      "facts": [
+        "With branch_from, the parent's saved resumable state is copied, except its metadata fields, while holding the parent's write lock; old trace operations are not copied.",
+        "The branch records its parent conversation and the parent's checkpoint identifier.",
+        "It is named '<parent name> branch N' with the first N not already used; a new independent conversation is named 'Conversation N'.",
+        "A new file path is chosen, locked, and checked; if it already exists, FileExistsError is raised instead of overwriting.",
+        "The new conversation is registered and becomes the active one."
+      ]
+    },
+    {
+      "id": "python_units",
+      "kind": "location",
+      "set": "development",
+      "round": "evaluation",
+      "question": "How does KíLín divide a Python file into the parts it indexes, and what happens to a file that is not valid Python?",
+      "gold": [
+        {
+          "path": "kilin/sources/extensions/sources_py.py",
+          "symbol": "_python_units"
+        },
+        {
+          "path": "kilin/sources/extensions/sources_py.py",
+          "symbol": "_python_class_unit"
+        }
+      ],
+      "facts": [
+        "The file is parsed with Python's ast module; nothing is executed.",
+        "Each top-level function becomes one unit, and the code between definitions (imports, constants) becomes module-context units.",
+        "A class becomes one class unit whose children are its methods and the class-level code between them.",
+        "A file that does not parse (SyntaxError) becomes a single python_file unit."
+      ]
+    },
+    {
+      "id": "pdf_text",
+      "kind": "location",
+      "set": "development",
+      "round": "evaluation",
+      "question": "How does KíLín get the text out of a PDF file, and what happens when a PDF contains no text?",
+      "gold": [
+        {
+          "path": "kilin/sources/extensions/sources_pdf.py",
+          "symbol": "read_source_file"
+        },
+        {
+          "path": "kilin/sources/extensions/sources_pdf.py",
+          "symbol": "_layout_pages"
+        },
+        {
+          "path": "kilin/sources/extensions/sources_pdf.py",
+          "symbol": "extract_source_units"
+        }
+      ],
+      "facts": [
+        "Pages are extracted with pdfminer.six layout analysis; if that fails or gives a different page count, pypdf's plain extraction is used.",
+        "Encrypted or unreadable PDFs raise an error.",
+        "The text is cleaned (invalid Unicode surrogates, unmapped glyphs, trailing spaces, repeated blank lines).",
+        "A PDF with no extractable text raises an error saying scanned PDFs need OCR.",
+        "Pages are joined with a page break, and each non-empty page becomes one unit labelled with its page number."
+      ]
+    },
+    {
+      "id": "call_relations",
+      "kind": "location",
+      "set": "development",
+      "round": "evaluation",
+      "question": "How does KíLín work out which functions call which other functions in Python code, and what happens when a called name could refer to several functions?",
+      "gold": [
+        {
+          "path": "kilin/retrievals/code_graph/extensions/code_graph_py.py",
+          "symbol": "extract_code_relations"
+        },
+        {
+          "path": "kilin/retrievals/code_graph/extensions/code_graph_py.py",
+          "symbol": "_Visitor.visit_Call"
+        },
+        {
+          "path": "kilin/retrievals/code_graph/code_graph.py",
+          "symbol": "_resolve_name"
+        }
+      ],
+      "facts": [
+        "Each Python file is parsed with ast and walked; the code is never imported or run, and a file with a syntax error contributes no relations.",
+        "For every call, the called expression is turned into a dotted name (a plain name or attribute chain) and recorded as a calls relation from the enclosing function, method, class, or module.",
+        "The name is resolved by its last component against the known entities: a unique match gives the qualified name.",
+        "An ambiguous name is kept as written (unless only one candidate differs from the name itself), so no call is guessed; calls through non-static expressions are not recorded."
+      ]
+    },
+    {
+      "id": "keyword_scoring",
+      "kind": "location",
+      "set": "development",
+      "round": "evaluation",
+      "question": "How are passages scored in KíLín's keyword search, and how are code identifiers broken into searchable words?",
+      "gold": [
+        {
+          "path": "kilin/retrievals/strategies/retrieval_lexical.py",
+          "symbol": "lexical_terms"
+        },
+        {
+          "path": "kilin/retrievals/strategies/retrieval_lexical.py",
+          "symbol": "lexical_search"
+        },
+        {
+          "path": "kilin/retrievals/strategies/retrieval_lexical.py",
+          "symbol": "_tfidf_vector"
+        }
+      ],
+      "facts": [
+        "Text is split into lowercase words of letters, digits, and underscores; identifiers also contribute their camelCase and snake_case parts longer than one character.",
+        "Adjacent words also form two-word terms; there is no stemming or stop-word removal.",
+        "Each passage and the query become TF-IDF vectors with sublinear term frequency (1 + log f) and smoothed inverse document frequency, normalized to unit length.",
+        "Passages are ranked by cosine similarity, ties by chunk identifier, with no minimum score."
+      ]
+    },
+    {
+      "id": "follow_up_query",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "evaluation",
+      "question": "Explain how refers_back decides that a question depends on the earlier conversation, and how search_text uses that to build the search query.",
+      "gold": [
+        {
+          "path": "kilin/answering.py",
+          "symbol": "refers_back"
+        },
+        {
+          "path": "kilin/answering.py",
+          "symbol": "search_text"
+        }
+      ],
+      "facts": [
+        "refers_back is true for messages of at most two words or when a configured pattern matches: pronouns (it, they, this), ordinal references (the second one), pointers back (you said, earlier, so far), or elliptical openings (and, what about).",
+        "search_text returns the question unchanged unless the routing decision refers back and lists related turns.",
+        "Otherwise it appends the questions of the related turns, with whitespace normalized, after the new question.",
+        "Model-written text (earlier answers) is never added to the query."
+      ]
+    },
+    {
+      "id": "download_progress",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "evaluation",
+      "question": "Explain how download_model reports download progress to its caller, and where the downloaded model files are stored.",
+      "gold": [
+        {
+          "path": "kilin/huggingface.py",
+          "symbol": "download_model"
+        },
+        {
+          "path": "kilin/huggingface.py",
+          "symbol": "_progress_tqdm"
+        }
+      ],
+      "facts": [
+        "download_model calls huggingface_hub.snapshot_download, so files go to (or are reused from) Hugging Face's shared cache; KíLín does not copy them.",
+        "With a progress callback, it passes a progress class built by _progress_tqdm; without one, the Hub shows its own progress.",
+        "That class disables terminal output and reports only the aggregate byte bar as (completed bytes, total bytes).",
+        "Because a disabled tqdm stops counting, the class keeps the count itself.",
+        "It returns the snapshot path and does not load the model."
+      ]
+    },
+    {
+      "id": "reference_matching",
+      "kind": "mechanism",
+      "set": "development",
+      "round": "evaluation",
+      "question": "Explain how match_reference decides which project file a reference entry points to, and when a match is only probable.",
+      "gold": [
+        {
+          "path": "kilin/tools/reference_check/_matching.py",
+          "symbol": "match_reference"
+        },
+        {
+          "path": "kilin/tools/reference_check/_matching.py",
+          "symbol": "_candidate"
+        }
+      ],
+      "facts": [
+        "A file's DOI found in the entry gives a found match.",
+        "So does the entry's first author appearing in the file's authors or first page together with the same journal citation.",
+        "Otherwise the score is the share of the file's title words found in the entry (or of the entry's words found on the first page when there is no title), compared with found and probable thresholds.",
+        "A high score with a different first author, or a lower score with the same first author, is only probable.",
+        "Found matches come before probable ones, then higher scores; other matches are listed as alternatives; an entry with too few distinctive words is unreadable, and one with no candidate is missing."
+      ]
+    },
+    {
+      "id": "term_hits_callers",
+      "kind": "dependency",
+      "set": "development",
+      "round": "evaluation",
+      "question": "Explain which functions call term_hits, and what each of them does with the passages it returns.",
+      "gold": [
+        {
+          "path": "kilin/tools/batch_review/tool.py",
+          "symbol": "run"
+        },
+        {
+          "path": "kilin/tools/find_fact/tool.py",
+          "symbol": "run"
+        },
+        {
+          "path": "kilin/tools/find_passages/tool.py",
+          "symbol": "run"
+        }
+      ],
+      "facts": [
+        "term_hits asks the router model for the question's exact terms and returns them with the passages that mention any of them (whole words, ignoring case).",
+        "batch_review's run uses them for its quick version: only the passages that mention the terms, read in parts.",
+        "find_fact's run uses them for its quick version: only the parts that contain a hit, per file.",
+        "find_passages' run uses them for its quick version: the sentences of those passages, found without the model.",
+        "Without terms, each falls back to the best-ranked passages."
+      ]
+    },
+    {
+      "id": "explicit_imports_callers",
+      "kind": "dependency",
+      "set": "development",
+      "round": "evaluation",
+      "question": "Explain which functions call include_explicit_imports, and why each of them needs it.",
+      "gold": [
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._prepare_retrieval"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._prepare_source"
+        }
+      ],
+      "facts": [
+        "Both scan the project's source folder with scan_repository and then call include_explicit_imports on the report.",
+        "_prepare_retrieval uses the scan to build the source manifest and compare it with the saved index, to decide whether to reuse or rebuild it.",
+        "_prepare_source uses it (when no report is supplied) to choose which files to read and split into chunks.",
+        "include_explicit_imports adds files the user imported one by one (recorded in sources.json) even when their suffix or name would otherwise be skipped; size limits and link safeguards still apply, and imported folders keep the normal rules."
+      ]
+    },
+    {
+      "id": "extension_callers",
+      "kind": "dependency",
+      "set": "development",
+      "round": "evaluation",
+      "question": "Explain which functions call normalize_extensions, and what each of them checks with it.",
+      "gold": [
+        {
+          "path": "kilin/project.py",
+          "symbol": "_read_profile"
+        },
+        {
+          "path": "kilin/project_type.py",
+          "symbol": "_parse_project_type"
+        },
+        {
+          "path": "kilin/repository.py",
+          "symbol": "scan_repository"
+        }
+      ],
+      "facts": [
+        "normalize_extensions lowercases the suffixes, adds a leading dot, rejects wildcards, whitespace, and non-text values, and removes duplicates.",
+        "_read_profile checks the extensions setting of a project's profile.ini.",
+        "_parse_project_type checks the extensions declared by a project-type JSON file.",
+        "scan_repository checks the extensions it is asked to select before scanning."
+      ]
+    },
+    {
+      "id": "markdown_sections",
+      "kind": "location",
+      "set": "evaluation",
+      "round": "evaluation_2",
+      "question": "How does KíLín split a Markdown file into searchable parts, and what happens to the opening lines that come before any heading?",
+      "gold": [
+        {
+          "path": "kilin/sources/extensions/sources_md.py",
+          "symbol": "_markdown_units"
+        },
+        {
+          "path": "kilin/sources/extensions/sources_md.py",
+          "symbol": "_markdown_headings"
+        }
+      ],
+      "facts": [
+        "Lines starting with one to six # characters (ATX headings) start a new flat section that runs until the next heading.",
+        "Headings inside backtick or tilde code fences are ignored.",
+        "The text before the first heading becomes a separate preamble unit.",
+        "Each section keeps its heading title and original line range; nested structure and underlined (setext) headings are not recognized."
+      ]
+    },
+    {
+      "id": "matlab_calls",
+      "kind": "location",
+      "set": "evaluation",
+      "round": "evaluation_2",
+      "question": "How does KíLín work out which functions a MATLAB file calls, and how does this differ from the way it handles Python?",
+      "gold": [
+        {
+          "path": "kilin/retrievals/code_graph/extensions/code_graph_m.py",
+          "symbol": "extract_code_relations"
+        }
+      ],
+      "facts": [
+        "MATLAB relations come from regular expressions over the text, not from a parser; the code is never run.",
+        "A classdef makes the class the parent of the file's functions and records inheritance from its base class.",
+        "Each function's body runs until the next function declaration; every name followed by an opening parenthesis in it is recorded as a call, except control words such as if, for, while, and switch.",
+        "Names are resolved against known entities with the shared name resolution, as for Python.",
+        "Python files are parsed into syntax trees instead; MATLAB matches can miss or misread comments, strings, and nested constructs."
+      ]
+    },
+    {
+      "id": "long_document",
+      "kind": "location",
+      "set": "evaluation",
+      "round": "evaluation_2",
+      "question": "When a question asks KíLín to read a whole file that does not fit in the evidence budget, how are the parts the model sees chosen?",
+      "gold": [
+        {
+          "path": "kilin/retrievals/document_reading.py",
+          "symbol": "read_document"
+        },
+        {
+          "path": "kilin/retrievals/document_reading.py",
+          "symbol": "_fit"
+        }
+      ],
+      "facts": [
+        "The file is the one the caller chose, a named function's or file's, or otherwise the file dominating the top search results.",
+        "If the whole file fits the budget (estimated tokens), it is supplied whole.",
+        "Otherwise its chunks are taken in the order of the fused search ranking, unranked chunks last; a chunk that does not fit is skipped while smaller later ones may still fit.",
+        "The selected chunks are given to the model in source order, all from one file."
+      ]
+    },
+    {
+      "id": "exact_mentions",
+      "kind": "location",
+      "set": "evaluation",
+      "round": "evaluation_2",
+      "question": "How does KíLín find every place where an exact name appears in the project, and how does it avoid matching the name inside a longer word?",
+      "gold": [
+        {
+          "path": "kilin/tools/_shared/mentions.py",
+          "symbol": "scan_mentions"
+        },
+        {
+          "path": "kilin/tools/_shared/terms.py",
+          "symbol": "term_pattern"
+        },
+        {
+          "path": "kilin/tools/_shared/mentions.py",
+          "symbol": "_units"
+        }
+      ],
+      "facts": [
+        "The scan runs over the indexed text, reassembling each unit's lines once from its chunks so overlapping chunks are not counted twice.",
+        "Each term becomes a regular expression whose parts may be joined by spaces, underscores, or hyphens.",
+        "With whole words, the term may not continue into adjacent letters or digits (MRI does not match MRIs).",
+        "Case sensitivity is an option (the code project's mention listing matches case); each occurrence keeps its file, line, and a few context lines."
+      ]
+    },
+    {
+      "id": "answer_streaming",
+      "kind": "location",
+      "set": "evaluation",
+      "round": "evaluation_2",
+      "question": "How does the desktop app show an answer while the model is still writing it?",
+      "gold": [
+        {
+          "path": "kilin/gui/engine.py",
+          "symbol": "ChatEngine.ask"
+        },
+        {
+          "path": "kilin/gui/engine.py",
+          "symbol": "_AnswerStream.add"
+        },
+        {
+          "path": "kilin/gui/engine.py",
+          "symbol": "_AnswerStream.flush"
+        }
+      ],
+      "facts": [
+        "ChatEngine.ask passes a token callback (an _AnswerStream's add) to the session, which the chat model calls with each decoded piece of text.",
+        "The stream buffers pieces and sends them to the window as answer_delta events at most every 0.08 seconds.",
+        "After the answer, flush sends whatever is left.",
+        "With MLX the text arrives piece by piece; PyTorch generation is not streamed, so it arrives at once."
+      ]
+    },
+    {
+      "id": "superscript_citations",
+      "kind": "location",
+      "set": "evaluation",
+      "round": "evaluation_2",
+      "question": "How does KíLín recognize citation numbers printed as small raised numbers in a PDF, and how does it avoid mistaking other raised numbers for citations?",
+      "gold": [
+        {
+          "path": "kilin/tools/reference_check/_citations.py",
+          "symbol": "superscript_runs"
+        },
+        {
+          "path": "kilin/tools/reference_check/_citations.py",
+          "symbol": "_superscripts"
+        },
+        {
+          "path": "kilin/tools/reference_check/_citations.py",
+          "symbol": "_confirmed"
+        }
+      ],
+      "facts": [
+        "pdfminer.six reads each line's characters with their size and position; digits, commas, and dashes smaller than a set share of the line's median letter size and raised above its baseline form a superscript run.",
+        "Each run is stored with the text printed just before it, as a signature.",
+        "A number found in a sentence counts as a superscript citation only when the PDF confirms a matching raised run there.",
+        "Superscripts in author lists, affiliations, and equations are skipped; a written-out 'Ref. 50' needs no confirmation.",
+        "If the PDF cannot be read this way, no superscript is confirmed."
+      ]
+    },
+    {
+      "id": "claim_verdict",
+      "kind": "mechanism",
+      "set": "evaluation",
+      "round": "evaluation_2",
+      "question": "Explain how verify_claim reaches a verdict on a cited claim, and how the quote the model gives is checked.",
+      "gold": [
+        {
+          "path": "kilin/tools/_shared/claims.py",
+          "symbol": "verify_claim"
+        },
+        {
+          "path": "kilin/tools/_shared/claims.py",
+          "symbol": "_judge"
+        },
+        {
+          "path": "kilin/tools/_shared/claims.py",
+          "symbol": "parse_verdict"
+        }
+      ],
+      "facts": [
+        "Without passages from the cited file the verdict is 'no text' and the model is not called; a failing model call gives 'failed'.",
+        "Otherwise the model sees the claim and the cited passages and replies with a verdict, a quote, and a comment.",
+        "An unrecognized verdict becomes 'unclear', with the reply as comment.",
+        "The quote is kept only if it is found in a passage word for word, or for most of its words in order; otherwise it is dropped and the comment says so.",
+        "'contradicted' without a confirmed quote becomes 'not supported'."
+      ]
+    },
+    {
+      "id": "output_saving",
+      "kind": "mechanism",
+      "set": "evaluation",
+      "round": "evaluation_2",
+      "question": "Explain how save_output_file writes a tool's output into the project without overwriting an existing file.",
+      "gold": [
+        {
+          "path": "kilin/tools/_shared/outputs.py",
+          "symbol": "save_output_file"
+        },
+        {
+          "path": "kilin/tools/_shared/outputs.py",
+          "symbol": "publish_output_file"
+        },
+        {
+          "path": "kilin/tools/_shared/outputs.py",
+          "symbol": "staged_output_file"
+        }
+      ],
+      "facts": [
+        "Files go to the project's outputs folder, which may not be a link.",
+        "The text is first written completely to a private temporary staging file in that folder.",
+        "It is then published under the requested name with a hard link, which fails if the name exists; the next candidates are name-2, name-3, and so on.",
+        "If hard links are not supported, the staged file is copied into a newly and exclusively created file, which also cannot overwrite.",
+        "The staging file is removed afterwards; concurrent saves get different names."
+      ]
+    },
+    {
+      "id": "newest_listed_callers",
+      "kind": "dependency",
+      "set": "evaluation",
+      "round": "evaluation_2",
+      "question": "Explain which functions call newest_listed, and what each of them does with the earlier turn it returns.",
+      "gold": [
+        {
+          "path": "kilin/tools/filter_results/tool.py",
+          "symbol": "run"
+        },
+        {
+          "path": "kilin/tools/show_source/tool.py",
+          "symbol": "run"
+        }
+      ],
+      "facts": [
+        "newest_listed returns the newest earlier turn with evidence that the router linked to the question, otherwise the newest turn with evidence.",
+        "filter_results' run judges that turn's listed items against the question in batches with the model and keeps the matching ones.",
+        "show_source's run picks the cited passages of that turn that the question and the earlier answer point to, and shows their text word for word with nearby sentences.",
+        "Without such a turn, both reply that there is no earlier answer to work from."
+      ]
+    },
+    {
+      "id": "workspace_path_callers",
+      "kind": "dependency",
+      "set": "evaluation",
+      "round": "evaluation_2",
+      "question": "Explain which functions call default_workspace_path, and when each of them uses the folder it suggests.",
+      "gold": [
+        {
+          "path": "kilin/gui/engine.py",
+          "symbol": "_workspace_path"
+        },
+        {
+          "path": "kilin/workspace.py",
+          "symbol": "prepare_sources_workspace"
+        }
+      ],
+      "facts": [
+        "default_workspace_path suggests <first source name>-<8-character hash of its path> inside a parent folder, without creating or reserving it.",
+        "The GUI's _workspace_path uses it when the user has not chosen a workspace folder; a chosen folder is used as given.",
+        "prepare_sources_workspace uses it when given a parent folder instead of a workspace folder.",
+        "Creation reserves the folder exclusively and may pick a numbered sibling if the suggested folder is taken."
+      ]
+    }
+  ]
+}

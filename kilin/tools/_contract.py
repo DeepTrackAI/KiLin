@@ -30,7 +30,8 @@ Key Features
 
 - **Context**
 
-    KíLín's services, as plain callables.
+    KíLín's services, including optional bounded retrieval, as plain
+    callables; complete hybrid ranking remains unchanged.
 
 - **Result**
 
@@ -60,6 +61,10 @@ Module Structure
 
     What a tool returns.
 
+- ``ToolRouting``
+
+    Routing a tool adds for one project, from the project's own files.
+
 - ``reject_unknown``
 
     Reject settings a tool does not have.
@@ -88,7 +93,7 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -96,6 +101,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from kilin.chunking import Chunk
     from kilin.retrievals import CodeGraph, HybridResult
+    from kilin.retrievals.requests import RetrievalRequest, RetrievalResult
     from kilin.tools._shared.planning import ToolPlan
     from kilin.trace_logging import TraceSink
 
@@ -104,6 +110,7 @@ __all__ = [
     "ToolContext",
     "ToolRequest",
     "ToolResult",
+    "ToolRouting",
     "check_bool",
     "check_choice",
     "check_int",
@@ -203,11 +210,25 @@ class ToolContext:
     ask_router: Callable[[str, str, int], str]
         Asks the router model ``(system, prompt, max_new_tokens)`` with
         thinking off and greedy decoding; the conversation is untouched.
-    ask_model: Callable[[str, str, int], str]
-        Same for the answering model of the selected effort level.
-    write: Callable[[str, str, int], str]
-        Like ``ask_model``, but the reply streams to the user as the
-        answer; a tool that uses it returns ``streamed=True``.
+    ask_model: Callable[[str, str, int | None], str]
+        Asks the selected answering model with inherited temperature and
+        the tool-owned MODEL_CALLS thinking policy. Returns only the
+        parsed-answer text; any thinking is captured by the coordinator
+        for display, not returned to the
+        tool. ``None`` inherits the session maximum. Explicit caps apply
+        only when effective thinking is off, never exceeding that maximum.
+        A thinking call that exhausts its allowance inside unfinished
+        thinking is retried once without thinking, with the same request
+        and user allowance. Other failures, or a failed retry, raise
+        ``IncompleteModelResponse`` rather than returning empty data.
+        Independent item loops can retain checked results and report gaps.
+    write: Callable[[str, str, int | None], str]
+        Inherits session thinking and temperature, independently of the
+        internal MODEL_CALLS policy. Preserves thinking in the returned
+        answer and streams the complete reply to the user;
+        a tool using it returns ``streamed=True``. Completion is validated
+        before the reply can become a successful tool result. ``None``
+        inherits the user limit; a smaller cap applies only without thinking.
     model_id: str
         The answering model's ID, for plans and summaries.
     progress: Callable[..., None]
@@ -226,11 +247,46 @@ class ToolContext:
         ``write_pdf(markdown, path, label=...)`` attempts a one-page PDF
         and returns the actual page count. ``None`` when no renderer is
         available (for example notebooks without Qt). Defaults to ``None``.
+    retrieve: Callable[[RetrievalRequest], RetrievalResult] | None, optional
+        Return bounded original evidence with source-first discovery and
+        coverage reporting. None for contexts that provide ranking only.
+        Tool-owned limits do not inherit answering-intent budgets.
     choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
         ``choose(question, options)`` asks the user to pick one option and
         returns its index, or None when they cancel; None where nobody can
         be asked (notebooks), so tools fall back to their best guess.
         Defaults to ``None``.
+    source_root: pathlib.Path | None, optional
+        Saved project source directory. The selected-source reader rejects
+        this path when it is outside the project workspace. Defaults to
+        ``None`` for legacy test contexts.
+    model_attempt_count: Callable[[], int] | None, optional
+        Cumulative number of internal answering-model generation attempts,
+        including incomplete attempts and bounded recovery, for this tool
+        run. ``None`` when the context cannot expose attempt accounting.
+        The count can be sampled around ``ask_model`` without an extra call.
+    card: Callable[[pathlib.Path], Mapping[str, str] | None] | None, optional
+        ``card(path)`` returns the fields of the indexed source's valid
+        card by name: its metadata (``title``, ``authors``, ``year``,
+        ``venue``, ``identifiers``) and statements (such as ``abstract``,
+        ``aim``, ``methods``, ``findings``, ``limitations``), as indexed;
+        None when the source has no valid card. Reading a card calls no
+        model. None for contexts without cards. Defaults to ``None``.
+    ask_check: Callable[[str, str, int], str] | None, optional
+        Asks the selected answering model a short check
+        ``(system, prompt, max_new_tokens)`` with thinking off and greedy
+        decoding, such as whether the passages found answer the question;
+        the conversation is untouched. None for contexts without it, where
+        tools fall back to ``ask_router``. Defaults to ``None``.
+    suggestions: Callable[[], Sequence[object]] | None, optional
+        Returns the project's suggested questions, each with ``intent`` and
+        ``question`` (``kilin.question_suggestions.Suggestion``), possibly
+        several per intent, without those of the intent being answered;
+        empty without sources. None for contexts without them. Defaults to
+        ``None``.
+    fixed_suggestions: tuple[str, ...], optional
+        The project type's fixed example requests, for a project without
+        sources. Defaults to ``()``.
 
     """
 
@@ -242,8 +298,8 @@ class ToolContext:
     unsearchable: Callable[[list[Path]], list[Path]]
     source_files: Callable[[], dict[Path, int]]
     ask_router: Callable[[str, str, int], str]
-    ask_model: Callable[[str, str, int], str]
-    write: Callable[[str, str, int], str]
+    ask_model: Callable[[str, str, int | None], str]
+    write: Callable[[str, str, int | None], str]
     model_id: str
     progress: Callable[..., None]
     done: Callable[..., None]
@@ -252,6 +308,13 @@ class ToolContext:
     trace_turn_id: str | None
     write_pdf: Callable[..., int] | None = None
     choose: Callable[[str, tuple[str, ...]], int | None] | None = None
+    retrieve: Callable[[RetrievalRequest], RetrievalResult] | None = None
+    model_attempt_count: Callable[[], int] | None = None
+    source_root: Path | None = None
+    card: Callable[[Path], Mapping[str, str] | None] | None = None
+    ask_check: Callable[[str, str, int], str] | None = None
+    suggestions: Callable[[], Sequence[object]] | None = None
+    fixed_suggestions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +331,9 @@ class ToolResult:
         ``text`` must be exact source lines so previews can locate it.
     summary: dict[str, object]
         JSON-compatible facts saved with the turn under ``"tool"``.
+        Partial operations set ``status="partial"`` and ``incomplete_items``;
+        operations without usable results set ``status="incomplete"``.
+        An unassessed item is never a negative finding.
     streamed: bool, optional
         True when the answer already reached the user through
         ``ToolContext.write``. Defaults to ``False``.
@@ -278,6 +344,28 @@ class ToolResult:
     evidence: tuple[dict[str, object], ...]
     summary: dict[str, object]
     streamed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ToolRouting:
+    """Routing a tool adds to its intent for one project.
+
+    A tool whose use depends on the project's own files (the report
+    templates in ``templates/``) describes them for routing, so a new file
+    is routed to without editing the project type.
+
+    Attributes
+    ----------
+    cues: tuple[str, ...]
+        Regular expressions (case-insensitive) added to the intent's cues.
+    description: str
+        Text added to the intent's description for the router, such as
+        the templates the project has; ``""`` adds nothing.
+
+    """
+
+    cues: tuple[str, ...] = ()
+    description: str = ""
 
 
 def reject_unknown(where: str, data: dict, known: Collection[str]) -> None:

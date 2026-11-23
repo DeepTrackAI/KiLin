@@ -23,12 +23,45 @@ identifiers supplied by a project or caller. The identifiers use the form
 | --- | --- | --- |
 | `DEFAULT_CHAT_MODEL_MLX` | `Qwen/Qwen3-8B-MLX-4bit` | Initial chat model identifier for the MLX backend. |
 | `DEFAULT_CHAT_MODEL_TORCH` | `Qwen/Qwen3-8B` | Initial chat model identifier for the PyTorch backend. |
+| `DEFAULT_ROUTER_MODEL_MLX` | `Qwen/Qwen3-4B-MLX-4bit` | Core default intent router for MLX when a project has no saved router. |
+| `DEFAULT_ROUTER_MODEL_TORCH` | `Qwen/Qwen3-4B` | Core default intent router for PyTorch when a project has no saved router. |
+| `DEFAULT_SOURCE_CARD_MODEL_MLX` | `Qwen/Qwen3-8B-MLX-4bit` | Independent source-card generation model for MLX. |
+| `DEFAULT_SOURCE_CARD_MODEL_TORCH` | `Qwen/Qwen3-8B` | Independent source-card generation model for PyTorch. |
 | `DEFAULT_EMBEDDING_MODEL_MLX` | `mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ` | Initial embedding model identifier for MLX. |
 | `DEFAULT_EMBEDDING_MODEL_TORCH` | `Qwen/Qwen3-Embedding-0.6B` | Initial embedding model identifier for PyTorch. |
 
-All four values must be nonempty strings. The selected model and backend may
-be overridden in a project profile. These defaults do not automatically
-download a model.
+All eight values must be nonempty strings. Core router selection reads the
+project's saved ``[router]`` setting first; the packaged router default
+is used only when the project has no saved or legacy router. Explicit
+``RAGSession(router_model=...)`` overrides the saved selection for that
+session. The GUI may save a user-preference router for a newly created
+project. These defaults do not automatically download a model.
+
+## `SOURCE_CARD_GENERATION` -- auxiliary inference parameters
+
+Owned by `kilin/model_settings.py`, independently of answering and routing.
+The associated source-card model identifiers are defined in `DEFAULT_MODELS`.
+
+| Key | Default | Meaning |
+| --- | ---: | --- |
+| `THINKING` | `false` | Disable thinking by default while generating card content. Exact boolean. |
+| `TEMPERATURE` | `0.0` | Finite, nonnegative generation temperature; zero requests greedy decoding. |
+| `MAX_INPUT_TOKENS` | `5000` | Estimated budget for the full scientific-paper prompt and selected passages; the card kind enforces it during prompt construction. |
+| `MAX_NEW_TOKENS` | `1200` | Strict positive output-token cap applied to each generation. |
+
+The token budgets must be positive integers no greater than 200,000.
+A project's `[source_card_generation]` section in `profile.ini` may
+override `mlx`, `torch`, `thinking`, `temperature`, `max_input_tokens`, and
+`max_new_tokens`. Missing keys inherit the packaged values. Model selection
+and parameters do not inherit router or interactive generation settings.
+The project's existing `models.allow_download` policy is authoritative;
+there is no source-card-specific download override.
+
+Reading settings never loads a model or modifies a project. Saving them
+uses the core atomic profile writer. The configured model is loaded only
+for a requested card-generation batch, and valid existing cards are not
+regenerated just because the model changes. Indexing policy and automatic generation are controlled separately by
+project-type defaults, saved project settings, and source overrides.
 
 ## `REPOSITORY` — source-file selection
 
@@ -39,7 +72,7 @@ file would otherwise match an allowed extension.
 
 | Key | Meaning |
 | --- | --- |
-| `DEFAULT_EXTENSIONS` | Allowed literal file suffixes for repository scans that do not explicitly supply extension filters (for example `.py`, `.md`, `.ipynb` and `.pdf`). This is not a content-type detector. |
+| `DEFAULT_EXTENSIONS` | Allowed literal file suffixes for repository scans that do not explicitly supply extension filters (for example `.py`, `.md`, `.ipynb`, `.pdf`, `.doc` and `.docx`). This is not a content-type detector. |
 | `SKIP_DIRECTORIES` | Directory names not traversed, including VCS metadata, virtual environments, caches, generated output, and model weights. |
 | `SKIP_FILES` | Filenames skipped regardless of extension, including typical credentials and secret files. |
 | `BLOCKED_SUFFIXES` | Suffixes rejected even if included elsewhere, particularly model binaries and private-key formats. |
@@ -60,6 +93,8 @@ have per-project overrides.
 | `MAX_RELATED_TURNS` | `3` | Maximum earlier-turn identifiers retained from the router's decision. When more are returned, only the newest valid related identifiers remain. |
 | `MAX_LISTED_TURNS` | `30` | Maximum eligible earlier-turn summaries shown in the router prompt. KíLín takes the newest eligible turns but lists them in chronological order. |
 | `ROUTER_MAX_TOKENS` | `64` | Maximum number of tokens requested for the router's short JSON reply. It is not the answer-generation limit. |
+| `SUMMARY_MAX_TOKENS` | `96` | Maximum number of tokens requested for the router model's one-sentence answer summary. A cut-off summary is discarded and the answer's first sentence is kept. |
+| `SUMMARY_ANSWER_MAX_CHARACTERS` | `4000` | Maximum number of answer characters shown to the router model when it writes the summary. |
 | `REPRESENTATION_MAX_CHARACTERS` | `200` | Maximum number of characters kept in each question and answer-summary field of a compact turn representation. |
 | `REPRESENTATION_MAX_SOURCES` | `5` | Maximum distinct source labels included in a compact turn representation. |
 | `SHORT_QUESTION_MAX_WORDS` | `2` | Maximum number of words in a question automatically treated as potentially referring to earlier turns, even without an explicit reference phrase. |
@@ -91,8 +126,9 @@ and from the history policies configured in project types.
 Owned by `kilin/rag.py`. These settings affect RAG execution and the number
 of evidence items retained when reusing or supplementing earlier answers.
 They are package-level policies, not retrieval counts stored in a project
-profile. All four evidence limits and the embedding batch size must be
-positive integers.
+profile. All four evidence limits and the embedding batch size must be positive
+integers. `EXTRA_SEARCHES` may be zero to disable the check; the two
+check-size limits must be positive.
 
 | Key | Current value | Meaning |
 | --- | --- | --- |
@@ -101,11 +137,22 @@ positive integers.
 | `MAX_RELATED_EVIDENCE` | `10` | Maximum extra items from related answers added to newly retrieved evidence. |
 | `UNCITED_RELATED_EVIDENCE` | `3` | Number of items taken from a related turn when its answer cites none of its evidence. |
 | `MAX_EARLIER_TURNS` | `6` | Most earlier turns inspected when a tool request refers to earlier conversation content; this does not configure individual tools. |
+| `EXTRA_SEARCHES` | `1` | Maximum additional ranked pages for an ordinary routed *hybrid* search answer, after a bounded yes/no check. `0` disables checking; source-first answers already fill their configured hard budget and are not re-searched. |
+| `MAX_EVIDENCE_CHECK_CHARACTERS` | `12000` | Maximum characters in the complete evidence-check prompt; oversize checks are skipped without dropping passages. Character limits are deterministic, not exact tokenizer limits. |
+| `MAX_EXPANDED_RESULTS` | `64` | Maximum hybrid retrieval-result count requested when expanding a search, unless the initial `retrieval_count` is already higher. Does not cap the user's initial retrieval request. |
 | `PROGRESS_MIN_INTERVAL_SECONDS` | `0.15` | Minimum interval between ordinary user-facing progress notifications; must be a finite positive number. |
 | `PROGRESS_TRACE_PERCENT_STEP` | `5.0` | Percentage-point increment used to throttle progress trace events; must be finite, positive, and no greater than 100. |
 
 Progress throttling does not impose a checkpoint or event-retention policy.
 The tracing system retains its single enabled trace-detail behavior.
+
+## `CHAT` — model replies
+
+Owned by `kilin/chat.py`.
+
+| Key | Current value | Meaning |
+| --- | --- | --- |
+| `CJK_REQUEST_WORDS` | `["cantonese", "chinese", "cjk", "hangul", "hanja", "hanzi", "hiragana", "japanese", "kana", "kanji", "katakana", "korean", "mandarin", "taiwanese"]` | Lowercase language/script vocabulary for positive output requests in original user messages. Whole-word matching ignores case and accepts a final "s"; mere mentions and negative requests do not grant permission. Broad "asian" and Latin-script "pinyin" are intentionally excluded. |
 
 ## `PROJECT_PROFILE` — values for newly created projects
 
@@ -121,9 +168,20 @@ intentionally different from the new-project profile settings.
 | `MAX_TOKENS` | `400` | Maximum tokens allowed per chunk for a new project. |
 | `OVERLAP_TOKENS` | `40` | Maximum overlap of neighboring chunks in the new profile; can be zero. |
 | `RETRIEVAL_COUNT` | `5` | Number of search results requested by default in newly created project profiles. |
-| `THINKING` | `true` | Initial thinking-mode flag in the new project profile. Must be a JSON boolean. |
-| `TEMPERATURE` | `0.0` | Initial model generation temperature; must be a finite, nonnegative number. |
+| `THINKING` | `true` | Fallback thinking-mode flag when a project type does not define `generation.thinking`. Must be a JSON boolean. |
+| `TEMPERATURE` | `0.0` | Fallback model temperature when a project type does not define `generation.temperature`; must be finite and nonnegative. |
 | `MAX_NEW_TOKENS` | `8192` | Initial cap for generated answer tokens, not for router decisions. |
+| `BLOCK_UNREQUESTED_CJK` | `true` | Initial `generation.block_unrequested_cjk` flag: best-effort suppression of unsolicited CJK script tokens. Original user script use or a positive request can authorize output; evidence and generated instructions cannot. Profiles without the setting use this value. Must be a JSON boolean. See the language policy in `model_management.md`. |
+
+When a new project type defines `generation.thinking` or
+`generation.temperature`, that value takes precedence over the matching
+`PROJECT_PROFILE` default for **new project creation only**. Caller-supplied
+creation settings take precedence over both. Values persisted in an
+existing `profile.ini` are never overwritten by default changes. These
+settings are distinct from per-intent thinking overrides and the
+independent `SOURCE_CARD_GENERATION` settings. All six bundled project
+types explicitly set positive temperatures and disable thinking; see
+[New-project generation defaults](configuration.md#new-project-generation-defaults).
 
 The token targets, maximum, retrieval count, and new-token limit are
 positive exact integers. Overlap is a nonnegative exact integer and must be
@@ -176,10 +234,25 @@ corresponding function defaults.
 | `CODE_MAX_DISTANCE` | `1` | Maximum graph hops used by default in `code_search()`; zero permits only directly matched entities. |
 | `DOCUMENT_CHARACTERS_PER_TOKEN` | `4` | Approximate number of characters per token in document-budget estimation; not a tokenizer. |
 | `MIN_DOCUMENT_STEM_LENGTH` | `4` | Shortest file stem recognized as a named-document candidate. |
+| `CALLEE_EXPANSION_DEPTH` | `2` | Call steps followed from a named function when collecting its callees (1 = direct callees only). Zero disables callee expansion. |
+| `CALLEE_EXPANSION_MAX` | `4` | Most callees added to the evidence when a question names a function without asking about relationships; callees sharing words with the question come first, then nearer ones. Zero disables callee expansion. |
+| `CLASS_METHOD_EXPANSION_MAX` | `4` | Methods added when a question names a class: all of them if the class has at most this many, otherwise this many of those sharing most words with the question. Zero disables class expansion. |
+| `NAME_WORD_EXPANSION_MAX` | `2` | Most functions added because every word of their name occurs in the question, without the name itself ("its HTML templates" adds `html_template`). Only names with at least two words of four or more letters count. Zero disables this expansion. |
+| `DOCUMENTATION_NAME_EXPANSION_MAX` | `2` | Most functions added because retrieved documentation or notebook passages name them as code (an underscore, digit, or inner capital), when the name identifies one function outside test code. Zero disables this expansion. |
+| `MODULE_FUNCTION_EXPANSION_MAX` | `4` | Most top-level functions added from modules whose header (docstring and imports) was retrieved: all of a module's functions when it has at most this many, otherwise those sharing most words with the question. Zero disables this expansion. |
+| `TEST_SUBJECT_EXPANSION_MAX` | `2` | Most source functions added because a retrieved test calls them; those of the best-ranked test come first, then those sharing most words with the question. Zero disables this expansion. |
+| `RELATED_CHUNKS_MAX` | `2` | Most chunks kept from one long related function (a callee, neighbor, or class method): those mentioning a named function first, then those sharing most words with the question. Zero keeps every chunk. |
+| `RELATED_PASSAGES_MAX` | `5` | Most passages of related functions (callees, neighbors, class methods, and functions reached from retrieved documentation, module headers, and tests) added in total, ranked by the similarity of their embedding to the query; explicit files, named functions, and the neighbors asked for in a relationship question are not counted. Zero keeps all. |
+| `SOURCE_SEARCH_DEPTH` | `6` | For an intent with `retrieval.prefer_source_code`, each search channel ranks this many times the retrieval count and keeps its best source-code results (neither documentation nor test code, unless the question asks about them), so code ranked below tutorials and tests is reached. Values below 1 rank only the retrieval count. |
+| `SOURCE_SEARCH_OTHERS` | `2` | Overall best results a channel keeps besides its best source code when `SOURCE_SEARCH_DEPTH` applies, so a relevant guide still takes part in fusion. |
+| `SOURCE_SEARCH_RESULTS` | `8` | Fused results kept, instead of the retrieval count (but never fewer), for an intent with `retrieval.prefer_source_code`, so source code found deeper by the channels has room after fusion. |
+| `DOCUMENTATION_WORDS` | `["doc", "docs", "documentation", "documented", "example", "guide", "manual", "markdown", "readme", "tutorial"]` | Lowercase words (also in plural) that mark a question as being about documentation. For an intent with `retrieval.prefer_source_code`, Markdown, notebook-cell, plain-text, and PDF passages are ranked after source code unless the question contains one of them. |
 | `RELATION_PHRASES` | List of phrases | Lowercase phrases identifying questions about relationships, dependencies, or calls for deterministic context expansion. |
 
 The RRF constant and both document heuristics require positive exact
-integers. `CODE_MAX_DISTANCE` is a nonnegative exact integer.
+integers. `CODE_MAX_DISTANCE`, the nine expansion limits,
+`SOURCE_SEARCH_DEPTH`, `SOURCE_SEARCH_OTHERS`, and `SOURCE_SEARCH_RESULTS`
+are nonnegative exact integers.
 `RELATION_PHRASES` must be a nonempty list of nonempty, lowercase strings
 without leading or trailing whitespace; entries may contain spaces.
 The original vocabulary is preserved in the JSON, and the code-graph entity
@@ -195,6 +268,12 @@ saved project profile and, when relevant, GUI preferences. There is **no**
 Machine states, conversation roles, trace identifiers, and persistence-format
 versions remain Python contracts, not runtime preferences. GUI presentation
 defaults remain under `kilin/gui/defaults.json`. Tool parameters remain
-under their current owners; they are intentionally **not** consolidated in
-this refactor. A future independently configurable tool may have its own
-defaults file.
+in each registered package's `defaults.json`, with its own validation and
+README. They are not consolidated into `kilin_defaults.json`. Tool defaults,
+intent settings and saved project overrides are described in
+[Tool configuration precedence](configuration.md#tool-configuration-and-resources).
+
+## Related
+
+[Configuration and precedence](configuration.md), [Tool packages](tool_packages.md),
+[Development](development.md).

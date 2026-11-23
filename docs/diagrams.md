@@ -30,7 +30,7 @@ necessarily a normal part of an offline RAG operation.
 | [architecture.svg](figures/architecture.svg) | [Architecture](architecture.md) | Which components can operate without Qt? |
 | [workspace-ownership.svg](figures/workspace-ownership.svg) | [Project workspaces](project_workspaces.md) | What is packaged, user-wide, or per-project? |
 | [source-ingestion.svg](figures/source-ingestion.svg) | [Source pipeline](source_pipeline.md) | How do selection, imports and chunks differ? |
-| [retrieval-indexes.svg](figures/retrieval-indexes.svg) | [Retrieval](retrieval_pipeline.md) | How do the three ranked channels produce evidence? |
+| [retrieval-indexes.svg](figures/retrieval-indexes.svg) | [Retrieval](retrieval_pipeline.md) | How does three-channel hybrid passage retrieval work? |
 | [answer-sequence.svg](figures/answer-sequence.svg) | [Answering](answering_pipeline.md) | Which stages precede a committed answer? |
 | [model-lifetimes.svg](figures/model-lifetimes.svg) | [Model management](model_management.md) | What is loaded, reused, or released? |
 | [gui-processes.svg](figures/gui-processes.svg) | [GUI architecture](gui_architecture.md) | What crosses Qt and subprocess boundaries? |
@@ -38,6 +38,11 @@ necessarily a normal part of an offline RAG operation.
 | [tool-contract.svg](figures/tool-contract.svg) | [Extension interfaces](extension_interfaces.md) | How does an intent invoke a registered tool? |
 | [conversation-ownership.svg](figures/conversation-ownership.svg) | [Conversation ownership](conversation_ownership.md) | How do locks and atomic checkpoints interact? |
 | [trust-boundaries.svg](figures/trust-boundaries.svg) | [Security](security.md) | What remains untrusted or potentially external? |
+
+The retrieval-indexes figure depicts the three-channel `hybrid` path.
+Four-channel `source_first` retrieval additionally ranks persisted source
+cards at the source level, then selects original passages; see the
+[retrieval reference](retrieval_pipeline.md#four-channel-source-first-retrieval-and-evidence-budgets).
 
 The illustrations intentionally omit some implementation detail to remain
 legible. In particular, the answering sequence summarizes optional paths
@@ -58,8 +63,12 @@ the two managed source-import APIs.
    with any modified figure to avoid contradictory architecture claims.
 5. Render each changed SVG at ordinary documentation size, inspect text and
    arrow placement, parse SVG/XML and check all local Markdown references.
-6. Do not infer a runtime guarantee merely from a diagram; the detailed
+6. Keep labels about the current architecture, not the PR that introduced
+   it. Put review history in the change record rather than a diagram footer.
+7. Do not infer a runtime guarantee merely from a diagram; the detailed
    documented contracts and source tests determine actual behavior.
 
-Related: [Documentation index](README.md) and
+## Related
+
+[Documentation index](README.md) and
 [Development and verification](development.md).

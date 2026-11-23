@@ -42,3 +42,10 @@ fi
 
 echo "Setup complete. The project environment is in .venv"
 echo "No model weights were downloaded."
+# Setup cannot change the calling terminal's PATH, so provide a command
+# that works without shell configuration changes.
+if ! command -v uv >/dev/null 2>&1; then
+    echo "uv is installed at $uv_command."
+    echo "Open a new terminal, or run:"
+    echo "  \"$uv_command\" run kilin --gui"
+fi

@@ -23,6 +23,12 @@ Key Features
     Load hooks by file suffix, falling back only when the hook module itself is
     absent.
 
+- **Text or code**
+
+    Read a format such as HTML as the text a reader sees, or, with
+    ``as_code=True``, as written, with an extension's
+    ``extract_code_units``.
+
 - **Structured units**
 
     Carry symbols, sections, cell numbers, child units, and line ranges into
@@ -179,6 +185,7 @@ class SourceUnit:
 def read_repository_files(
     report: dict[str, object],
     *,
+    as_code: bool = False,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[SourceFile]:
     """Read files selected by kilin.repository.scan_repository.
@@ -190,6 +197,9 @@ def read_repository_files(
     ----------
     report: dict[str, object]
         Repository scan report.
+    as_code: bool, optional
+        Read files as code: a format that can be read either as text or as
+        code, such as HTML, is kept as written. Defaults to ``False``.
     progress_callback: Callable[[int, int], None] | None, optional
         Called after each selected file is read with ``current`` and ``total``.
         Defaults to ``None``.
@@ -264,6 +274,9 @@ def read_repository_files(
         relative_path = Path(relative.as_posix())
         extension = _extension_module(relative_path)
         reader = getattr(extension, "read_source_file", None)
+        # A format read as code keeps its text as written.
+        if as_code and hasattr(extension, "extract_code_units"):
+            reader = None
         if reader is not None:
             source_file = reader(target, relative_path)
         else:
@@ -288,6 +301,7 @@ def read_repository_files(
 def extract_source_units(
     files: list[SourceFile],
     *,
+    as_code: bool = False,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[SourceUnit]:
     """Identify natural source units without executing source code.
@@ -296,6 +310,9 @@ def extract_source_units(
     ----------
     files: list[SourceFile]
         Repository files converted to text.
+    as_code: bool, optional
+        Split files read with ``as_code=True`` as code, with an extension's
+        ``extract_code_units`` where it has one. Defaults to ``False``.
     progress_callback: Callable[[int, int], None] | None, optional
         Called after each file is structurally extracted with ``current`` and
         ``total``. Defaults to ``None``.
@@ -333,6 +350,8 @@ def extract_source_units(
     for current, source_file in enumerate(files, start=1):
         extension = _extension_module(source_file.path)
         extractor = getattr(extension, "extract_source_units", None)
+        if as_code:
+            extractor = getattr(extension, "extract_code_units", extractor)
         if extractor is not None:
             extracted = extractor(source_file)
             if (

@@ -125,6 +125,7 @@ class TestProjectFiles(unittest.TestCase):
         self.assertIn("outputs/", listed)
         self.assertIn("templates/", listed)
         self.assertIn("indexes/", listed)
+        self.assertIn("memory/", listed)
         self.assertIn("profile.ini", listed)
 
     def test_invalid_paths_and_managed_root_are_rejected(self) -> None:

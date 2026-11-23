@@ -1,0 +1,243 @@
+{
+  "display_name": "Brainstorming (Grounded)",
+  "description": "An evidence-led scientific brainstorming workspace that develops original hypotheses, cross-disciplinary connections, and testable experiments from indexed research sources.",
+  "extensions": [
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".md",
+    ".txt",
+    ".tex",
+    ".bib",
+    ".bbl",
+    ".ipynb",
+    ".py",
+    ".m",
+    ".html"
+  ],
+  "max_file_bytes": 20971520,
+  "retrieval_instruction": "Find primary observations, reported mechanisms, conflicting findings, experimental constraints, unexplained patterns, and specific gaps in the indexed project materials that can support the researcher's next hypothesis. Prefer directly relevant scientific evidence and retain the distinction between reported facts and untested extrapolations.",
+  "system_prompt": "You are an evidence-led scientific brainstorming partner. Begin with the available indexed project evidence, not unsupported assumptions. Identify documented observations, open questions, apparent contradictions, and promising methodological connections; cite each source-dependent factual premise with its supplied [1], [2], etc. marker. Develop original hypotheses, mechanisms, and discriminating experiments that follow from those premises, while clearly separating published findings, your inferences, and speculative extensions. Stay imaginative: grounding should provide a starting point, not restrict ideas to conclusions already made by the authors. Do not invent findings, quotations, bibliographic references, or claims of verified novelty. Do not imply that a citation establishes your newly proposed mechanism. If no relevant project evidence is returned, state that the proposal cannot be grounded in the available indexed sources; do not invent a source basis. You may offer clearly identified provisional speculation if requested. Explore alternatives without ranking or dismissing the ideas unless the researcher asks for evaluation. The researcher chooses which hypotheses to pursue.",
+  "answer_guidance": "For ideation, briefly identify the most useful source-supported observations with citations, then propose distinct hypotheses that explicitly connect each conjecture to those observations. Develop a mechanism, prediction, or discriminating experiment for promising directions. Keep factual support and speculation separate. A small, genuinely varied set of proposals is usually better than an exhaustive list; avoid rigid templates or premature rankings. For factual questions, focus on what the retrieved sources establish and acknowledge unresolved gaps.",
+  "capabilities": {
+    "code_graph": "auto",
+    "document_headers": true,
+    "source_cards": {
+      "enabled": false,
+      "automatic": false
+    }
+  },
+  "history": {
+    "recent_turns": 8,
+    "exclude_disliked_answers": true
+  },
+  "conversation_memory": {
+    "enabled": true,
+    "questions": "all",
+    "answers": "selected",
+    "max_hits": 4,
+    "max_tokens": 2000
+  },
+  "generation": {
+    "temperature": 0.6,
+    "thinking": false
+  },
+  "default_intent": "grounded_ideation",
+  "intents": {
+    "evidence_check": {
+      "description": "Verify the factual premises or predicted implications of a specified idea against indexed scientific sources. Distinguish confirmed observations, contradictions, and facts not established by the available materials; reserve merit judgments for the researcher.",
+      "cues": [
+        "\\b(?:verify|fact[ -]?check|check (?:the )?evidence)\\b",
+        "\\b(?:supported|contradicted|compatible)\\s+by\\s+(?:the\\s+)?(?:sources|papers|evidence|literature)\\b",
+        "\\b(?:do|does)\\s+(?:the\\s+)?(?:sources|papers|evidence|literature)\\s+(?:support|contradict)\\b"
+      ],
+      "system_prompt": "Investigate the user-selected claims against retrieved project evidence. Distinguish supported, contradicted, and not established by the available sources. Cite source numbers next to source-supported statements. A lack of support is not disproof; do not pretend that a bounded retrieval exhaustively establishes novelty or impossibility. Do not replace the researcher's judgement with an automatic rank or recommendation.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 16,
+        "passages_per_source": 3,
+        "max_passages": 48,
+        "evidence_tokens": 20000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "research_context": {
+      "description": "Find and synthesize the documented state of research in indexed sources, including agreements, discrepancies, and unresolved questions. Do not introduce speculative hypotheses when the researcher only asks what is established.",
+      "cues": [
+        "\\bwhat\\s+do\\s+(?:the\\s+)?(?:papers|sources|studies|documents|literature)\\s+say\\b",
+        "\\b(?:find|summari[sz]e|review)\\s+(?:the\\s+)?(?:existing|current|published)\\s+(?:research|literature|approaches|methods)\\b"
+      ],
+      "system_prompt": "Explain what the retrieved project sources actually establish. Cite the relevant evidence numbers after factual statements, describe disagreements and limitations when present, and identify what is not covered. Do not present speculation as a published result or treat the indexed collection as an exhaustive survey of all research.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 16,
+        "passages_per_source": 3,
+        "max_passages": 48,
+        "evidence_tokens": 20000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "grounded_ideation": {
+      "description": "Develop novel scientific hypotheses from evidence in the indexed project documents. Use when asked to brainstorm, propose new research directions, or explain results by new mechanisms, even without the words \"papers\" or \"sources\". Always retrieve project sources first. Use research_context for established background and evidence_check for verifying a specified claim.",
+      "cues": [
+        "\\b(?:brainstorm|ideas?|hypothes(?:is|es)|proposals?|suggest|generate|devise)\\b.{0,170}\\b(?:using|based on|grounded in|drawing on|from|in light of)\\s+(?:(?:the|my|our|these|project|indexed)\\s+){0,2}(?:sources|papers|studies|documents|literature|references|evidence)\\b",
+        "\\b(?:based on|using|drawing on|in light of)\\s+(?:(?:the|my|our|these|project|indexed)\\s+){0,2}(?:sources|papers|studies|documents|literature|references|evidence)\\b.{0,170}\\b(?:brainstorm|ideas?|hypothes(?:is|es)|proposals?|suggest|generate)\\b"
+      ],
+      "system_prompt": "Retrieve documented scientific premises first and cite them. Identify unexplained patterns, tension between results, or methodological opportunities. Propose distinct hypotheses that address these specific premises, with predictions or experiments that could discriminate between explanations. Explore creative extensions beyond the papers, but clearly label their speculative status and do not claim that references validate the new theory. If sources are unavailable or off-topic, acknowledge the lack of grounding rather than fabricating supporting evidence.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 14,
+        "passages_per_source": 3,
+        "max_passages": 42,
+        "evidence_tokens": 18000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "cross_domain": {
+      "description": "Develop cross-disciplinary analogies and research transfers grounded in indexed findings. Retrieve evidence before connecting fields; distinguish established parallels from speculative analogies. Do not treat analogy as empirical verification.",
+      "cues": [
+        "\\b(?:cross[- ]disciplin(?:ary|e)|cross[- ]domain|unexpected analog(?:y|ies)|analog(?:y|ies) between|borrow from another field)\\b"
+      ],
+      "system_prompt": "Find the most relevant documented mechanism, pattern, or method in the project sources, citing it as a premise. Then construct surprising connections to other disciplines and spell out the mechanistic mapping, its failures, and a testable consequence. Do not claim a second field is documented in the project if it is not, and label extrapolations as speculative. Offer creative transfers without implying that a source proves the analogy.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 12,
+        "passages_per_source": 3,
+        "max_passages": 36,
+        "evidence_tokens": 15000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "challenge_assumptions": {
+      "description": "Question and invert assumptions using the project sources as the starting point. Retrieve stated assumptions or evidence suggesting implicit ones; distinguish the two before exploring counterfactual hypotheses.",
+      "cues": [
+        "\\b(?:challenge|question|reverse|invert)\\s+(?:(?:our|the|my|this)\\s+)?(?:assumptions?|premises?|hypotheses?)\\b",
+        "\\bwhat\\s+if\\b.{0,100}\\b(?:wrong|false|backwards|reversed)\\b"
+      ],
+      "system_prompt": "Identify explicit assumptions in the retrieved sources, citing their statements. Clearly mark assumptions you infer but the authors did not assert. Invert or relax individual assumptions and derive alternative mechanisms, observable predictions, and experiments. Compare their implications with the source evidence without automatically rejecting unconventional possibilities or claiming that an absent source demonstrates falsity.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 12,
+        "passages_per_source": 3,
+        "max_passages": 36,
+        "evidence_tokens": 15000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "develop_idea": {
+      "description": "Expand a previously discussed research hypothesis with source evidence, concrete mechanisms, alternative explanations, and discriminating experiments. Retrieve new context instead of relying only on the earlier chat.",
+      "cues": [
+        "\\b(?:develop|flesh out|build on|expand on|push further|take further)\\s+(?:the|this|that|our|my)\\s+(?:idea|hypothesis|proposal|concept|third|first|second)\\b",
+        "\\b(?:design|propose)\\s+(?:a|an|some)\\s+(?:test|experiment|measurement)\\s+(?:for|to test|that distinguishes)\\b"
+      ],
+      "system_prompt": "Preserve the chosen idea while checking the indexed sources for relevant premises, established constraints, alternative explanations, and reported results. Cite those premises and explicitly separate them from newly proposed mechanisms. Develop measurable predictions or experimental designs; identify when source coverage is insufficient rather than inventing support. Do not make a final merit judgment unless the researcher specifically requests critical evaluation.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 12,
+        "passages_per_source": 3,
+        "max_passages": 36,
+        "evidence_tokens": 15000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "small_talk": {
+      "thinking": false,
+      "description": "Only greetings, thanks, goodbyes, or pleasantries such as 'how are you?'. Any question about a term, name, method, the sources, an earlier answer, or the conversation itself is never small talk.",
+      "system_prompt": "Reply briefly and naturally to greetings and thanks. Do not generate research ideas unless the user asks for them.",
+      "answer_guidance": "Reply in one short sentence.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "shortcuts": [
+        "(hi|hello|hey|hiya|hej|yo|greetings|good (morning|afternoon|evening|day))( there| kilin)?",
+        "(thanks|thank you|thx|ty|cheers|many thanks)( (very|so) much| a lot| again)?",
+        "(ok|okay|great|cool|nice|perfect|got it|i see|awesome|sounds good)( thanks| thank you)?",
+        "how (are|r) (you|u)( doing)?( today)?",
+        "how('s| is) it going( today)?|how('s| is) your day( going)?|what'?s up|sup",
+        "(bye|goodbye|see you|see you later|good night|have a (nice|good) day)"
+      ],
+      "memory": {
+        "indexing": "never",
+        "read": false
+      }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files and what it does with them: how to add, upload, import, attach, drag, or remove files or folders ('how do I add my papers?', 'how to drag files', 'can I upload a folder?', 'what do you mean by adding files?', 'what do you do with my files?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "(how (do|can|should) i|how to|can i|where (do|should|can) i) (add|upload|import|attach|drag|drop|put|place|remove|delete)( and drop| in)? (my |a |the |some |more |new |these |this |our )?(whole |own |other )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?",
+        "what do you mean( by)? (add|adding|upload|uploading|attach|attaching|import|importing|sources?|files?)( .*)?",
+        "what (do|will|can) you do (with|to|for) (my|the|these|our) (files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
+      ]
+    }
+  },
+  "welcome_prompts": [
+    "Which question shall we brainstorm about?",
+    "Which finding or observation shall we build on?",
+    "Add your papers, or ask what I can do for you."
+  ],
+  "welcome_templates": [
+    "Which new idea about {theme} shall we build from your sources?",
+    "What open question about {theme} should we explore?"
+  ],
+  "suggestions": [
+    "What can you do for me?",
+    "How do I add my files?"
+  ],
+  "suggestion_templates": {
+    "research_context": "Summarize what the sources say about {topic} and what is still unresolved.",
+    "grounded_ideation": [
+      "Brainstorm new hypotheses about {topic} from the project sources.",
+      "Propose three new research questions that build on {file}."
+    ],
+    "evidence_check": "Which assumptions about {topic} do the sources support, and which do they contradict?",
+    "cross_domain": "Connect the findings on {topic} to a different field, with evidence.",
+    "challenge_assumptions": [
+      "Challenge an assumption the sources make about {topic}.",
+      "Which assumption in {file} would be most interesting to question?"
+    ],
+    "assistant_help": "What can you do for me?"
+  }
+}

@@ -1,16 +1,17 @@
-"""Expand retrieval context from explicit source references in a question.
+"""Expand ranked context through source references and retrieved evidence.
 
-Context expansion recognizes file paths and function names, and uses a
-configurable vocabulary of relationship requests. It produces a
-``ContextExpansionPlan`` and adds matching file or function chunks and
-eligible graph neighbors to an
-existing ranking.
-This is deterministic text matching over the supplied source metadata, not a
-language-model router or a complete interpretation of the question.
+Deterministic path and symbol matching, graph neighbors, documentation
+references, retrieved module headers, and test calls lead from an initial
+ranking to implementation passages. ``ContextExpansionPlan`` distinguishes
+supported matches from unique leaf-name alternatives whose qualifier could
+not be resolved. An alternative is useful search context, not proof that
+one symbol denotes another. No additional language-model call is made.
 
-Expansion deduplicates chunk identifiers while preserving the initial ranked
-results. The expansion itself has no token or result-count ceiling, so callers
-must account for the full expanded context before generating an answer.
+Expansion preserves initial rankings and deduplicates chunk identifiers.
+Explicit files and functions are included completely; related functions
+have per-function and shared passage budgets. RAG then prioritizes requested
+targets and labels supporting and alternative evidence for answer generation.
+There is no global token ceiling: callers must account for expanded context.
 
 Key Features
 ------------
@@ -24,10 +25,15 @@ Key Features
     Recognize selected relationship phrases and include matching neighboring
     functions.
 
-- **Ordered expansion**
+- **Evidence bridges**
 
-    Keep ranked evidence first and append source-ordered matches without
-    duplicate chunk identifiers.
+    Follow documentation names, module context, and test calls to source
+    implementations, retaining uncertain name matches as alternatives.
+
+- **Bounded related context**
+
+    Preserve ranked evidence and exact targets, then choose related
+    passages with explicit budgets and reusable semantic scores.
 
 Module Structure
 ----------------
@@ -36,13 +42,29 @@ Module Structure
 
     Deterministic context expansion requested by one question.
 
+- ``demote_test_results``
+
+    Rank results from test code after the others.
+
+- ``demote_documentation``
+
+    Rank documentation and notebook results after source code.
+
+- ``prefer_source_results``
+
+    Keep a channel's best source-code results and its overall best few.
+
+- ``names_code``
+
+    Tell whether a question names a file, function, or class.
+
 - ``expand_retrieval_context``
 
     Add complete requested context after normal RRF retrieval.
 
 - ``plan_context_expansion``
 
-    Detect exact repository context requested by one question.
+    Plan requested, supporting, and alternative repository context.
 
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
@@ -57,28 +79,37 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections import Counter
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+import os
 import re
 
 from kilin.chunking import Chunk
-from kilin.defaults import load_defaults_section, require_default_strings
+from kilin.defaults import (
+    load_defaults_section,
+    require_default_lowercase_words,
+    require_default_nonnegative_int,
+    require_default_strings,
+)
 from kilin.retrievals.code_graph import CodeEntity, CodeGraph
 from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
+from kilin.sources import source_kinds as kinds
 
 __all__ = [
     "ContextExpansionPlan",
+    "demote_documentation",
+    "demote_test_results",
+    "prefer_source_results",
     "expand_retrieval_context",
+    "names_code",
     "plan_context_expansion",
 ]
 
 
-_FUNCTION_KINDS = {
-    "matlab_function",
-    "python_function",
-    "python_method",
-}
+# Functions, methods and constructors of every built-in code language.
+_FUNCTION_KINDS = kinds.CALLABLE_KINDS
 
 # Relationship phrases influence deterministic graph-context expansion.
 _RETRIEVAL_DEFAULTS = load_defaults_section("RETRIEVAL")
@@ -94,7 +125,75 @@ if any(
         "trimmed phrases."
     )
 
+# Most direct callees added for a named function when the question does not
+# ask about relationships; zero disables callee expansion.
+_CALLEE_EXPANSION_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "CALLEE_EXPANSION_MAX", "RETRIEVAL"
+)
+# Call steps followed from a named function when collecting callees.
+_CALLEE_EXPANSION_DEPTH = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "CALLEE_EXPANSION_DEPTH", "RETRIEVAL"
+)
+# Most methods added for a named class; smaller classes are added whole.
+_CLASS_METHOD_EXPANSION_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "CLASS_METHOD_EXPANSION_MAX", "RETRIEVAL"
+)
+# Most chunks kept from one long related function; zero keeps all.
+_RELATED_CHUNKS_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "RELATED_CHUNKS_MAX", "RETRIEVAL"
+)
+# Most passages of related functions (callees, neighbors, methods, and
+# functions reached from retrieved results) added in total, the most
+# relevant first; zero keeps all.
+_RELATED_PASSAGES_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "RELATED_PASSAGES_MAX", "RETRIEVAL"
+)
+# Most functions added because every word of their name occurs in the
+# question ("its HTML templates" adds ``html_template``); zero disables it.
+_NAME_WORD_EXPANSION_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "NAME_WORD_EXPANSION_MAX", "RETRIEVAL"
+)
+# Most functions added because retrieved documentation names them.
+_DOCUMENTATION_NAME_EXPANSION_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "DOCUMENTATION_NAME_EXPANSION_MAX", "RETRIEVAL"
+)
+# Most functions added from modules whose header (docstring, imports) was
+# retrieved; a module with no more functions adds all of them.
+_MODULE_FUNCTION_EXPANSION_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "MODULE_FUNCTION_EXPANSION_MAX", "RETRIEVAL"
+)
+# Most functions added because a retrieved test calls them.
+_TEST_SUBJECT_EXPANSION_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "TEST_SUBJECT_EXPANSION_MAX", "RETRIEVAL"
+)
+# How many times the retrieval count each channel ranks when an intent
+# prefers source code, so source code buried under prose is reached.
+SOURCE_SEARCH_DEPTH = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_DEPTH", "RETRIEVAL"
+)
+# Fused results kept when an intent prefers source code (at least the
+# retrieval count): the source code found deeper needs room after fusion.
+SOURCE_SEARCH_RESULTS = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_RESULTS", "RETRIEVAL"
+)
+# Overall best results a channel keeps besides its best source code.
+_SOURCE_SEARCH_OTHERS = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_OTHERS", "RETRIEVAL"
+)
+_MODULE_CONTEXT_KINDS = kinds.MODULE_CONTEXT_KINDS
+# Dotted code references in prose ("lexical_terms", "kilin.lexical_search").
+_CODE_REFERENCE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_]\w*)*")
+# Words that ask about documentation rather than how the code works.
+_DOCUMENTATION_WORDS = require_default_lowercase_words(
+    _RETRIEVAL_DEFAULTS, "DOCUMENTATION_WORDS", "RETRIEVAL"
+)
+# Chunk kinds of prose and notebooks: Markdown files, notebook cells
+# (tutorial examples rather than the implementation), plain text, and PDFs.
+_DOCUMENTATION_KIND_PREFIXES = ("markdown_", "notebook_", "text_", "pdf_")
+_CLASS_KINDS = kinds.CLASS_KINDS
 _WORD = re.compile(r"[A-Za-z0-9]+")
+# Words used in plain prose that introduce a code name ("the reply method").
+_CODE_NOUNS = ("function", "method", "class")
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,9 +209,20 @@ class ContextExpansionPlan:
     relationship: bool
         Whether the question asks about relationships around a function.
     related_functions: tuple[str, ...]
-        Direct function neighbors when relationship expansion is requested.
+        Direct function neighbors when relationship expansion is requested;
+        otherwise the named functions' most relevant callees. Methods of
+        named classes and functions described by the question's words are
+        appended.
     signals: tuple[str, ...]
         Human-readable signals that explain the expansion.
+    focus_terms: tuple[str, ...], optional
+        Words of the question and leaf names of the named functions, used to
+        choose the most relevant chunks of a long related function.
+        Defaults to ``()``.
+    alternative_functions: tuple[str, ...], optional
+        Related functions found only by a unique leaf-name fallback for an
+        unresolved qualified documentation reference. These are candidates,
+        not verified identities. Defaults to ``()``.
 
     Attributes
     ----------
@@ -123,9 +233,18 @@ class ContextExpansionPlan:
     relationship: bool
         Whether the question asks about relationships around a function.
     related_functions: tuple[str, ...]
-        Direct function neighbors when relationship expansion is requested.
+        Direct function neighbors when relationship expansion is requested;
+        otherwise the named functions' most relevant callees. Methods of
+        named classes and functions described by the question's words are
+        appended.
     signals: tuple[str, ...]
         Human-readable signals that explain the expansion.
+    focus_terms: tuple[str, ...]
+        Words of the question and leaf names of the named functions, used to
+        choose the most relevant chunks of a long related function.
+    alternative_functions: tuple[str, ...]
+        Lower-confidence documentation-name candidates, also included in
+        ``related_functions``. No qualified-name equivalence is implied.
 
     """
 
@@ -134,16 +253,19 @@ class ContextExpansionPlan:
     relationship: bool
     related_functions: tuple[str, ...]
     signals: tuple[str, ...]
+    focus_terms: tuple[str, ...] = ()
+    alternative_functions: tuple[str, ...] = ()
 
 
 def plan_context_expansion(
     query_text: str,
     graph: CodeGraph,
+    results: Sequence[HybridResult] = (),
 ) -> ContextExpansionPlan:
-    """Detect exact repository context requested by one question.
+    """Plan requested, supporting, and alternative repository context.
 
-    The plan does not change Reciprocal Rank Fusion. It only records context
-    that should be guaranteed in addition to the normal RRF top results.
+    The plan does not change Reciprocal Rank Fusion. It identifies requested
+    targets and candidates added within the related-context budgets.
 
     Parameters
     ----------
@@ -151,11 +273,16 @@ def plan_context_expansion(
         User question.
     graph: CodeGraph
         Current repository code graph.
+    results: Sequence[HybridResult], optional
+        Fused search results (all candidates, best first). Retrieved
+        documentation, module headers, and tests lead to the code they
+        describe (see Notes). Defaults to ``()``.
 
     Returns
     -------
     ContextExpansionPlan
-        Exact files, functions, and direct related functions to include.
+        Explicit targets, related functions, and lower-confidence
+        alternative name matches to include.
 
     Raises
     ------
@@ -168,6 +295,44 @@ def plan_context_expansion(
     A relationship request requires at least one explicit function match. It
     does not infer arbitrary semantic references.
 
+    A function is recognized by its qualified name, by a dotted suffix of it
+    (``Class.method``), or by its leaf name. A leaf name that reads as a
+    plain word (no underscore, digit, or internal capital) matches only when
+    it is unambiguous (one top-level function, not a method, longer than two
+    letters) or is marked as code in the question (backticks, a following
+    ``(``, or the word "function" or "method" next to it). Ordinary words
+    such as "to" or "reply" therefore do not match methods of those names.
+
+    Without relationship language, the named functions' callees are added,
+    up to ``CALLEE_EXPANSION_DEPTH`` call steps away and at most
+    ``CALLEE_EXPANSION_MAX``, preferring callees whose names share words with
+    the question, then nearer ones: explaining a function usually requires
+    the functions it calls. A named class (recognized like a function, and
+    by the word "class" next to a plain name) adds its methods: all of them
+    when there are at most ``CLASS_METHOD_EXPANSION_MAX``, otherwise those
+    whose names share most words with the question. When ranking callees
+    and methods, the words of the named functions and classes themselves
+    are ignored, since every candidate tends to share them. Question words
+    match identifier words in simple variants ("written" matches
+    ``write``; "PyTorch" gives "py" and "torch"). Finally, up to
+    ``NAME_WORD_EXPANSION_MAX`` functions are added whose names have at
+    least two words of four or more letters, all occurring in the question
+    (``html_template`` for "its HTML templates"). Related functions in
+    test code (a ``tests`` or ``test`` folder, or a ``test_*`` or ``*_test``
+    file) are left out unless the question mentions tests.
+
+    Search results that describe code lead to that code, each with its own
+    cap: functions named in retrieved documentation or notebooks (as code:
+    ``lexical_terms``, unique in the graph; unresolved qualifiers permit a
+    unique leaf-name alternative after supported names, without asserting
+    identity;
+    ``DOCUMENTATION_NAME_EXPANSION_MAX``); the top-level functions of a
+    module whose header was retrieved (all of them when there are at most
+    ``MODULE_FUNCTION_EXPANSION_MAX``, otherwise those sharing most words
+    with the question); and the source functions a retrieved test calls
+    (``TEST_SUBJECT_EXPANSION_MAX``). Within each, functions sharing more
+    words with the question come first.
+
     """
 
     if not isinstance(query_text, str) or not query_text.strip():
@@ -176,26 +341,114 @@ def plan_context_expansion(
     paths = _explicit_paths(query_text, graph)
     functions = _explicit_functions(query_text, graph, paths)
     relationship = bool(functions) and _has_relationship(query_text)
-    related_functions = (
-        _direct_function_neighbors(functions, graph) if relationship else ()
+    classes = _explicit_classes(query_text, graph, paths)
+    # Candidates would all share the words of the names that led to them,
+    # so those words do not rank callees, methods, or described functions.
+    ranking_text = _without_names(query_text, (*functions, *classes))
+    if relationship:
+        related_functions = _direct_function_neighbors(functions, graph)
+    elif functions:
+        related_functions = _ranked_callees(
+            functions,
+            graph,
+            ranking_text,
+            _CALLEE_EXPANSION_MAX,
+            _CALLEE_EXPANSION_DEPTH,
+        )
+    else:
+        related_functions = ()
+    class_methods = _class_methods(
+        classes, graph, ranking_text, _CLASS_METHOD_EXPANSION_MAX
     )
+    tests_allowed = _mentions_tests(query_text)
+    described = _described_functions(
+        ranking_text,
+        graph,
+        set(functions) | set(related_functions) | set(class_methods),
+        _NAME_WORD_EXPANSION_MAX,
+        tests_allowed,
+    )
+    planned = (
+        set(functions)
+        | set(related_functions)
+        | set(class_methods)
+        | set(described)
+    )
+    tested = _tested_functions(
+        results, graph, ranking_text, planned, _TEST_SUBJECT_EXPANSION_MAX
+    )
+    planned |= set(tested)
+    module_functions = _module_functions(
+        results, graph, ranking_text, planned, _MODULE_FUNCTION_EXPANSION_MAX
+    )
+    planned |= set(module_functions)
+    documented, alternatives = _documented_functions(
+        results,
+        graph,
+        ranking_text,
+        planned,
+        _DOCUMENTATION_NAME_EXPANSION_MAX,
+    )
+    bridged = (*tested, *module_functions, *documented, *alternatives)
+    related_functions = tuple(
+        dict.fromkeys(
+            name
+            for name in (
+                *related_functions,
+                *class_methods,
+                *described,
+                *bridged,
+            )
+            if name not in functions
+        )
+    )
+    if related_functions and not tests_allowed:
+        related_functions = _without_test_code(related_functions, graph)
 
     signals: list[str] = []
     if paths:
         signals.append("exact file")
     if functions:
         signals.append("exact function")
+    if classes:
+        signals.append("exact class")
     if relationship:
         signals.append("relationship")
+    elif functions and set(related_functions) - set(class_methods) - set(
+        described
+    ) - set(bridged):
+        signals.append("callees")
+    if described:
+        signals.append("name words")
+    if tested:
+        signals.append("tested code")
+    if module_functions:
+        signals.append("module functions")
+    if documented:
+        signals.append("documentation names")
+    if alternatives:
+        signals.append("alternative documentation names")
     if not signals:
         signals.append("none")
 
+    focus_terms = tuple(
+        dict.fromkeys(
+            [
+                *_identifier_words(query_text),
+                *(name.rsplit(".", 1)[-1].casefold() for name in functions),
+            ]
+        )
+    )
     return ContextExpansionPlan(
         paths=paths,
         functions=functions,
         relationship=relationship,
         related_functions=related_functions,
         signals=tuple(signals),
+        focus_terms=focus_terms,
+        alternative_functions=tuple(
+            name for name in alternatives if name in related_functions
+        ),
     )
 
 
@@ -204,6 +457,7 @@ def expand_retrieval_context(
     chunks: Sequence[Chunk],
     graph: CodeGraph,
     plan: ContextExpansionPlan,
+    relevance: Callable[[Chunk], float] | None = None,
 ) -> list[Chunk]:
     """Add complete requested context after normal RRF retrieval.
 
@@ -221,6 +475,11 @@ def expand_retrieval_context(
         Current repository code graph.
     plan: ContextExpansionPlan
         Deterministic expansion plan for the question.
+    relevance: Callable[[Chunk], float] | None, optional
+        Scores a passage's relevance to the question, such as the cosine
+        similarity of its embedding to the query's. ``None`` keeps the
+        plan's order within supported and alternative groups; alternatives
+        still follow supported passages. Defaults to ``None``.
 
     Returns
     -------
@@ -230,8 +489,18 @@ def expand_retrieval_context(
     Notes
     -----
     Initial fused results stay first. Explicit-path chunks, named-function
-    chunks, and requested direct function neighbors follow. Deduplication is by
-    chunk identifier. No output-count or token-budget limit is applied.
+    chunks, and the planned related functions (direct neighbors, callees, or
+    methods of named classes) follow. A related function longer than
+    ``RELATED_CHUNKS_MAX`` chunks contributes only its most relevant chunks:
+    those that mention a named function (such as a call site), then those
+    sharing most words with the question. The passages of the other related
+    functions together are limited to ``RELATED_PASSAGES_MAX``: the most
+    relevant by ``relevance`` (otherwise the first in plan order), added
+    most relevant first. Explicit files, named functions, and, in a
+    relationship question, the named functions' direct neighbors are always
+    represented, subject to the per-function chunk cap. Alternative
+    name matches rank after supported related passages. Zero disables either
+    passage cap. Deduplication is by chunk identifier.
 
     """
 
@@ -256,13 +525,63 @@ def expand_retrieval_context(
     )
     _append_unique(expanded, seen, function_chunks)
 
-    if plan.relationship:
-        related_chunks = _chunks_for_functions(
-            chunks,
-            graph,
-            plan.related_functions,
+    if plan.related_functions:
+        named_leaves = {
+            name.rsplit(".", 1)[-1].casefold() for name in plan.functions
+        }
+        # Every requested neighbor contributes bounded context, outside
+        # the shared budget for other related passages.
+        asked = (
+            set(_direct_function_neighbors(plan.functions, graph))
+            if plan.relationship
+            else set()
         )
-        _append_unique(expanded, seen, related_chunks)
+        for function in plan.related_functions:
+            if function in asked:
+                _append_unique(
+                    expanded,
+                    seen,
+                    _focused_chunks(
+                        _chunks_for_functions(chunks, graph, (function,)),
+                        named_leaves,
+                        plan.focus_terms,
+                        _RELATED_CHUNKS_MAX,
+                    ),
+                )
+        related: list[Chunk] = []
+        related_seen = set(seen)
+        for function in plan.related_functions:
+            if function in asked:
+                continue
+            related_chunks = _chunks_for_functions(chunks, graph, (function,))
+            _append_unique(
+                related,
+                related_seen,
+                _focused_chunks(
+                    related_chunks,
+                    named_leaves,
+                    plan.focus_terms,
+                    _RELATED_CHUNKS_MAX,
+                ),
+            )
+        if relevance is not None or plan.alternative_functions:
+            order = {id(chunk): index for index, chunk in enumerate(related)}
+            alternatives = {
+                chunk.identifier
+                for chunk in _chunks_for_functions(
+                    chunks, graph, plan.alternative_functions
+                )
+            }
+            related.sort(
+                key=lambda chunk: (
+                    chunk.identifier in alternatives,
+                    -relevance(chunk) if relevance is not None else 0.0,
+                    order[id(chunk)],
+                )
+            )
+        if _RELATED_PASSAGES_MAX:
+            related = related[:_RELATED_PASSAGES_MAX]
+        _append_unique(expanded, seen, related)
 
     return expanded
 
@@ -338,12 +657,45 @@ def _explicit_functions(
     normalized = query_text.replace("\\", "/").casefold()
     normalized = _remove_path_mentions(normalized, paths)
 
-    matches = {
-        entity.name
-        for entity in graph.entities
-        if entity.kind in _FUNCTION_KINDS
-        and _function_is_named(normalized, entity.name.casefold())
-    }
+    functions = [
+        entity for entity in graph.entities if entity.kind in _FUNCTION_KINDS
+    ]
+    leaf_counts = Counter(
+        entity.name.rsplit(".", 1)[-1].casefold() for entity in functions
+    )
+    matches = set()
+    for entity in functions:
+        # A period is part of an R function's identifier, not necessarily
+        # a separator before the last leaf (e.g. ``read.data``).
+        if entity.kind == "r_function":
+            module = ".".join(entity.path.with_suffix("").parts)
+            prefix = f"{module}."
+            if entity.name.startswith(prefix):
+                symbol = entity.name[len(prefix) :]
+                if "." in symbol:
+                    names = (symbol, entity.name)
+                    if any(
+                        re.search(
+                            rf"(?<![A-Za-z0-9_.])"
+                            rf"{re.escape(name.casefold())}"
+                            r"(?![A-Za-z0-9_.])",
+                            normalized,
+                        )
+                        is not None
+                        for name in names
+                    ):
+                        matches.add(entity.name)
+                    continue
+        leaf = entity.name.rsplit(".", 1)[-1].casefold()
+        # A plain word names a function only when it is unambiguous: one
+        # top-level function, not a method, and longer than two letters.
+        plain_word_ok = (
+            entity.kind not in kinds.METHOD_KINDS
+            and leaf_counts[leaf] == 1
+            and len(leaf) > 2
+        )
+        if _function_is_named(normalized, entity.name, plain_word_ok):
+            matches.add(entity.name)
     return tuple(sorted(matches))
 
 
@@ -416,6 +768,276 @@ def _direct_function_neighbors(
     return tuple(sorted(neighbors))
 
 
+def demote_test_results(
+    results: Sequence[HybridResult], query_text: str
+) -> list[HybridResult]:
+    """Rank results from test code after the others.
+
+    Parameters
+    ----------
+    results: Sequence[HybridResult]
+        Fused results, best first.
+    query_text: str
+        Question text; results are left unchanged when it mentions tests.
+
+    Returns
+    -------
+    list[HybridResult]
+        The same results with those from test code (a ``tests`` or ``test``
+        folder, or a ``test_*`` or ``*_test`` file) moved after the others,
+        each group keeping its order.
+
+    Notes
+    -----
+    Test code often repeats the names and wording of the function it tests,
+    so it can outrank the function itself; for a question about how the code
+    works, the source code is the better evidence.
+
+    """
+
+    if _mentions_tests(query_text):
+        return list(results)
+    source = [r for r in results if not _is_test_path(r.chunk.path)]
+    tests = [r for r in results if _is_test_path(r.chunk.path)]
+    return source + tests
+
+
+def demote_documentation(
+    results: Sequence[HybridResult], query_text: str
+) -> list[HybridResult]:
+    """Rank documentation and notebook results after source code.
+
+    Parameters
+    ----------
+    results: Sequence[HybridResult]
+        Fused results, best first.
+    query_text: str
+        Question text; results are left unchanged when it asks about
+        documentation (a word in ``RETRIEVAL.DOCUMENTATION_WORDS``, such as
+        "docs", "tutorial", or "readme", also in plural).
+
+    Returns
+    -------
+    list[HybridResult]
+        The same results with Markdown, notebook-cell, plain-text, and PDF
+        passages moved after the others, each group keeping its order.
+
+    Notes
+    -----
+    Tutorials and documentation explain concepts in the words a question
+    uses, so they can outrank the code that implements them. For a
+    question about how the code works, the code is the better evidence;
+    documentation still fills the remaining places when too few source
+    results were found. In a project of notebooks only, nothing changes.
+
+    """
+
+    words = set()
+    for word in _identifier_words(query_text):
+        words |= _word_forms(word)
+    if words & set(_DOCUMENTATION_WORDS):
+        return list(results)
+    source = [r for r in results if not _is_documentation(r.chunk)]
+    prose = [r for r in results if _is_documentation(r.chunk)]
+    return source + prose
+
+
+def prefer_source_results(
+    results: Sequence[HybridResult], query_text: str, count: int
+) -> list[HybridResult]:
+    """Keep a channel's best source-code results and its overall best few.
+
+    Parameters
+    ----------
+    results: Sequence[HybridResult]
+        One channel's results, best first, ranked deeper than ``count``.
+    query_text: str
+        Question text; documentation or tests count as wanted results when
+        it asks about them (see ``demote_documentation`` and
+        ``demote_test_results``).
+    count: int
+        Number of wanted results to keep.
+
+    Returns
+    -------
+    list[HybridResult]
+        The first ``count`` results that are neither documentation nor
+        test code, in their order, then those of the overall first
+        ``SOURCE_SEARCH_OTHERS`` not already kept. Fusion scores ranks, so
+        the source code keeps the places it earned.
+
+    Notes
+    -----
+    Tutorials, documentation, and tests use the words of a question about
+    how code works more often than the code does, so a channel's top
+    results can hold no code at all while the implementing function ranks
+    a little lower. Keeping the overall best few lets a relevant guide
+    still take part in fusion.
+
+    """
+
+    words = set()
+    for word in _identifier_words(query_text):
+        words |= _word_forms(word)
+    documentation_ok = bool(words & set(_DOCUMENTATION_WORDS))
+    tests_ok = _mentions_tests(query_text)
+
+    def wanted(result: HybridResult) -> bool:
+        """Return whether a result is source code or a wanted kind.
+
+        Parameters
+        ----------
+        result: HybridResult
+            One channel result.
+
+        Returns
+        -------
+        bool
+            Whether the result counts toward ``count``.
+
+        """
+
+        chunk = result.chunk
+        return (documentation_ok or not _is_documentation(chunk)) and (
+            tests_ok or not _is_test_path(chunk.path)
+        )
+
+    preferred = [result for result in results if wanted(result)][:count]
+    kept = {id(result) for result in preferred}
+    others = [
+        result
+        for result in results[:_SOURCE_SEARCH_OTHERS]
+        if id(result) not in kept
+    ]
+    return [*preferred, *others]
+
+
+def names_code(query_text: str, graph: CodeGraph) -> bool:
+    """Tell whether a question names a file, function, or class.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text.
+    graph: CodeGraph
+        Graph supplying the repository's entities.
+
+    Returns
+    -------
+    bool
+        Whether the question names a repository file, function, or class,
+        recognized as in ``plan_context_expansion`` (plain words such as
+        "valid" or "words" name nothing unless marked as code).
+
+    Notes
+    -----
+    The code-graph channel follows named entities. For a question in prose,
+    it would match ordinary words to identifiers ("valid" to a ``valid``
+    method) and add unrelated code, so it is skipped.
+
+    """
+
+    if not isinstance(query_text, str) or not query_text.strip():
+        return False
+    paths = _explicit_paths(query_text, graph)
+    return bool(
+        paths
+        or _explicit_functions(query_text, graph, paths)
+        or _explicit_classes(query_text, graph, paths)
+    )
+
+
+def _is_documentation(chunk: Chunk) -> bool:
+    """Return whether a chunk is documentation rather than source code.
+
+    Parameters
+    ----------
+    chunk: Chunk
+        Indexed passage.
+
+    Returns
+    -------
+    bool
+        True for Markdown, notebook-cell, plain-text, and PDF passages.
+
+    """
+
+    return str(chunk.kind).startswith(_DOCUMENTATION_KIND_PREFIXES)
+
+
+def _mentions_tests(query_text: str) -> bool:
+    """Return whether a question is about tests.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text.
+
+    Returns
+    -------
+    bool
+        True when the question contains "test", "tests", "tested", or
+        "testing" as a word or inside an identifier.
+
+    """
+
+    return any(
+        word in {"test", "tests", "tested", "testing"}
+        for word in _identifier_words(query_text)
+    )
+
+
+def _without_test_code(
+    functions: tuple[str, ...], graph: CodeGraph
+) -> tuple[str, ...]:
+    """Drop functions defined in test code.
+
+    Parameters
+    ----------
+    functions: tuple[str, ...]
+        Qualified names of function entities.
+    graph: CodeGraph
+        Graph supplying the path of each entity.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Functions whose file is not in a ``tests`` or ``test`` folder and
+        is not named ``test_*`` or ``*_test``, in their original order.
+
+    """
+
+    paths = {entity.name: entity.path for entity in graph.entities}
+    return tuple(
+        name for name in functions if not _is_test_path(paths.get(name))
+    )
+
+
+def _is_test_path(path: Path | None) -> bool:
+    """Return whether a source path belongs to test code.
+
+    Parameters
+    ----------
+    path: pathlib.Path | None
+        Repository-relative source path, or None when unknown.
+
+    Returns
+    -------
+    bool
+        True for files in a ``tests`` or ``test`` folder and for files named
+        ``test_*`` or ``*_test``.
+
+    """
+
+    if path is None:
+        return False
+    return (
+        any(part in {"tests", "test"} for part in path.parts[:-1])
+        or path.stem.startswith("test_")
+        or path.stem.endswith("_test")
+    )
+
+
 def _chunks_for_functions(
     chunks: Sequence[Chunk],
     graph: CodeGraph,
@@ -483,6 +1105,12 @@ def _chunk_matches_function(
     if chunk.path != entity.path or chunk.symbol is None:
         return False
 
+    if entity.kind == "r_function" and chunk.kind == "r_function":
+        module = ".".join(chunk.path.with_suffix("").parts)
+        return entity.name.casefold() == (
+            f"{module}.{chunk.symbol}".casefold()
+        )
+
     symbol = chunk.symbol.casefold()
     name = entity.name.casefold()
     leaf = name.rsplit(".", 1)[-1]
@@ -523,28 +1151,858 @@ def _remove_path_mentions(
     return cleaned
 
 
-def _function_is_named(query_text: str, function: str) -> bool:
-    """Return whether a qualified or leaf function name is written.
+def _function_is_named(
+    query_text: str, function: str, plain_word_ok: bool = True
+) -> bool:
+    """Return whether a function is named in the question.
 
     Parameters
     ----------
     query_text: str
-        Question text to inspect for explicit file/function mentions and
-        recognized relationship phrases.
+        Case-folded question text, with recognized paths removed.
     function: str
-        Qualified function name being matched against the question.
+        Qualified function name, in its original case.
+    plain_word_ok: bool, optional
+        Whether a leaf name that reads as a plain word may match without a
+        code marker. Defaults to ``True``.
 
     Returns
     -------
     bool
-        Whether a qualified or leaf function name is written.
+        True for the qualified name or a dotted suffix of it
+        (``Class.method``), or for the leaf name when it looks like code, is
+        marked as code in the question, or is an accepted plain word.
 
     """
 
-    leaf = function.rsplit(".", 1)[-1]
-    return _contains_identifier(query_text, function) or _contains_identifier(
-        query_text, leaf
+    parts = function.casefold().split(".")
+    for start in range(len(parts) - 1):
+        if _contains_identifier(query_text, ".".join(parts[start:])):
+            return True
+    leaf = parts[-1]
+    if not _contains_identifier(query_text, leaf):
+        return False
+    original_leaf = function.rsplit(".", 1)[-1]
+    return (
+        plain_word_ok
+        or _looks_like_code(original_leaf)
+        or _marked_as_code(query_text, leaf)
     )
+
+
+def _looks_like_code(name: str) -> bool:
+    """Return whether an identifier cannot be an ordinary word.
+
+    Parameters
+    ----------
+    name: str
+        Identifier in its original case.
+
+    Returns
+    -------
+    bool
+        True when the name contains an underscore or a digit, or a capital
+        letter after its first character (``camelCase``, ``CamelCase``).
+
+    """
+
+    return (
+        "_" in name
+        or any(character.isdigit() for character in name)
+        or any(character.isupper() for character in name[1:])
+    )
+
+
+def _marked_as_code(query_text: str, leaf: str) -> bool:
+    """Return whether the question marks a plain name as code.
+
+    Parameters
+    ----------
+    query_text: str
+        Case-folded question text.
+    leaf: str
+        Case-folded leaf function name.
+
+    Returns
+    -------
+    bool
+        True when the name is in backticks, is followed by ``(``, or stands
+        next to the word "function" or "method".
+
+    """
+
+    name = re.escape(leaf)
+    nouns = "|".join(_CODE_NOUNS)
+    patterns = (
+        rf"`{name}(\(\))?`",
+        rf"(?<![A-Za-z0-9_.]){name}\s*\(",
+        rf"\b(?:{nouns})\s+`?{name}(?![A-Za-z0-9_])",
+        rf"(?<![A-Za-z0-9_.]){name}`?\s+(?:{nouns})\b",
+    )
+    return any(re.search(pattern, query_text) for pattern in patterns)
+
+
+def _ranked_callees(
+    functions: tuple[str, ...],
+    graph: CodeGraph,
+    query_text: str,
+    limit: int,
+    depth: int = 1,
+) -> tuple[str, ...]:
+    """Return the most relevant functions called by the named functions.
+
+    Parameters
+    ----------
+    functions: tuple[str, ...]
+        Qualified names of recognized function entities.
+    graph: CodeGraph
+        Graph supplying function entities and ``calls`` relations.
+    query_text: str
+        Question text, used to prefer callees whose names share words with
+        it.
+    limit: int
+        Most callees returned; zero returns none.
+    depth: int, optional
+        Call steps followed from the named functions. Defaults to ``1``.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Callee names, most shared words first, then fewer call steps, then
+        those calling more repository functions themselves (they do more of
+        the work than small utilities), then in name order.
+
+    """
+
+    if limit <= 0 or depth <= 0:
+        return ()
+    function_names = {
+        entity.name
+        for entity in graph.entities
+        if entity.kind in _FUNCTION_KINDS
+    }
+    calls: dict[str, set[str]] = {}
+    for relation in graph.relations:
+        if relation.relation == "calls" and relation.target in function_names:
+            calls.setdefault(relation.source, set()).add(relation.target)
+    targets = set(functions)
+    steps: dict[str, int] = {}
+    frontier = set(functions)
+    for step in range(1, depth + 1):
+        reached = set()
+        for caller in frontier:
+            for callee in calls.get(caller, ()):
+                if callee not in targets and callee not in steps:
+                    steps[callee] = step
+                    reached.add(callee)
+        frontier = reached
+    question_words = _identifier_words(query_text)
+    ranked = sorted(
+        steps,
+        key=lambda name: (
+            -_shared_words(question_words, name.rsplit(".", 1)[-1]),
+            steps[name],
+            -len(calls.get(name, ())),
+            name,
+        ),
+    )
+    return tuple(ranked[:limit])
+
+
+def _explicit_classes(
+    query_text: str,
+    graph: CodeGraph,
+    paths: tuple[Path, ...],
+) -> tuple[str, ...]:
+    """Return repository classes named in the question.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text.
+    graph: CodeGraph
+        Graph supplying class entities.
+    paths: tuple[pathlib.Path, ...]
+        Repository-relative paths already recognized in the question.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Qualified class names, in name order.
+
+    Notes
+    -----
+    A class is named by its qualified name, a dotted suffix of it, or its
+    leaf name when that name looks like code (``ConversationFileLock``) or
+    is marked as code (backticks or the word "class" next to it). A plain
+    capitalized word such as "Chunk" alone does not name a class.
+
+    """
+
+    normalized = query_text.replace("\\", "/").casefold()
+    normalized = _remove_path_mentions(normalized, paths)
+    return tuple(
+        sorted(
+            entity.name
+            for entity in graph.entities
+            if entity.kind in _CLASS_KINDS
+            and _function_is_named(normalized, entity.name, False)
+        )
+    )
+
+
+def _class_methods(
+    classes: tuple[str, ...],
+    graph: CodeGraph,
+    query_text: str,
+    limit: int,
+) -> tuple[str, ...]:
+    """Return the methods of named classes most relevant to the question.
+
+    Parameters
+    ----------
+    classes: tuple[str, ...]
+        Qualified names of the named classes.
+    graph: CodeGraph
+        Graph supplying method entities.
+    query_text: str
+        Question text, used to rank the methods of large classes.
+    limit: int
+        Classes with at most this many methods contribute all of them;
+        larger classes contribute at most this many, each sharing at least
+        one word with the question. Special methods such as ``__init__``
+        are not counted or added. Zero contributes none.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Method names, class by class.
+
+    """
+
+    if limit <= 0:
+        return ()
+    question_words = _identifier_words(query_text)
+    selected: list[str] = []
+    for name in classes:
+        prefix = f"{name}."
+        # Special methods (``__init__``, ``__enter__``...) rarely explain
+        # what a class does, so they are not candidates.
+        methods = sorted(
+            entity.name
+            for entity in graph.entities
+            if entity.kind in _FUNCTION_KINDS
+            and entity.name.startswith(prefix)
+            and "." not in entity.name[len(prefix) :]
+            and not (
+                entity.name[len(prefix) :].startswith("__")
+                and entity.name.endswith("__")
+            )
+        )
+        if len(methods) <= limit:
+            selected.extend(methods)
+            continue
+        scored = [
+            (_shared_words(question_words, method.rsplit(".", 1)[-1]), method)
+            for method in methods
+        ]
+        ranked = sorted(
+            (item for item in scored if item[0] > 0),
+            key=lambda item: (-item[0], item[1]),
+        )
+        selected.extend(method for _, method in ranked[:limit])
+    return tuple(selected)
+
+
+def _described_functions(
+    query_text: str,
+    graph: CodeGraph,
+    exclude: set[str],
+    limit: int,
+    tests_allowed: bool,
+) -> tuple[str, ...]:
+    """Return functions whose name words all occur in the question.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text, without the names it states explicitly.
+    graph: CodeGraph
+        Graph supplying function entities and their paths.
+    exclude: set[str]
+        Qualified names already in the plan.
+    limit: int
+        Most functions returned; zero returns none.
+    tests_allowed: bool
+        Whether functions in test code may be returned.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Qualified names, those with more name words first, then those whose
+        words occur unchanged in the question, then in name order.
+
+    Notes
+    -----
+    A function qualifies only when its leaf name has at least two words of
+    four or more letters and every word of it matches a question word
+    (``_words_match``). Special methods never qualify. This describes a
+    function in prose ("its HTML templates") without naming it.
+
+    """
+
+    if limit <= 0:
+        return ()
+    question_words = set(_identifier_words(query_text))
+    scored: list[tuple[int, int, str]] = []
+    for entity in graph.entities:
+        if entity.kind not in _FUNCTION_KINDS or entity.name in exclude:
+            continue
+        leaf = entity.name.rsplit(".", 1)[-1]
+        if leaf.startswith("__") and leaf.endswith("__"):
+            continue
+        words = set(_identifier_words(leaf))
+        if sum(len(word) >= 4 for word in words) < 2:
+            continue
+        if not all(
+            any(_words_match(word, other) for other in question_words)
+            for word in words
+        ):
+            continue
+        if not tests_allowed and _is_test_path(entity.path):
+            continue
+        exact = len(words & question_words)
+        scored.append((-len(words), -exact, entity.name))
+    return tuple(name for _, _, name in sorted(scored)[:limit])
+
+
+def _bridge_candidates(graph: CodeGraph) -> dict[str, CodeEntity]:
+    """Return the functions that bridged results may add.
+
+    Parameters
+    ----------
+    graph: CodeGraph
+        Graph supplying function entities.
+
+    Returns
+    -------
+    dict[str, CodeEntity]
+        Function entities outside test code, without special methods, by
+        qualified name.
+
+    """
+
+    return {
+        entity.name: entity
+        for entity in graph.entities
+        if entity.kind in _FUNCTION_KINDS
+        and not _is_test_path(entity.path)
+        and not (
+            entity.name.rsplit(".", 1)[-1].startswith("__")
+            and entity.name.endswith("__")
+        )
+    }
+
+
+def _rank_bridged(
+    names: dict[str, tuple[int, ...]], query_text: str, limit: int
+) -> tuple[str, ...]:
+    """Order bridged functions by shared question words, then position.
+
+    Parameters
+    ----------
+    names: dict[str, tuple[int, ...]]
+        Candidate names with a sort key for ties (smaller first).
+    query_text: str
+        Question text without the names it states.
+    limit: int
+        Most names returned.
+
+    Returns
+    -------
+    tuple[str, ...]
+        At most ``limit`` names.
+
+    """
+
+    question_words = _identifier_words(query_text)
+    ranked = sorted(
+        names,
+        key=lambda name: (
+            -_shared_words(question_words, name.rsplit(".", 1)[-1]),
+            names[name],
+            name,
+        ),
+    )
+    return tuple(ranked[:limit])
+
+
+def _tested_functions(
+    results: Sequence[HybridResult],
+    graph: CodeGraph,
+    query_text: str,
+    exclude: set[str],
+    limit: int,
+) -> tuple[str, ...]:
+    """Return source functions called by retrieved tests.
+
+    Parameters
+    ----------
+    results: Sequence[HybridResult]
+        Fused search results, best first.
+    graph: CodeGraph
+        Graph supplying test entities and ``calls`` relations.
+    query_text: str
+        Question text without the names it states.
+    exclude: set[str]
+        Qualified names already in the plan.
+    limit: int
+        Most functions returned; zero returns none.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Called functions outside test code: those of the best-ranked test
+        first, then those sharing most words with the question.
+
+    Notes
+    -----
+    A test often has the words of a question about the behavior it checks
+    ("invalid Python falls back to one unit"), while the function it tests
+    does not; the test's calls point to that function.
+
+    """
+
+    if limit <= 0:
+        return ()
+    tests: dict[str, int] = {}
+    for rank, result in enumerate(results):
+        chunk = result.chunk
+        if chunk.symbol and _is_test_path(chunk.path):
+            tests.setdefault(f"{chunk.path.as_posix()}::{chunk.symbol}", rank)
+    if not tests:
+        return ()
+    entities = {}
+    for entity in graph.entities:
+        if not _is_test_path(entity.path):
+            continue
+        for key, rank in tests.items():
+            path, symbol = key.split("::", 1)
+            if entity.path.as_posix() == path and (
+                entity.name == symbol or entity.name.endswith(f".{symbol}")
+            ):
+                entities[entity.name] = rank
+    functions = _bridge_candidates(graph)
+    found: dict[str, tuple[int, ...]] = {}
+    for relation in graph.relations:
+        if (
+            relation.relation == "calls"
+            and relation.source in entities
+            and relation.target in functions
+            and relation.target not in exclude
+        ):
+            rank = (entities[relation.source],)
+            target = relation.target
+            found[target] = min(found.get(target, rank), rank)
+    # The best-ranked test's functions come first: its words matched the
+    # question best.
+    question_words = _identifier_words(query_text)
+    ranked = sorted(
+        found,
+        key=lambda name: (
+            found[name],
+            -_shared_words(question_words, name.rsplit(".", 1)[-1]),
+            name,
+        ),
+    )
+    return tuple(ranked[:limit])
+
+
+def _module_functions(
+    results: Sequence[HybridResult],
+    graph: CodeGraph,
+    query_text: str,
+    exclude: set[str],
+    limit: int,
+) -> tuple[str, ...]:
+    """Return top-level functions of modules whose header was retrieved.
+
+    Parameters
+    ----------
+    results: Sequence[HybridResult]
+        Fused search results, best first.
+    graph: CodeGraph
+        Graph supplying module and function entities.
+    query_text: str
+        Question text without the names it states.
+    exclude: set[str]
+        Qualified names already in the plan.
+    limit: int
+        Most functions returned; zero returns none.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Functions of the first module whose header ranked highest, then of
+        the next: all of a module's functions when there are at most
+        ``limit``, otherwise those sharing words with the question.
+
+    Notes
+    -----
+    A module docstring describes in prose what its functions do, so the
+    header can match a question that no function name matches.
+
+    """
+
+    if limit <= 0:
+        return ()
+    paths = list(
+        dict.fromkeys(
+            result.chunk.path
+            for result in results
+            if result.chunk.kind in _MODULE_CONTEXT_KINDS
+            and not _is_test_path(result.chunk.path)
+        )
+    )
+    if not paths:
+        return ()
+    modules = {
+        entity.path: entity.name
+        for entity in graph.entities
+        if entity.kind == "source_file" and entity.path in paths
+    }
+    functions = _bridge_candidates(graph)
+    question_words = _identifier_words(query_text)
+    selected: list[str] = []
+    for path in paths:
+        module = modules.get(path)
+        if module is None:
+            continue
+        members = [
+            name
+            for name, entity in functions.items()
+            if entity.path == path
+            and (
+                name.rsplit(".", 1)[0] == module
+                or (
+                    entity.kind == "r_function"
+                    and name.startswith(f"{module}.")
+                )
+            )
+        ]
+        members.sort()
+        if len(members) > limit:
+            members = [
+                name
+                for name in sorted(
+                    members,
+                    key=lambda name: -_shared_words(
+                        question_words, name.rsplit(".", 1)[-1]
+                    ),
+                )
+                if _shared_words(question_words, name.rsplit(".", 1)[-1])
+            ]
+        selected.extend(name for name in members if name not in exclude)
+        if len(selected) >= limit:
+            break
+    return tuple(dict.fromkeys(selected))[:limit]
+
+
+def _documented_functions(
+    results: Sequence[HybridResult],
+    graph: CodeGraph,
+    query_text: str,
+    exclude: set[str],
+    limit: int,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Find supported and alternative code references in documentation.
+
+    Parameters
+    ----------
+    results: Sequence[HybridResult]
+        Fused search results, best first.
+    graph: CodeGraph
+        Graph supplying function entities.
+    query_text: str
+        Question text without the names it states.
+    exclude: set[str]
+        Qualified names already supported elsewhere in the plan.
+    limit: int
+        Combined maximum of supported and alternative functions; zero
+        returns no functions.
+
+    Returns
+    -------
+    tuple[tuple[str, ...], tuple[str, ...]]
+        Supported names, then lower-confidence alternatives. Within each
+        group, shared question words, frequency, and first mention rank
+        candidates. Supported matches consume the budget first.
+
+    Notes
+    -----
+    An exact qualified name or dotted suffix must resolve uniquely. A
+    unique leaf name is also supported when no qualifier was supplied.
+    An unresolved qualifier may still suggest a unique leaf-name candidate,
+    but only as an alternative. Ambiguous leaf names are not guessed.
+    A supported occurrence promotes a candidate even if other references
+    use an unresolved qualifier. Plain words do not form code bridges.
+
+    """
+
+    if limit <= 0:
+        return (), ()
+    documents = [
+        result.chunk for result in results if _is_documentation(result.chunk)
+    ]
+    if not documents:
+        return (), ()
+    by_leaf: dict[str, list[str]] = {}
+    for name in _bridge_candidates(graph):
+        by_leaf.setdefault(name.rsplit(".", 1)[-1], []).append(name)
+    counts: Counter[str] = Counter()
+    first: dict[str, tuple[int, int]] = {}
+    supported: set[str] = set()
+    for position, chunk in enumerate(documents):
+        for match in _CODE_REFERENCE.finditer(chunk.text):
+            reference = match.group()
+            leaf = reference.rsplit(".", 1)[-1]
+            if not _looks_like_code(leaf):
+                continue
+            options = by_leaf.get(leaf, [])
+            qualified = (
+                [
+                    name
+                    for name in options
+                    if name == reference or name.endswith(f".{reference}")
+                ]
+                if "." in reference
+                else options
+            )
+            candidates = qualified or options
+            if len(candidates) != 1 or candidates[0] in exclude:
+                continue
+            name = candidates[0]
+            counts[name] += 1
+            first.setdefault(name, (position, match.start()))
+            if qualified:
+                supported.add(name)
+    ranks = {name: (-counts[name], *first[name]) for name in counts}
+    exact = _rank_bridged(
+        {name: ranks[name] for name in supported}, query_text, limit
+    )
+    alternatives = _rank_bridged(
+        {name: rank for name, rank in ranks.items() if name not in supported},
+        query_text,
+        limit - len(exact),
+    )
+    return exact, alternatives
+
+
+def _without_names(query_text: str, names: Sequence[str]) -> str:
+    """Remove mentions of named code entities from a question.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text.
+    names: Sequence[str]
+        Qualified names of the functions and classes the question names.
+
+    Returns
+    -------
+    str
+        The question with each name, dotted suffix, or leaf name replaced
+        by a space, ignoring case. Prose words equal to a part of a name
+        ("the project folder" for ``prepare_project``) are kept.
+
+    """
+
+    text = query_text
+    spellings = set()
+    for name in names:
+        parts = name.split(".")
+        spellings.update(
+            ".".join(parts[index:]) for index in range(len(parts))
+        )
+    for spelling in sorted(spellings, key=len, reverse=True):
+        text = re.sub(
+            _identifier_pattern(spelling), " ", text, flags=re.IGNORECASE
+        )
+    return text
+
+
+def _focused_chunks(
+    chunks: list[Chunk],
+    named_leaves: set[str],
+    focus_terms: tuple[str, ...],
+    limit: int,
+) -> list[Chunk]:
+    """Keep the most relevant chunks of one long related function.
+
+    Parameters
+    ----------
+    chunks: list[Chunk]
+        Chunks of one function, in source order.
+    named_leaves: set[str]
+        Case-folded leaf names of the functions named in the question.
+    focus_terms: tuple[str, ...]
+        Words of the question.
+    limit: int
+        Most chunks kept; zero or a function with no more chunks keeps all.
+
+    Returns
+    -------
+    list[Chunk]
+        The selected chunks, in source order.
+
+    """
+
+    if limit <= 0 or len(chunks) <= limit:
+        return chunks
+
+    def relevance(chunk: Chunk) -> tuple[int, int]:
+        """Rank a chunk by mentions of named functions, then shared words.
+
+        Parameters
+        ----------
+        chunk: Chunk
+            One chunk of the related function.
+
+        Returns
+        -------
+        tuple[int, int]
+            Named functions mentioned, and question words shared.
+
+        """
+
+        text = chunk.text.casefold()
+        mentions = sum(
+            1 for leaf in named_leaves if _contains_identifier(text, leaf)
+        )
+        words = set(_identifier_words(chunk.text))
+        shared = sum(
+            1
+            for term in set(focus_terms)
+            if any(_words_match(term, word) for word in words)
+        )
+        return mentions, shared
+
+    order = {id(chunk): index for index, chunk in enumerate(chunks)}
+    best = sorted(
+        chunks,
+        key=lambda chunk: (
+            -relevance(chunk)[0],
+            -relevance(chunk)[1],
+            order[id(chunk)],
+        ),
+    )[:limit]
+    return sorted(best, key=lambda chunk: order[id(chunk)])
+
+
+def _shared_words(question_words: list[str], identifier: str) -> int:
+    """Count identifier words that also occur in the question.
+
+    Parameters
+    ----------
+    question_words: list[str]
+        Words of the question, from ``_identifier_words``.
+    identifier: str
+        A function or method leaf name.
+
+    Returns
+    -------
+    int
+        Identifier words matching a question word, as decided by
+        ``_words_match``.
+
+    """
+
+    candidates = set(question_words)
+    return sum(
+        1
+        for word in set(_identifier_words(identifier))
+        if any(_words_match(word, other) for other in candidates)
+    )
+
+
+def _words_match(first: str, second: str) -> bool:
+    """Return whether two lowercase words are variants of one word.
+
+    Parameters
+    ----------
+    first: str
+        Lowercase word.
+    second: str
+        Lowercase word.
+
+    Returns
+    -------
+    bool
+        Whether the words are equal up to a simple plural ending, or the
+        shorter one has at least five letters, the longer one at most three
+        more, and they agree from the start up to the shorter one's
+        next-to-last letter ("write" and "written", "store" and "storage",
+        "selects" and "selected").
+
+    Notes
+    -----
+    The length limits keep short or distant words apart: "read" does not
+    match "readable" or "thread", and "event" does not match "prevents".
+
+    """
+
+    if _word_forms(first) & _word_forms(second):
+        return True
+    shorter, longer = sorted((first, second), key=len)
+    if len(shorter) < 5 or len(longer) - len(shorter) > 3:
+        return False
+    return len(os.path.commonprefix((shorter, longer))) >= len(shorter) - 1
+
+
+def _word_forms(word: str) -> set[str]:
+    """Return a word with its simple singular forms.
+
+    Parameters
+    ----------
+    word: str
+        Lowercase word.
+
+    Returns
+    -------
+    set[str]
+        The word and, for plural-looking words, the forms without "s",
+        "es", or with "ies" changed to "y".
+
+    """
+
+    forms = {word}
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        forms.add(word[:-1])
+        if word.endswith("es"):
+            forms.add(word[:-2])
+        if word.endswith("ies"):
+            forms.add(word[:-3] + "y")
+    return forms
+
+
+def _identifier_words(text: str) -> list[str]:
+    """Split text and identifiers into lowercase words.
+
+    Parameters
+    ----------
+    text: str
+        Prose or an identifier such as ``_parse_route`` or ``sideReply``.
+
+    Returns
+    -------
+    list[str]
+        Lowercase words; ``route_question`` gives ``route`` and
+        ``question``.
+
+    """
+
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text).replace("_", " ")
+    return [word.casefold() for word in _WORD.findall(spaced)]
 
 
 def _contains_identifier(text: str, value: str) -> bool:

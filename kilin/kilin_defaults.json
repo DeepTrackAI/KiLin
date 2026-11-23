@@ -2,8 +2,18 @@
   "DEFAULT_MODELS": {
     "DEFAULT_CHAT_MODEL_MLX": "Qwen/Qwen3-8B-MLX-4bit",
     "DEFAULT_CHAT_MODEL_TORCH": "Qwen/Qwen3-8B",
+    "DEFAULT_ROUTER_MODEL_MLX": "Qwen/Qwen3-4B-MLX-4bit",
+    "DEFAULT_ROUTER_MODEL_TORCH": "Qwen/Qwen3-4B",
+    "DEFAULT_SOURCE_CARD_MODEL_MLX": "Qwen/Qwen3-8B-MLX-4bit",
+    "DEFAULT_SOURCE_CARD_MODEL_TORCH": "Qwen/Qwen3-8B",
     "DEFAULT_EMBEDDING_MODEL_MLX": "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
     "DEFAULT_EMBEDDING_MODEL_TORCH": "Qwen/Qwen3-Embedding-0.6B"
+  },
+  "SOURCE_CARD_GENERATION": {
+    "THINKING": false,
+    "TEMPERATURE": 0.0,
+    "MAX_INPUT_TOKENS": 5000,
+    "MAX_NEW_TOKENS": 1200
   },
   "REPOSITORY": {
     "DEFAULT_EXTENSIONS": [
@@ -21,13 +31,17 @@
       ".sh",
       ".ps1",
       ".ipynb",
+      ".js",
+      ".html",
+      ".r",
       ".pdf",
+      ".doc",
+      ".docx",
       ".gitattributes",
       ".gitignore",
       ".python-version"
     ],
     "SKIP_DIRECTORIES": [
-      ".genrag",
       ".git",
       ".ipynb_checkpoints",
       ".mypy_cache",
@@ -72,6 +86,8 @@
     "MAX_RELATED_TURNS": 3,
     "MAX_LISTED_TURNS": 30,
     "ROUTER_MAX_TOKENS": 64,
+    "SUMMARY_MAX_TOKENS": 96,
+    "SUMMARY_ANSWER_MAX_CHARACTERS": 4000,
     "REPRESENTATION_MAX_CHARACTERS": 200,
     "REPRESENTATION_MAX_SOURCES": 5,
     "SHORT_QUESTION_MAX_WORDS": 2,
@@ -179,7 +195,28 @@
     "MAX_REUSED_EVIDENCE": 40,
     "MAX_RELATED_EVIDENCE": 10,
     "UNCITED_RELATED_EVIDENCE": 3,
-    "MAX_EARLIER_TURNS": 6
+    "MAX_EARLIER_TURNS": 6,
+    "EXTRA_SEARCHES": 1,
+    "MAX_EVIDENCE_CHECK_CHARACTERS": 12000,
+    "MAX_EXPANDED_RESULTS": 64
+  },
+  "CHAT": {
+    "CJK_REQUEST_WORDS": [
+      "cantonese",
+      "chinese",
+      "cjk",
+      "hangul",
+      "hanja",
+      "hanzi",
+      "hiragana",
+      "japanese",
+      "kana",
+      "kanji",
+      "katakana",
+      "korean",
+      "mandarin",
+      "taiwanese"
+    ]
   },
   "PROJECT_PROFILE": {
     "ALLOW_DOWNLOAD": true,
@@ -189,6 +226,7 @@
     "RETRIEVAL_COUNT": 5,
     "THINKING": true,
     "TEMPERATURE": 0.0,
+    "BLOCK_UNREQUESTED_CJK": true,
     "MAX_NEW_TOKENS": 8192
   },
   "CHUNKING": {
@@ -205,8 +243,34 @@
     "CODE_MAX_DISTANCE": 1,
     "DOCUMENT_CHARACTERS_PER_TOKEN": 4,
     "MIN_DOCUMENT_STEM_LENGTH": 4,
+    "CALLEE_EXPANSION_DEPTH": 2,
+    "CALLEE_EXPANSION_MAX": 4,
+    "CLASS_METHOD_EXPANSION_MAX": 4,
+    "NAME_WORD_EXPANSION_MAX": 2,
+    "DOCUMENTATION_NAME_EXPANSION_MAX": 2,
+    "MODULE_FUNCTION_EXPANSION_MAX": 4,
+    "TEST_SUBJECT_EXPANSION_MAX": 2,
+    "RELATED_CHUNKS_MAX": 2,
+    "RELATED_PASSAGES_MAX": 5,
+    "SOURCE_SEARCH_DEPTH": 6,
+    "SOURCE_SEARCH_OTHERS": 2,
+    "SOURCE_SEARCH_RESULTS": 8,
+    "DOCUMENTATION_WORDS": [
+      "doc",
+      "docs",
+      "documentation",
+      "documented",
+      "example",
+      "guide",
+      "manual",
+      "markdown",
+      "readme",
+      "tutorial"
+    ],
     "RELATION_PHRASES": [
+      "call",
       "called by",
+      "calling",
       "calls",
       "caller",
       "callers",
@@ -214,16 +278,22 @@
       "callees",
       "connected to",
       "connect to",
+      "depend on",
       "depends on",
       "imported by",
       "imports",
       "interact with",
+      "invoke",
+      "invoked by",
+      "invokes",
       "related to",
       "referenced by",
       "references",
       "relationship",
       "used across",
+      "used by",
       "used throughout",
+      "uses",
       "where does",
       "where is"
     ]

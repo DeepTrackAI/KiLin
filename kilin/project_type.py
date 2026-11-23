@@ -3,9 +3,11 @@
 A project type (for example a code repository or a literature collection)
 decides which files a new project reads by default, which intents the
 router may choose, and for each intent the instructions, history,
-retrieval, or tool. Editing a JSON file changes behaviour without code
-changes; restart KíLín afterwards. Saved conversations keep the system
-prompt they were answered with.
+retrieval, thinking override, memory policy, or tool. Editing these JSON
+files changes behavior without code changes, including project-wide
+conversation-memory defaults independent of source indexing and recent
+conversation history. Restart KíLín afterwards. Saved conversations
+keep the system prompt they were answered with.
 
 Files are read once per folder and cached for the process. A malformed
 file stops loading with a ``ValueError``; no type is skipped silently. This
@@ -27,6 +29,26 @@ Key Features
     An intent may name a registered tool (``kilin.tools._registry``) with
     its settings; the tool validates them.
 
+- **New-project generation defaults**
+
+    A type may set ``generation.thinking`` or
+    ``generation.temperature`` for new project profiles. Omitted values
+    inherit packaged defaults. Saved profiles and explicit creation
+    settings take precedence.
+
+- **Independent conversation-memory policy**
+
+    Every project type defines its memory enablement, question/answer
+    inclusion, retrieval limits, and disliked-history exclusion. Intents
+    may restrict memory indexing to explicit selection, forbid it entirely,
+    or disable reading memory. Memory remains distinct from source evidence.
+
+- **Request-local thinking**
+
+    An ordinary intent may enable or disable thinking for its answer.
+    An omitted or null setting inherits the configured chat setting.
+    Tools own their model calls and cannot declare a thinking override.
+
 - **Validated on load**
 
     A malformed file or an unknown field at any configuration level raises
@@ -46,6 +68,14 @@ Module Structure
     Default evidence budget for document reading, taken from the packaged
     ``PROJECT_TYPES`` section when the intent JSON omits a budget.
 
+- ``MEMORY_QUESTION_CHOICES`` and ``MEMORY_ANSWER_CHOICES``
+
+    Allowed project-wide policies for including questions and answers.
+
+- ``MEMORY_INDEXING_CHOICES``
+
+    Automatic, explicit, and never indexing policies for intents.
+
 - ``HISTORY_POLICY_NONE``, ``HISTORY_POLICY_RECENT``, and
   ``HISTORY_POLICY_RELEVANT``
 
@@ -59,6 +89,10 @@ Module Structure
 
     Packaged folder with one JSON file per project type.
 
+- ``SUGGESTION_PLACEHOLDERS``
+
+    Names a suggested-question template may fill in, such as ``{file}``.
+
 - ``RETRIEVAL_MODE_SEARCH``, ``RETRIEVAL_MODE_DOCUMENT``,
   ``RETRIEVAL_MODE_REUSE``, and ``RETRIEVAL_MODE_NONE``
 
@@ -68,9 +102,11 @@ Module Structure
 
     Ordered collection of accepted retrieval modes.
 
-- ``RETRIEVAL_STRATEGY_HYBRID``
+- ``RETRIEVAL_STRATEGY_HYBRID`` and
+  ``RETRIEVAL_STRATEGY_SOURCE_FIRST``
 
-    Canonical string value for the hybrid search pipeline.
+    Canonical string values for hybrid and four-channel source-first
+    retrieval.
 
 - ``RETRIEVAL_STRATEGY_CHOICES``
 
@@ -79,6 +115,15 @@ Module Structure
 - ``CodeGraphSetting``
 
     Type alias for ``True``, ``False``, or ``"auto"``.
+
+- ``ConversationMemorySettings``
+
+    Validated project-wide conversation-memory settings and limits.
+
+- ``MemoryQuestionPolicy``, ``MemoryAnswerPolicy``, and
+  ``MemoryIndexingPolicy``
+
+    Type aliases for project-wide content and per-intent indexing policies.
 
 - ``HistoryPolicy``
 
@@ -103,7 +148,7 @@ Module Structure
 
 - ``RetrievalStrategy``
 
-    Type alias for ``"hybrid"``.
+    Type alias for ``"hybrid"`` or ``"source_first"``.
 
 - ``load_project_types``
 
@@ -114,25 +159,31 @@ Module Structure
 
     Look up one packaged project type by its ID.
 
+- ``with_project_routing``
+
+    Add the routing that tools derive from one project's own files (its
+    report templates) to a project type, before a question is routed.
+
 Private helpers read and validate single fields; they are not part of the
 public API.
 
 Examples
 --------
 >>> from kilin.project_type import load_project_types, project_type
->>> list(load_project_types())
-['code', 'literature']
->>> project_type("code").display_name
-'Code repository'
+>>> bool(load_project_types())
+True
+>>> all(item.id == type_id for type_id, item in load_project_types().items())
+True
 
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 import json
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from math import isfinite
+from pathlib import Path
 import re
 from typing import Final, Literal, TypeAlias
 
@@ -141,13 +192,19 @@ from kilin.defaults import (
     require_default_int,
     require_default_nonnegative_int,
 )
+from kilin.retrievals.evidence_budget import (
+    COVERAGE_MODES, EvidenceLimits,
+)
 from kilin.repository import normalize_extensions
 from kilin.tools._contract import reject_unknown
-from kilin.tools._registry import ToolUse, parse_tool
+from kilin.tools._registry import TOOL_REGISTRY, ToolUse, parse_tool
 
 __all__ = [
     "CODE_GRAPH_AUTO",
     "CODE_GRAPH_CHOICES",
+    "MEMORY_ANSWER_CHOICES",
+    "MEMORY_INDEXING_CHOICES",
+    "MEMORY_QUESTION_CHOICES",
     "DOCUMENT_MAX_TOKENS",
     "HISTORY_POLICY_CHOICES",
     "HISTORY_POLICY_NONE",
@@ -161,25 +218,38 @@ __all__ = [
     "RETRIEVAL_MODE_SEARCH",
     "RETRIEVAL_STRATEGY_CHOICES",
     "RETRIEVAL_STRATEGY_HYBRID",
+    "RETRIEVAL_STRATEGY_SOURCE_FIRST",
+    "SUGGESTION_PLACEHOLDERS",
     "CodeGraphSetting",
+    "ConversationMemorySettings",
     "HistoryPolicy",
     "Intent",
+    "MemoryAnswerPolicy",
+    "MemoryIndexingPolicy",
+    "MemoryQuestionPolicy",
     "ProjectType",
     "ProjectTypeId",
     "RetrievalMode",
     "RetrievalStrategy",
     "load_project_types",
     "project_type",
+    "with_project_routing",
 ]
 
 ProjectTypeId: TypeAlias = str
-_DEFAULT_SOURCE_DIRECTORY: Final[str] = "sources"
 
 # One JSON file per project type; the file name is the type's ID.
 PROJECT_TYPES_DIR: Final[Path] = Path(__file__).parent / "project_types"
 # Project type and intent IDs are short, lowercase, and safe in file names
 # and in ``profile.ini``.
 _ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_-]{0,31}")
+# What a suggested-question template may fill in: a source file name, a
+# second, different one, a topic of the sources, an exact term in them, and
+# a broad theme of the whole collection.
+SUGGESTION_PLACEHOLDERS: Final[tuple[str, ...]] = (
+    "file", "file2", "topic", "term", "theme",
+)
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"\{([a-z0-9]+)\}")
 
 # Which earlier turns an intent includes as conversation history.
 HistoryPolicy: TypeAlias = Literal["none", "recent", "relevant"]
@@ -230,14 +300,19 @@ if not _MIN_DOCUMENT_TOKENS <= DOCUMENT_MAX_TOKENS <= _MAX_DOCUMENT_TOKENS:
         "1000 and 200000."
     )
 
-# Search pipeline used by RETRIEVAL_MODE_SEARCH. Only the existing hybrid
-# pipeline (semantic, lexical, code graph, fused) exists; new strategies
-# need benchmarks before they are added.
-RetrievalStrategy: TypeAlias = Literal["hybrid"]
+# Search pipelines for RETRIEVAL_MODE_SEARCH. ``hybrid`` combines passage
+# channels; ``source_first`` fuses four source rankings.
+RetrievalStrategy: TypeAlias = Literal["hybrid", "source_first"]
 RETRIEVAL_STRATEGY_HYBRID: Final[RetrievalStrategy] = "hybrid"
+RETRIEVAL_STRATEGY_SOURCE_FIRST: Final[RetrievalStrategy] = "source_first"
 RETRIEVAL_STRATEGY_CHOICES: Final[tuple[RetrievalStrategy, ...]] = (
     RETRIEVAL_STRATEGY_HYBRID,
+    RETRIEVAL_STRATEGY_SOURCE_FIRST,
 )
+# Source-first defaults and validation bounds for selected sources.
+_DEFAULT_MAX_SOURCES: Final[int] = 3
+_MAX_SOURCES_LIMIT: Final[int] = 50
+_PASSAGES_PER_SOURCE_LIMIT: Final[int] = 10
 
 # Whether a project type builds and searches the code graph.
 CodeGraphSetting: TypeAlias = bool | Literal["auto"]
@@ -247,6 +322,53 @@ CODE_GRAPH_CHOICES: Final[tuple[CodeGraphSetting, ...]] = (
     False,
     CODE_GRAPH_AUTO,
 )
+
+# Conversation memory is separate from indexed source evidence and from
+# recent conversation history. These policies configure future ingestion;
+# they do not turn remembered model output into verifiable source evidence.
+MemoryQuestionPolicy: TypeAlias = Literal["all", "none"]
+MEMORY_QUESTION_CHOICES: Final[tuple[MemoryQuestionPolicy, ...]] = (
+    "all", "none",
+)
+MemoryAnswerPolicy: TypeAlias = Literal["none", "selected", "all"]
+MEMORY_ANSWER_CHOICES: Final[tuple[MemoryAnswerPolicy, ...]] = (
+    "none", "selected", "all",
+)
+MemoryIndexingPolicy: TypeAlias = Literal[
+    "automatic", "explicit", "never"
+]
+MEMORY_INDEXING_CHOICES: Final[tuple[MemoryIndexingPolicy, ...]] = (
+    "automatic", "explicit", "never",
+)
+_MEMORY_MAX_HITS_LIMIT: Final[int] = 20
+_MEMORY_MIN_TOKENS: Final[int] = 128
+_MEMORY_MAX_TOKENS: Final[int] = 20_000
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationMemorySettings:
+    """Validated project-wide policy for independent conversation memory.
+
+    Attributes
+    ----------
+    enabled: bool
+        Whether long-term conversation-memory ingestion and search are on.
+    questions: "all" | "none"
+        Whether eligible user questions enter memory automatically.
+    answers: "none" | "selected" | "all"
+        Whether answers are forbidden, explicitly selected, or automatic.
+    max_hits: int
+        Maximum independently retrieved memory entries per answer.
+    max_tokens: int
+        Memory-only context budget; never consumes source-evidence budget.
+
+    """
+
+    enabled: bool
+    questions: MemoryQuestionPolicy
+    answers: MemoryAnswerPolicy
+    max_hits: int
+    max_tokens: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,20 +390,54 @@ class Intent:
     retrieval_mode: "search" | "document" | "reuse" | "none"
         ``search``, ``document`` (one whole file or function), ``reuse``
         (the related turn's evidence), or ``none``.
-    retrieval_strategy: "hybrid"
-        Search pipeline used when searching; only ``hybrid`` exists.
+    retrieval_strategy: "hybrid" | "source_first"
+        Search pipeline used when searching: ``hybrid`` fuses passage
+        ranks and ``source_first`` fuses independent source ranks.
     shortcuts: tuple[re.Pattern[str], ...]
         Case-insensitive patterns for whole messages that obviously have
         this intent, such as greetings; a match skips the router model.
+    cues: tuple[re.Pattern[str], ...]
+        Case-insensitive patterns searched in a question whose wording
+        means this intent ("give me an overview of the Smith paper"); a
+        match sets the intent after the router has judged the history.
+    requires: tuple[re.Pattern[str], ...]
+        Case-insensitive patterns of which a question must match one for
+        the router's choice of this intent to stand (a reference check
+        needs words such as "references" or "cite"). Empty: no condition.
     include_related_evidence: bool
         When searching, also supply the evidence cited by the earlier turns
         the router marked as related, so follow-ups keep their sources.
+    prefer_source_code: bool
+        When searching, rank documentation and notebook passages after
+        source code unless the question asks about documentation (see
+        ``kilin.retrievals.context_expansion.demote_documentation``).
     max_tokens: int
         Evidence budget in estimated tokens for ``document`` reading; a
         longer document keeps its parts most relevant to the question.
     tool: ToolUse | None
         Tool that replaces retrieval and the answering model, if any (see
         ``kilin.tools``).
+    thinking: bool | None
+        Per-answer thinking override for a compatible chat template.
+        ``None`` inherits the session setting; ``True`` or ``False``
+        overrides it without changing the session. Defaults to ``None``.
+        Tool-backed intents must leave this unset or null.
+    max_sources: int | None
+        Source-first limit on represented sources; None defaults to 3.
+    passages_per_source: int | None
+        Source-first per-source target; None defaults to one passage.
+    max_passages: int
+        Hard number of source-first evidence passages.
+    evidence_tokens: int
+        Hard estimated source-first evidence-token budget including headers.
+    coverage: "bounded" | "exhaustive"
+        Whether ordinary questions require all indexed sources. Explicit
+        questions asking about all sources always request exhaustive mode.
+    memory_indexing: "automatic" | "explicit" | "never"
+        Whether this intent can enter long-term memory automatically, only
+        when selected, or never. Applies independently to questions/answers.
+    memory_read: bool
+        Whether this intent can retrieve previous conversation memory.
 
     """
 
@@ -293,9 +449,44 @@ class Intent:
     retrieval_mode: RetrievalMode
     retrieval_strategy: RetrievalStrategy
     shortcuts: tuple[re.Pattern[str], ...] = ()
+    cues: tuple[re.Pattern[str], ...] = ()
+    requires: tuple[re.Pattern[str], ...] = ()
     include_related_evidence: bool = False
+    prefer_source_code: bool = False
     max_tokens: int = DOCUMENT_MAX_TOKENS
     tool: ToolUse | None = None
+    thinking: bool | None = None
+    max_sources: int | None = None
+    passages_per_source: int | None = None
+    max_passages: int = 8
+    evidence_tokens: int = 5_000
+    coverage: str = "bounded"
+    memory_indexing: MemoryIndexingPolicy = "automatic"
+    memory_read: bool = True
+
+    def source_limits(self) -> EvidenceLimits:
+        """Resolve the validated source-first limits for this intent.
+
+        Returns
+        -------
+        EvidenceLimits
+            Per-intent limits independent of the project retrieval count.
+
+        """
+
+        return EvidenceLimits(
+            max_sources=(
+                self.max_sources if self.max_sources is not None
+                else _DEFAULT_MAX_SOURCES
+            ),
+            passages_per_source=(
+                self.passages_per_source
+                if self.passages_per_source is not None else 1
+            ),
+            max_passages=self.max_passages,
+            max_tokens=self.evidence_tokens,
+            coverage=self.coverage,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +514,11 @@ class ProjectType:
         selected files include code the graph understands).
     recent_turns: int
         Earlier turns kept as conversation history by default.
+    exclude_disliked_answers: bool
+        Whether rejected answers are omitted from conversational context.
+        Does not delete the original saved question or answer.
+    conversation_memory: ConversationMemorySettings
+        Independent memory settings and retrieval budget.
     default_intent: str
         Intent used when routing is off or its reply is unusable.
     intents: dict[str, Intent]
@@ -331,15 +527,35 @@ class ProjectType:
         Default answer instruction applied by the core to all callers
         unless overridden by the caller or selected intent; empty for none.
     welcome_prompts: tuple[str, ...]
-        Headings the desktop app shows in an empty chat.
+        Headings the desktop app shows in an empty chat when there are no
+        headings about the project's own sources.
+    welcome_templates: tuple[str, ...]
+        Fill-in headings, such as "What would you like to understand about
+        {theme}?", from which ``kilin.question_suggestions`` writes
+        headings about the project's own sources. Empty when the type has
+        none.
     suggestions: tuple[str, ...]
-        Example requests the desktop app shows in an empty chat.
-    source_directory: str
-        Relative source folder created by ``initialize_project`` inside a
-        fresh directory.
-        Defaults to ``sources``; managed workspaces always use ``sources/``.
-        A saved profile source takes precedence, followed by an existing
-        ``sources/`` folder, this convention, and finally the project root.
+        Ready-to-send requests the desktop app shows in an empty chat when
+        there are too few questions about the project's own sources.
+    suggestion_templates: tuple[tuple[str, str], ...]
+        Intent ID and fill-in question pairs, in file order (an intent may
+        have several), from which ``kilin.question_suggestions`` writes
+        questions about the project's own sources, such as "Give me a
+        short summary of {file}.". Empty when the type has none.
+    source_cards_enabled: bool
+        Enable the optional independent source-card index.
+    source_card_kind: str | None
+        Preferred card kind, or None for no default.
+    source_cards_automatic: bool
+        Generate missing cards during indexing.
+    document_headers: bool
+        Prefix searchable passages with document metadata, such as title,
+        author, section, and page. Independent from source-card generation.
+        Defaults to ``False``.
+    generation_thinking: bool | None
+        New-project thinking default, or None to use the packaged setting.
+    generation_temperature: float | None
+        New-project sampling temperature, or None to use the packaged value.
 
     """
 
@@ -352,12 +568,21 @@ class ProjectType:
     system_prompt: str
     code_graph: CodeGraphSetting
     recent_turns: int
+    exclude_disliked_answers: bool
+    conversation_memory: ConversationMemorySettings
     default_intent: str
     intents: dict[str, Intent]
     answer_guidance: str = ""
     welcome_prompts: tuple[str, ...] = ()
+    welcome_templates: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
-    source_directory: str = _DEFAULT_SOURCE_DIRECTORY
+    suggestion_templates: tuple[tuple[str, str], ...] = ()
+    document_headers: bool = False
+    source_cards_enabled: bool = False
+    source_card_kind: str | None = None
+    source_cards_automatic: bool = False
+    generation_thinking: bool | None = None
+    generation_temperature: float | None = None
 
     @property
     def label(self) -> str:
@@ -407,6 +632,44 @@ def _text(type_id: str, data: dict, field: str, required: bool = True) -> str:
     return value.strip()
 
 
+def _patterns(
+    where: str, data: dict, field: str
+) -> tuple[re.Pattern[str], ...]:
+    """Compile a list of case-insensitive regular expressions.
+
+    Parameters
+    ----------
+    where: str
+        Intent location for errors.
+    data: dict
+        The intent's JSON object.
+    field: str
+        Field name, such as ``"shortcuts"`` or ``"cues"``.
+
+    Returns
+    -------
+    tuple[re.Pattern[str], ...]
+        The compiled patterns; empty when the field is missing.
+
+    Raises
+    ------
+    ValueError
+        If the field is not a list of texts or a pattern is invalid.
+
+    """
+
+    patterns = []
+    for pattern in _texts(where, data, field):
+        try:
+            patterns.append(re.compile(pattern, re.IGNORECASE))
+        except re.error as error:
+            raise ValueError(
+                f"Intent {where!r} {field} pattern {pattern!r} is not a "
+                f"valid regular expression: {error}"
+            ) from error
+    return tuple(patterns)
+
+
 def _texts(type_id: str, data: dict, field: str) -> tuple[str, ...]:
     """Return a list of nonblank texts, stripped; missing reads as empty.
 
@@ -440,6 +703,116 @@ def _texts(type_id: str, data: dict, field: str) -> tuple[str, ...]:
         )
 
     return tuple(item.strip() for item in value)
+
+
+def _suggestion_templates(
+    type_id: str, data: dict, intents: dict[str, Intent]
+) -> tuple[tuple[str, str], ...]:
+    """Return the fill-in suggested questions, checked against the intents.
+
+    Parameters
+    ----------
+    type_id: str
+        Registered project-type identifier to validate.
+    data: dict
+        Project-type JSON object.
+    intents: dict[str, Intent]
+        The type's parsed intents.
+
+    Returns
+    -------
+    tuple[tuple[str, str], ...]
+        Intent ID and stripped template pairs, in file order; an intent
+        with a list of templates gives one pair per template. Empty when
+        the field is missing.
+
+    Raises
+    ------
+    ValueError
+        If the field is not an object, names an unknown intent, or has a
+        value that is not nonblank text or a nonempty list of it, or a
+        placeholder other than ``SUGGESTION_PLACEHOLDERS``.
+
+    """
+
+    field = "suggestion_templates"
+    templates = _object(type_id, data, field)
+    pairs: list[tuple[str, str]] = []
+    for intent_id, value in templates.items():
+        if intent_id not in intents:
+            raise ValueError(
+                f"Project type {type_id!r} {field} names unknown intent "
+                f"{intent_id!r}."
+            )
+        values = value if isinstance(value, list) and value else [value]
+        for template in values:
+            _check_template(type_id, f"{field}.{intent_id}", template)
+            pairs.append((intent_id, template.strip()))
+    return tuple(pairs)
+
+
+def _welcome_templates(type_id: str, data: dict) -> tuple[str, ...]:
+    """Return the fill-in welcome headings, with their placeholders checked.
+
+    Parameters
+    ----------
+    type_id: str
+        Registered project-type identifier to validate.
+    data: dict
+        Project-type JSON object.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Stripped templates, in file order; empty when the field is missing.
+
+    Raises
+    ------
+    ValueError
+        If the field is not a list of nonblank text, or a template has a
+        placeholder other than ``SUGGESTION_PLACEHOLDERS``.
+
+    """
+
+    templates = _texts(type_id, data, "welcome_templates")
+    for position, template in enumerate(templates):
+        _check_template(type_id, f"welcome_templates[{position}]", template)
+    return templates
+
+
+def _check_template(type_id: str, where: str, template: object) -> None:
+    """Check one fill-in suggested question.
+
+    Parameters
+    ----------
+    type_id: str
+        Registered project-type identifier to validate.
+    where: str
+        Location for errors, such as ``suggestion_templates.paper_overview``.
+    template: object
+        Value from the JSON file.
+
+    Raises
+    ------
+    ValueError
+        If the template is not nonblank text or uses a placeholder other
+        than ``SUGGESTION_PLACEHOLDERS``.
+
+    """
+
+    if not isinstance(template, str) or not template.strip():
+        raise ValueError(
+            f"Project type {type_id!r} {where} must be nonblank text."
+        )
+    names = set(_PLACEHOLDER.findall(template))
+    leftover = _PLACEHOLDER.sub("", template)
+    if names - set(SUGGESTION_PLACEHOLDERS) or re.search(r"[{}]", leftover):
+        raise ValueError(
+            f"Project type {type_id!r} {where} may use only the "
+            "placeholders "
+            + ", ".join(f"{{{name}}}" for name in SUGGESTION_PLACEHOLDERS)
+            + "."
+        )
 
 
 def _object(type_id: str, data: dict, field: str) -> dict:
@@ -480,7 +853,8 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
 
     Missing settings take their defaults: history policy ``relevant``,
     retrieval mode ``search`` (``none`` when a tool is named), strategy
-    ``hybrid``, and budget ``DOCUMENT_MAX_TOKENS``.
+    ``hybrid``, budget ``DOCUMENT_MAX_TOKENS``, and thinking ``None``
+    (inherit the configured chat setting for ordinary model answers).
 
     Parameters
     ----------
@@ -501,7 +875,7 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
     ValueError
         If the ID, a field, a shortcut pattern, or the tool settings are
         invalid, an unknown field is present, or a tool is combined with
-        a retrieval mode.
+        a retrieval mode or an explicit thinking override.
 
     """
 
@@ -524,16 +898,42 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "history",
             "retrieval",
             "shortcuts",
+            "cues",
+            "requires",
             "tool",
+            "thinking",
+            "memory",
         ),
     )
     history = _object(where, data, "history")
     reject_unknown(f"{where}.history", history, ("policy",))
+    memory = _object(where, data, "memory")
+    reject_unknown(f"{where}.memory", memory, ("indexing", "read"))
+    memory_indexing = memory.get("indexing", "automatic")
+    if memory_indexing not in MEMORY_INDEXING_CHOICES:
+        raise ValueError(
+            f"Intent {where!r} memory.indexing must be one of: "
+            f"{', '.join(MEMORY_INDEXING_CHOICES)}."
+        )
+    memory_read = memory.get("read", True)
+    if type(memory_read) is not bool:
+        raise ValueError(f"Intent {where!r} memory.read must be boolean.")
     retrieval = _object(where, data, "retrieval")
     reject_unknown(
         f"{where}.retrieval",
         retrieval,
-        ("mode", "strategy", "include_related_evidence", "max_tokens"),
+        (
+            "mode",
+            "strategy",
+            "include_related_evidence",
+            "prefer_source_code",
+            "max_tokens",
+            "max_sources",
+            "passages_per_source",
+            "max_passages",
+            "evidence_tokens",
+            "coverage",
+        ),
     )
 
     policy = history.get("policy", HISTORY_POLICY_RELEVANT)
@@ -545,6 +945,16 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
 
     # A tool replaces retrieval, so its intent defaults to no retrieval.
     tool = parse_tool(where, data["tool"]) if "tool" in data else None
+    thinking = data.get("thinking")
+    if thinking is not None and type(thinking) is not bool:
+        raise ValueError(
+            f"Intent {where!r} thinking must be true, false, or null."
+        )
+    if tool is not None and thinking is not None:
+        raise ValueError(
+            f"Intent {where!r} thinking must be null or omitted when "
+            "a tool writes the answer."
+        )
     mode = retrieval.get(
         "mode",
         RETRIEVAL_MODE_NONE if tool is not None else RETRIEVAL_MODE_SEARCH,
@@ -567,10 +977,52 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             f"{', '.join(RETRIEVAL_STRATEGY_CHOICES)}."
         )
 
+    numeric_limits = (
+        ("max_sources", 1, _MAX_SOURCES_LIMIT),
+        ("passages_per_source", 1, _PASSAGES_PER_SOURCE_LIMIT),
+        ("max_passages", 1, 200),
+        ("evidence_tokens", 1000, _MAX_DOCUMENT_TOKENS),
+    )
+    for key, minimum, maximum in numeric_limits:
+        if key not in retrieval:
+            continue
+        value = retrieval[key]
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError(
+                f"Intent {where!r} retrieval.{key} must be a whole "
+                f"number from {minimum} to {maximum}."
+            )
+    source_only = (
+        "max_sources", "passages_per_source", "max_passages",
+        "evidence_tokens", "coverage",
+    )
+    if any(key in retrieval for key in source_only) and (
+        strategy != RETRIEVAL_STRATEGY_SOURCE_FIRST
+        or mode != RETRIEVAL_MODE_SEARCH
+        or tool is not None
+    ):
+        raise ValueError(
+            f"Intent {where!r} source-first evidence limits require "
+            'retrieval.mode="search" and strategy="source_first".'
+        )
+    coverage = retrieval.get("coverage", "bounded")
+    if coverage not in COVERAGE_MODES:
+        raise ValueError(
+            f"Intent {where!r} retrieval.coverage must be bounded "
+            "or exhaustive."
+        )
+
     related = retrieval.get("include_related_evidence", False)
     if type(related) is not bool:
         raise ValueError(
             f"Intent {where!r} retrieval.include_related_evidence must be "
+            "true or false."
+        )
+
+    prefer_source = retrieval.get("prefer_source_code", False)
+    if type(prefer_source) is not bool:
+        raise ValueError(
+            f"Intent {where!r} retrieval.prefer_source_code must be "
             "true or false."
         )
 
@@ -588,15 +1040,7 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
     if guidance is not None and not isinstance(guidance, str):
         raise ValueError(f"Intent {where!r} answer_guidance must be text.")
 
-    shortcuts = []
-    for pattern in _texts(where, data, "shortcuts"):
-        try:
-            shortcuts.append(re.compile(pattern, re.IGNORECASE))
-        except re.error as error:
-            raise ValueError(
-                f"Intent {where!r} shortcut {pattern!r} is not a valid "
-                f"regular expression: {error}"
-            ) from error
+    shortcuts = _patterns(where, data, "shortcuts")
 
     return Intent(
         intent_id=intent_id,
@@ -609,69 +1053,22 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         history_policy=policy,
         retrieval_mode=mode,
         retrieval_strategy=strategy,
-        shortcuts=tuple(shortcuts),
+        shortcuts=shortcuts,
+        cues=_patterns(where, data, "cues"),
+        requires=_patterns(where, data, "requires"),
         include_related_evidence=related,
+        prefer_source_code=prefer_source,
         max_tokens=max_tokens,
         tool=tool,
+        thinking=thinking,
+        max_sources=retrieval.get("max_sources"),
+        passages_per_source=retrieval.get("passages_per_source"),
+        max_passages=retrieval.get("max_passages", 8),
+        evidence_tokens=retrieval.get("evidence_tokens", 5000),
+        coverage=coverage,
+        memory_indexing=memory_indexing,
+        memory_read=memory_read,
     )
-
-
-def _source_directory(type_id: str, data: dict) -> str:
-    """Validate the optional relative source-folder convention.
-
-    Parameters
-    ----------
-    type_id: str
-        Identifier used to contextualize validation errors.
-    data: dict
-        Parsed project-type definition.
-
-    Returns
-    -------
-    str
-        Portable relative directory path, defaulting to ``sources``.
-
-    Raises
-    ------
-    ValueError
-        If the value is not a nonempty relative POSIX path, contains unsafe
-        components, or names a managed non-source resource directory.
-
-    Notes
-    -----
-    This is a source-subdirectory convention, not permission to traverse
-    arbitrary paths. Explicit saved profile sources are resolved separately.
-
-    """
-
-    value = data.get("source_directory", _DEFAULT_SOURCE_DIRECTORY)
-    reserved = {"indexes", "logs", "outputs", "templates"}
-    if not isinstance(value, str) or not value:
-        raise ValueError(
-            f"Project type {type_id!r} needs a relative source_directory."
-        )
-    parts = value.split("/")
-    if (
-        PurePosixPath(value).is_absolute()
-        or PureWindowsPath(value).drive
-        or "\\" in value
-        or any(char in value for char in '<>:"|?*%')
-        or any(ord(char) < 32 or ord(char) == 127 for char in value)
-        or any(
-            part in {"", ".", ".."} or part != part.strip()
-            or part.endswith(".")
-            or re.fullmatch(
-                r"(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?",
-                part, re.IGNORECASE,
-            )
-            for part in parts
-        )
-        or parts[0].lower() in reserved
-    ):
-        raise ValueError(
-            f"Project type {type_id!r} has an unsafe source_directory."
-        )
-    return value
 
 
 def _parse_project_type(type_id: object, data: object) -> ProjectType:
@@ -714,16 +1111,19 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             "description",
             "extensions",
             "max_file_bytes",
-            "source_directory",
             "retrieval_instruction",
             "system_prompt",
             "capabilities",
             "history",
+            "conversation_memory",
+            "generation",
             "default_intent",
             "intents",
             "answer_guidance",
             "welcome_prompts",
+            "welcome_templates",
             "suggestions",
+            "suggestion_templates",
         ),
     )
     extensions = _texts(type_id, data, "extensions")
@@ -749,7 +1149,10 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
 
     # The type check rejects 1 and 0, which equal True and False.
     capabilities = _object(type_id, data, "capabilities")
-    reject_unknown(f"{type_id}.capabilities", capabilities, ("code_graph",))
+    reject_unknown(
+        f"{type_id}.capabilities", capabilities,
+        ("code_graph", "document_headers", "source_cards"),
+    )
     code_graph = capabilities.get("code_graph", CODE_GRAPH_AUTO)
     if code_graph not in CODE_GRAPH_CHOICES or type(code_graph) not in (
         bool,
@@ -760,8 +1163,49 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             'false, or "auto".'
         )
 
+    document_headers = capabilities.get("document_headers", False)
+    if type(document_headers) is not bool:
+        raise ValueError(
+            f"Project type {type_id!r}: capabilities.document_headers "
+            "must be true "
+            "or false."
+        )
+
+    source_cards = _object(type_id, capabilities, "source_cards")
+    reject_unknown(
+        f"{type_id}.capabilities.source_cards", source_cards,
+        ("enabled", "kind", "automatic"),
+    )
+    source_cards_enabled = source_cards.get("enabled", False)
+    source_cards_automatic = source_cards.get(
+        "automatic", source_cards_enabled
+    )
+    for setting in (source_cards_enabled, source_cards_automatic):
+        if type(setting) is not bool:
+            raise ValueError("Source-card project capability must be boolean.")
+    source_card_kind = source_cards.get("kind")
+    if source_card_kind is not None and (
+        not isinstance(source_card_kind, str)
+        or not re.fullmatch(r"[a-z][a-z0-9_]*", source_card_kind)
+    ):
+        raise ValueError("Source-card kind must be a snake-case identifier.")
+
     history = _object(type_id, data, "history")
-    reject_unknown(f"{type_id}.history", history, ("recent_turns",))
+    reject_unknown(
+        f"{type_id}.history", history,
+        ("recent_turns", "exclude_disliked_answers"),
+    )
+    if "exclude_disliked_answers" not in history:
+        raise ValueError(
+            f"Project type {type_id!r} requires "
+            "history.exclude_disliked_answers."
+        )
+    exclude_disliked = history["exclude_disliked_answers"]
+    if type(exclude_disliked) is not bool:
+        raise ValueError(
+            f"Project type {type_id!r} "
+            "history.exclude_disliked_answers must be boolean."
+        )
     recent_turns = history.get("recent_turns", _DEFAULT_RECENT_TURNS)
     if (
         type(recent_turns) is not int
@@ -771,6 +1215,85 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             f"Project type {type_id!r} history.recent_turns must be a whole "
             f"number from 0 to {_MAX_RECENT_TURNS}."
         )
+
+    if "conversation_memory" not in data:
+        raise ValueError(
+            f"Project type {type_id!r} requires conversation_memory."
+        )
+    memory = _object(type_id, data, "conversation_memory")
+    memory_fields = frozenset((
+        "enabled", "questions", "answers", "max_hits", "max_tokens",
+    ))
+    reject_unknown(f"{type_id}.conversation_memory", memory,
+                   memory_fields)
+    if set(memory) != memory_fields:
+        raise ValueError(
+            f"Project type {type_id!r} conversation_memory requires "
+            "enabled, questions, answers, max_hits, and max_tokens."
+        )
+    if type(memory["enabled"]) is not bool:
+        raise ValueError(
+            f"Project type {type_id!r} "
+            "conversation_memory.enabled must be boolean."
+        )
+    if memory["questions"] not in MEMORY_QUESTION_CHOICES:
+        raise ValueError(
+            f"Project type {type_id!r} conversation_memory.questions "
+            f"must be one of: {', '.join(MEMORY_QUESTION_CHOICES)}."
+        )
+    if memory["answers"] not in MEMORY_ANSWER_CHOICES:
+        raise ValueError(
+            f"Project type {type_id!r} conversation_memory.answers "
+            f"must be one of: {', '.join(MEMORY_ANSWER_CHOICES)}."
+        )
+    for key, minimum, maximum in (
+        ("max_hits", 1, _MEMORY_MAX_HITS_LIMIT),
+        ("max_tokens", _MEMORY_MIN_TOKENS, _MEMORY_MAX_TOKENS),
+    ):
+        value = memory[key]
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError(
+                f"Project type {type_id!r} conversation_memory.{key} "
+                f"must be a whole number from {minimum} to {maximum}."
+            )
+    memory_settings = ConversationMemorySettings(
+        enabled=memory["enabled"],
+        questions=memory["questions"],
+        answers=memory["answers"],
+        max_hits=memory["max_hits"],
+        max_tokens=memory["max_tokens"],
+    )
+
+    generation = _object(type_id, data, "generation")
+    reject_unknown(
+        f"{type_id}.generation", generation,
+        ("thinking", "temperature"),
+    )
+    thinking = generation.get("thinking")
+    if "thinking" in generation and type(thinking) is not bool:
+        raise ValueError(
+            f"Project type {type_id!r} generation.thinking must be "
+            "true or false."
+        )
+    temperature = generation.get("temperature")
+    if "temperature" in generation:
+        if type(temperature) not in (int, float):
+            raise ValueError(
+                f"Project type {type_id!r} generation.temperature must "
+                "be a finite nonnegative number."
+            )
+        try:
+            temperature = float(temperature)
+        except OverflowError as error:
+            raise ValueError(
+                f"Project type {type_id!r} generation.temperature must "
+                "be a finite nonnegative number."
+            ) from error
+        if not isfinite(temperature) or temperature < 0:
+            raise ValueError(
+                f"Project type {type_id!r} generation.temperature must "
+                "be a finite nonnegative number."
+            )
 
     raw_intents = _object(type_id, data, "intents")
     if not raw_intents:
@@ -791,7 +1314,6 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
 
     return ProjectType(
         id=type_id,
-        source_directory=_source_directory(type_id, data),
         display_name=_text(type_id, data, "display_name"),
         description=_text(type_id, data, "description"),
         extensions=extensions,
@@ -800,13 +1322,23 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         system_prompt=_text(type_id, data, "system_prompt"),
         code_graph=code_graph,
         recent_turns=recent_turns,
+        exclude_disliked_answers=exclude_disliked,
+        conversation_memory=memory_settings,
         default_intent=default_intent,
         intents=intents,
         answer_guidance=_text(
             type_id, data, "answer_guidance", required=False
         ),
         welcome_prompts=_texts(type_id, data, "welcome_prompts"),
+        welcome_templates=_welcome_templates(type_id, data),
         suggestions=_texts(type_id, data, "suggestions"),
+        suggestion_templates=_suggestion_templates(type_id, data, intents),
+        document_headers=document_headers,
+        source_cards_enabled=source_cards_enabled,
+        source_card_kind=source_card_kind,
+        source_cards_automatic=source_cards_automatic,
+        generation_thinking=thinking,
+        generation_temperature=temperature,
     )
 
 
@@ -917,3 +1449,60 @@ def project_type(type_id: ProjectTypeId) -> ProjectType:
         )
 
     return types[type_id]
+
+
+def with_project_routing(config: ProjectType, root: Path) -> ProjectType:
+    """Return a project type with the routing its tools derive per project.
+
+    A registered tool with ``routing`` (``generate_paper_summary``, from
+    the project's ``templates/``) adds cues and a router description to
+    its intent, so a template file added to the project is routed to
+    without editing the project type.
+
+    Parameters
+    ----------
+    config: ProjectType
+        The project's effective type.
+    root: pathlib.Path
+        The project's workspace.
+
+    Returns
+    -------
+    ProjectType
+        ``config`` itself when no tool adds routing; otherwise a copy whose
+        intents carry the added cues (compiled case-insensitively, after
+        their own) and description. A tool that fails to read the project
+        adds nothing.
+
+    """
+
+    intents: dict[str, Intent] = {}
+    changed = False
+    for intent_id, intent in config.intents.items():
+        tool = TOOL_REGISTRY[intent.tool.name] if intent.tool else None
+        routing = None
+        if tool is not None and tool.routing is not None:
+            others = tuple(
+                other.tool.settings
+                for other_id, other in config.intents.items()
+                if other_id != intent_id and other.tool is not None
+                and other.tool.name == intent.tool.name
+            )
+            try:
+                routing = tool.routing(intent.tool.settings, root, others)
+            except (OSError, ValueError):
+                routing = None
+        if routing is None or not (routing.cues or routing.description):
+            intents[intent_id] = intent
+            continue
+        changed = True
+        intents[intent_id] = replace(
+            intent,
+            cues=intent.cues + tuple(
+                re.compile(cue, re.IGNORECASE) for cue in routing.cues
+            ),
+            description=(
+                f"{intent.description} {routing.description}".strip()
+            ),
+        )
+    return replace(config, intents=intents) if changed else config

@@ -1,0 +1,239 @@
+{
+  "display_name": "Brainstorming (Creative)",
+  "description": "A creativity-first scientific brainstorming workspace for bold hypotheses, unexpected connections, radical thought experiments, and optional evidence-grounded exploration.",
+  "extensions": [
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".md",
+    ".txt",
+    ".tex",
+    ".bib",
+    ".bbl",
+    ".ipynb",
+    ".py",
+    ".m",
+    ".html"
+  ],
+  "max_file_bytes": 20971520,
+  "retrieval_instruction": "Find reliable project evidence that can spark or sharpen creative scientific hypotheses. Retrieve relevant premises, contrasts, unresolved questions, and surprising observations; do not restrict proposals to what the indexed sources already claim.",
+  "system_prompt": "You are a high-imagination scientific brainstorming partner, not a conservative referee. Your primary goal is to enlarge the researcher's space of possibilities. Be inventive, intellectually playful, and bold. Deliberately search for nonobvious mechanisms, counterintuitive causal models, new experimental principles, inversions of accepted assumptions, and transfers between remote disciplines. When ideas are requested, offer substantially different directions, including at least one daring long-shot or seemingly absurd thought experiment. Push past conventional answers instead of polishing the obvious. Turn unusual ideas into interesting mechanisms, distinctive predictions, or experimental signatures when useful, but do not force every idea into a proposal or feasibility assessment. Explore before evaluating. Let the researcher choose which ideas to pursue; do not impose rankings, risk scores, premature dismissals, or unsolicited literature reviews. Ground ideas in project sources when requested or needed to answer a factual question; otherwise freely speculate from the conversation. Clearly distinguish retrieved facts from invented hypotheses when confusion is possible, without filling creative discussion with repetitive cautions. Cite retrieved factual premises using the supplied [1], [2], etc. markers. Never imply that a citation establishes an original hypothesis, fabricate references, or claim to have established novelty in the literature. Respond to the researcher's feedback by becoming more radical, more concrete, or more grounded as requested.",
+  "answer_guidance": "Creativity takes priority in ideation. Unless the researcher requests otherwise, propose a small set of genuinely different possibilities (typically 3-5), with at least one wild-card idea that departs sharply from standard approaches. Favor generative leaps, meaningful tensions, and surprising connections over generic brainstorming lists. Give enough of a mechanism, intuition, or prediction to make each direction worth exploring. Be conversational and adaptive: invent, remix, deepen, and challenge rather than repeating a fixed template. Do not automatically fact-check, rank, dismiss, or overqualify an imaginative idea. For explicit evidence checks or factual research, be precise and source-grounded instead.",
+  "capabilities": {
+    "code_graph": "auto",
+    "document_headers": true,
+    "source_cards": {
+      "enabled": false,
+      "automatic": false
+    }
+  },
+  "history": {
+    "recent_turns": 6,
+    "exclude_disliked_answers": true
+  },
+  "conversation_memory": {
+    "enabled": true,
+    "questions": "all",
+    "answers": "selected",
+    "max_hits": 4,
+    "max_tokens": 2000
+  },
+  "generation": {
+    "temperature": 0.9,
+    "thinking": false
+  },
+  "default_intent": "open_ideation",
+  "intents": {
+    "evidence_check": {
+      "description": "Check a proposed idea or its factual assumptions against indexed project sources. Examples: \"which of these ideas are supported by the papers?\", \"does the evidence contradict this assumption?\" and \"check whether that mechanism is established\". Investigate evidence, not the overall worth of the research idea. Not for generating fresh speculative ideas (open_ideation or grounded_ideation).",
+      "cues": [
+        "\\b(?:verify|fact[ -]?check|check (?:the )?evidence)\\b",
+        "\\b(?:supported|contradicted|compatible)\\s+by\\s+(?:the\\s+)?(?:sources|papers|evidence|literature)\\b",
+        "\\b(?:do|does)\\s+(?:the\\s+)?(?:sources|papers|evidence|literature)\\s+(?:support|contradict)\\b"
+      ],
+      "system_prompt": "Investigate the user-selected claims against retrieved project evidence. Distinguish supported, contradicted, and not established by the available sources. Cite source numbers next to source-supported statements. A lack of support is not disproof; do not pretend that a bounded retrieval exhaustively establishes novelty or impossibility. Do not replace the researcher's judgement with an automatic rank or recommendation.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 10,
+        "passages_per_source": 3,
+        "max_passages": 30,
+        "evidence_tokens": 16000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "research_context": {
+      "description": "Find and explain established context in the indexed scientific sources before or during brainstorming. Examples: \"what do the papers say about X?\", \"find existing approaches to Y\", \"summarize the research context\". Not for checking a particular hypothesis (evidence_check) or for proposing fresh ideas from those sources (grounded_ideation).",
+      "cues": [
+        "\\bwhat\\s+do\\s+(?:the\\s+)?(?:papers|sources|studies|documents|literature)\\s+say\\b",
+        "\\b(?:find|summari[sz]e|review)\\s+(?:the\\s+)?(?:existing|current|published)\\s+(?:research|literature|approaches|methods)\\b"
+      ],
+      "system_prompt": "Explain what the retrieved project sources actually establish. Cite the relevant evidence numbers after factual statements, describe disagreements and limitations when present, and identify what is not covered. Do not present speculation as a published result or treat the indexed collection as an exhaustive survey of all research.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 10,
+        "passages_per_source": 3,
+        "max_passages": 30,
+        "evidence_tokens": 14000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "grounded_ideation": {
+      "description": "Create surprising and speculative research ideas using the indexed papers, notes, or source code as creative raw material, not boundaries. Examples: \"brainstorm wild ideas based on these papers\", \"use the project sources to find unexpected directions\", \"what new theories might explain these results?\". Cite premises, then explore beyond them. Not for reporting the literature alone or checking a specific claim.",
+      "cues": [
+        "\\b(?:brainstorm|ideas?|hypothes(?:is|es)|proposals?|suggest|generate|devise)\\b.{0,170}\\b(?:using|based on|grounded in|drawing on|from|in light of)\\s+(?:(?:the|my|our|these|project|indexed)\\s+){0,2}(?:sources|papers|studies|documents|literature|references|evidence)\\b",
+        "\\b(?:based on|using|drawing on|in light of)\\s+(?:(?:the|my|our|these|project|indexed)\\s+){0,2}(?:sources|papers|studies|documents|literature|references|evidence)\\b.{0,170}\\b(?:brainstorm|ideas?|hypothes(?:is|es)|proposals?|suggest|generate)\\b"
+      ],
+      "system_prompt": "Treat the retrieved literature as fuel for imagination, not as a list of permitted conclusions. Extract a few surprising observations, contradictions, unexplained patterns, or methodological opportunities and cite them as premises. Then make creative leaps far beyond the papers: reverse explanations, link distant fields, or posit novel mechanisms. Include at least one audacious proposal that the retrieved authors did not explicitly make, without claiming novelty has been verified. Clearly separate what the sources report from what you propose. Do not burden the brainstorming with an unsolicited critical review.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 10,
+        "passages_per_source": 3,
+        "max_passages": 30,
+        "evidence_tokens": 14000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "cross_domain": {
+      "description": "Invent analogies or transfers between fields, potentially far apart. Examples: \"connect protein folding to economics\", \"what could quantum control borrow from ecology?\", \"find unexpected cross-disciplinary ideas\". This is conceptual brainstorming without automatic project search; use grounded_ideation when the user wants sources consulted.",
+      "cues": [
+        "\\b(?:cross[- ]disciplin(?:ary|e)|cross[- ]domain|unexpected analog(?:y|ies)|analog(?:y|ies) between|borrow from another field)\\b"
+      ],
+      "system_prompt": "Deliberately connect distant fields, even when the analogy first seems far-fetched. Seek transferable mathematical structures, symmetry principles, emergent behaviors, feedback mechanisms, and novel experimental metaphors. Challenge the mismatches rather than concealing them: the interesting idea may emerge from where the analogy breaks. Offer at least one genuinely surprising bridge and a potential prediction or new tool it suggests. These are imaginative analogies, not claims that the fields are empirically equivalent.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      }
+    },
+    "challenge_assumptions": {
+      "description": "Find and invert assumptions, prohibitions, and established framing in an idea or research field. Examples: \"challenge our assumptions\", \"what if the usual model is wrong?\", \"reverse this hypothesis\". Expand the space of possible explanations without enforcing a feasibility verdict. No project retrieval unless separately requested.",
+      "cues": [
+        "\\b(?:challenge|question|reverse|invert)\\s+(?:(?:our|the|my|this)\\s+)?(?:assumptions?|premises?|hypotheses?)\\b",
+        "\\bwhat\\s+if\\b.{0,100}\\b(?:wrong|false|backwards|reversed)\\b"
+      ],
+      "system_prompt": "Expose assumptions that the field normally treats as invisible. Invert or remove one at a time, then explore the unexpected theory, method, or measurement that would become conceivable. Include radical counterfactuals before filtering for practicality. Move beyond saying that an assumption might be wrong: show what alternative explanatory world it would create and what distinctive outcomes could follow. Do not dismiss unconventional alternatives without the researcher requesting an evidence check.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      }
+    },
+    "develop_idea": {
+      "description": "Build on an earlier brainstorming proposal or a specified hypothesis: sharpen the mechanism, derive predictions, invent experiments, combine variants, or elaborate a plan. Examples: \"develop the third idea\", \"design a discriminating experiment\", \"push that hypothesis further\". Work from conversation and supplied context, unless the user asks to ground it in the project sources.",
+      "cues": [
+        "\\b(?:develop|flesh out|build on|expand on|push further|take further)\\s+(?:the|this|that|our|my)\\s+(?:idea|hypothesis|proposal|concept|third|first|second)\\b",
+        "\\b(?:design|propose)\\s+(?:a|an|some)\\s+(?:test|experiment|measurement)\\s+(?:for|to test|that distinguishes)\\b"
+      ],
+      "system_prompt": "Collaboratively expand the selected idea while protecting its creative core. Elaborate different possible mechanisms, unexpected consequences, ways to combine it with another concept, and discriminating observations or experiments when useful. If the user asks to be more radical, intentionally take the idea further instead of moderating it. Discuss obstacles or evidence only when useful to the requested task; technical detail never makes a speculative hypothesis established.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      }
+    },
+    "open_ideation": {
+      "description": "Generate bold, imaginative and even wild research hypotheses from the researcher's question, without needing citations or checking feasibility. Examples: \"brainstorm radical ideas\", \"what if the usual explanation were completely wrong?\", \"give me several truly out-of-the-box hypotheses\". This is the default intent. Choose grounded_ideation only when the researcher asks to use indexed sources; research_context or evidence_check for factual literature questions.",
+      "system_prompt": "Generate genuinely divergent hypotheses instead of safe variations on familiar approaches. Explore inversions of assumptions, surprising mechanisms, category-crossing analogies, and unusual research tools. Include at least one high-risk, highly imaginative wild-card direction rather than making every idea incrementally plausible. If the researcher wants to push a direction further, compound the leap instead of retreating to conventional suggestions. Offer a concrete consequence or discriminating observation for promising ideas, but do not impose feasibility tests or evidence searches unless requested. A hypothesis does not become a fact just because it has a clear mechanism.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      }
+    },
+    "small_talk": {
+      "thinking": false,
+      "description": "Only greetings, thanks, goodbyes, or pleasantries such as 'how are you?'. Any question about a term, name, method, the sources, an earlier answer, or the conversation itself is never small talk.",
+      "system_prompt": "Reply briefly and naturally to greetings and thanks. Do not generate research ideas unless the user asks for them.",
+      "answer_guidance": "Reply in one short sentence.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "shortcuts": [
+        "(hi|hello|hey|hiya|hej|yo|greetings|good (morning|afternoon|evening|day))( there| kilin)?",
+        "(thanks|thank you|thx|ty|cheers|many thanks)( (very|so) much| a lot| again)?",
+        "(ok|okay|great|cool|nice|perfect|got it|i see|awesome|sounds good)( thanks| thank you)?",
+        "how (are|r) (you|u)( doing)?( today)?",
+        "how('s| is) it going( today)?|how('s| is) your day( going)?|what'?s up|sup",
+        "(bye|goodbye|see you|see you later|good night|have a (nice|good) day)"
+      ],
+      "memory": {
+        "indexing": "never",
+        "read": false
+      }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files and what it does with them: how to add, upload, import, attach, drag, or remove files or folders ('how do I add my papers?', 'how to drag files', 'can I upload a folder?', 'what do you mean by adding files?', 'what do you do with my files?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "(how (do|can|should) i|how to|can i|where (do|should|can) i) (add|upload|import|attach|drag|drop|put|place|remove|delete)( and drop| in)? (my |a |the |some |more |new |these |this |our )?(whole |own |other )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?",
+        "what do you mean( by)? (add|adding|upload|uploading|attach|attaching|import|importing|sources?|files?)( .*)?",
+        "what (do|will|can) you do (with|to|for) (my|the|these|our) (files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
+      ]
+    }
+  },
+  "welcome_prompts": [
+    "What research problem shall we approach in a completely unconventional way?",
+    "Which established assumption should we overturn today?",
+    "Shall we invent ideas unconstrained by current methods or literature?",
+    "Paste an idea to push further, or ask what I can do for you."
+  ],
+  "welcome_templates": [
+    "What if we rethought {theme} from scratch?",
+    "Which assumption about {theme} should we overturn today?"
+  ],
+  "suggestions": [
+    "What can you do for me?",
+    "How do I add my files?",
+    "Invent five wildly different hypotheses about why we dream.",
+    "Invent five wildly different hypotheses about why we yawn.",
+    "Invent five wildly different hypotheses about why some birds migrate at night.",
+    "Invent five wildly different hypotheses about why music gives us chills.",
+    "Invent five wildly different hypotheses about why we laugh."
+  ],
+  "suggestion_templates": {
+    "research_context": "What do the papers say about {topic}?",
+    "open_ideation": "Invent five wildly different hypotheses about {topic}.",
+    "grounded_ideation": [
+      "Use my project papers as inspiration for unconventional hypotheses about {topic}.",
+      "Use {file} as inspiration for three unconventional hypotheses."
+    ],
+    "evidence_check": "Which premises about {topic} are supported by the project sources?",
+    "cross_domain": "Find a surprising connection between {topic} and an unrelated field.",
+    "challenge_assumptions": [
+      "What if the central assumption about {topic} were exactly backwards?",
+      "What if the central assumption of {file} were wrong?"
+    ],
+    "assistant_help": "What can you do for me?"
+  }
+}

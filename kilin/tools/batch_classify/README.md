@@ -23,6 +23,33 @@ This package owns the `batch_classify` registered tool. Its `defaults.json` is i
 - `REPLY_TOKENS_PER_SECOND` (default `25.0`): Estimated model generation throughput, tokens per second; planning only. Allowed range: 0.001–1000000000.0.
 - `REPLY_TOKENS_PER_ITEM` (default `25`): Reply tokens per item used by this tool during execution. Allowed range: 0–100000.
 - `PROMPT_OVERHEAD_TOKENS` (default `350`): Prompt overhead tokens used by this tool during execution. Allowed range: 0–100000.
-- `REPLY_TOKEN_LIMIT_PER_ITEM` (default `60`): Reply token limit per item used by this tool during execution. Allowed range: 1–100000.
 - `RETRY_GROUP` (default `8`): Maximum number of missing labels included in a classification retry. Allowed range: 1–10000.
 
+
+## Generation settings
+
+Output allowances come from the active session, including per-question GUI
+or API settings. They are ceilings for each model call, not target lengths
+or a total budget for a multi-call tool. Prose length is controlled by the
+prompt or report template; input passage budgets remain separate.
+
+`MODEL_CALLS` contains one key: `THINKING` (packaged value `"off"`).
+It accepts `inherit`, `on`, or `off` for internal `context.ask_model` calls.
+It never infers thinking from a token count. `context.write` always inherits
+main-session thinking. Router calls remain nonthinking and separately bounded.
+
+Thinking requests use the user's full allowance. Only nonthinking requests
+may use an explicit smaller cap, never exceeding the user's maximum.
+Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
+forces thinking and bypasses local short-response caps. Restart after editing
+cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
+for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+Incomplete batches remain unclassified while later batches continue. They do
+not enter the existing missing-label repair loop. Completed replies with
+missing labels still use that existing loop. Partial status and item-specific
+failure records distinguish unassessed mentions from classified categories.
+The shared internal adapter owns the eligible one-time nonthinking fallback;
+logical batch/repair counts are distinct from actual retry inference counts.

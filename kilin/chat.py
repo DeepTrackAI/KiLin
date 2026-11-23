@@ -17,7 +17,10 @@ Every reply renders the complete retained history. This layer does not
 summarize, truncate, persist, or retrieve old messages. A caller-specified
 generation limit takes precedence over the automatic remaining-context
 calculation. Explicit limits are not checked against the context size here.
-Tracing can retain prompts and answers according to the supplied sink.
+A per-reply thinking override changes only the chat-template request, not
+the configured session setting. Thinking control depends on the selected
+model and its template. Tracing can retain prompts and answers according
+to the supplied sink.
 
 Key Features
 ------------
@@ -86,14 +89,23 @@ can also be the model id.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import gc
 from importlib import import_module
 from math import isfinite
 from pathlib import Path
+import re
 from time import perf_counter
 from typing import Any, cast, Final, Literal, TYPE_CHECKING, TypeAlias
 
+from kilin._model_completion import (
+    GenerationCancelled,
+    IncompleteModelResponse,
+)
+from kilin.defaults import (
+    load_defaults_section,
+    require_default_lowercase_words,
+)
 from kilin.huggingface import cached_model_snapshot
 from kilin.runtime import (
     BACKEND_AUTO,
@@ -126,6 +138,56 @@ ASSISTANT_ROLE: Final[Role] = "assistant"
 
 _ROLES: Final[frozenset[Role]] = frozenset(
     (SYSTEM_ROLE, USER_ROLE, ASSISTANT_ROLE)
+)
+
+# Curated Unicode 17.0 Han, kana, Hangul, and Bopomofo ranges. Deliberately
+# exclude general punctuation, fullwidth Latin, and unrelated Asian scripts.
+# See docs/model_management.md for the coverage and tokenizer limitations.
+_CJK: Final[re.Pattern[str]] = re.compile(
+    "[\u1100-\u11ff\u2e80-\u2fdf\u3041-\u3096\u3099-\u309f"
+    "\u30a1-\u30fa\u30fc-\u30ff\u3105-\u312f\u3131-\u318e"
+    "\u31a0-\u31bf\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff"
+    "\ua960-\ua97f\uac00-\ud7a3\ud7b0-\ud7ff\uf900-\ufaff"
+    "\uff66-\uff9f\uffa0-\uffdc\U0001aff0-\U0001afff"
+    "\U0001b000-\U0001b16f\U00020000-\U0002a6df"
+    "\U0002a700-\U0002ee5f\U0002f800-\U0002fa1f"
+    "\U00030000-\U0003347f]"
+)
+_CJK_REQUEST_WORDS: Final = require_default_lowercase_words(
+    load_defaults_section("CHAT"), "CJK_REQUEST_WORDS", "CHAT"
+)
+_CJK_LANGUAGE = (
+    r"(?:" + "|".join(map(re.escape, sorted(_CJK_REQUEST_WORDS))) + r")s?"
+)
+_CJK_REQUEST: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:in|into|using)\s+(?:(?:simplified|traditional|the)\s+)*"
+    + _CJK_LANGUAGE + r"\b|"
+    r"\b(?:use|include|show|write|print|quote|give|provide|output)\s+"
+    r"(?:(?:me|a|the|some|its|original|simplified|traditional)\s+)*"
+    + _CJK_LANGUAGE + r"\b|"
+    r"\b" + _CJK_LANGUAGE
+    + r"\s+(?:for|translation|equivalent|characters?|spelling|version)\b|"
+    r"^\s*" + _CJK_LANGUAGE + r"(?:,?\s+(?:please|only))?[.!?]?\s*$",
+    re.IGNORECASE,
+)
+_CJK_NEGATIVE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:do\s+not|don['\u2019]t|never|avoid|without|no|exclude|stop)\b"
+    r"[^,.!?;\n]{0,80}\b" + _CJK_LANGUAGE + r"\b|"
+    r"\b" + _CJK_LANGUAGE
+    + r"(?:\s+\w+){0,3}\s+not\s+(?:needed|wanted|allowed|requested)\b",
+    re.IGNORECASE,
+)
+# Recognize common explicit switches away from CJK without treating every
+# occurrence of a language name as an instruction. This is not a parser.
+_LATIN_LANGUAGE = (
+    r"(?:english|french|german|spanish|italian|portuguese|swedish|"
+    r"norwegian|danish|dutch|finnish|icelandic|polish|czech|turkish|"
+    r"pinyin|romaji|romanized\s+\w+|latin(?:[- ]script|\s+letters)?)"
+)
+_NON_CJK_REQUEST: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:in|into|use|using)\s+(?:only\s+)?" + _LATIN_LANGUAGE
+    + r"\b|\b" + _LATIN_LANGUAGE + r"\s+(?:only|please)\b",
+    re.IGNORECASE,
 )
 
 if TYPE_CHECKING:
@@ -184,6 +246,10 @@ class ChatSession:
     trace: TraceSink | None, optional
         Caller-owned trace sink. None selects a NullTraceLogger. Content
         retention depends on the sink and its flags. Defaults to ``None``.
+    block_unrequested_cjk: bool, optional
+        Best-effort suppression of unsolicited Chinese, Japanese, and
+        Korean script tokens, based on user-authored text. Defaults to
+        ``True``.
 
     Attributes
     ----------
@@ -197,11 +263,14 @@ class ChatSession:
         Device used for generation, such as ``metal``, ``cuda``, ``mps``, or
         ``cpu``.
     thinking: bool
-        Whether compatible templates enable thinking output.
+        Configured thinking setting for compatible templates. A per-reply
+        override does not change this value.
     temperature: float
         Current sampling temperature.
     max_new_tokens: int | None
         Current session-level generation-length limit.
+    block_unrequested_cjk: bool
+        Whether unrequested Chinese, Japanese, and Korean tokens are blocked.
     messages: list[dict[str, str]]
         Ordered in-memory conversation history using the canonical roles.
     input_token_total: int
@@ -212,6 +281,9 @@ class ChatSession:
     last_finish_reason: str | None
         Why the latest generation stopped, such as ``"stop"`` or
         ``"length"``. Set by the first reply; MLX can also report None.
+    stop_requested: Callable[[], bool] | None
+        Checked after every generated token; when it returns True the reply
+        raises ``GenerationCancelled``. None, the default, never stops.
     trace: TraceSink
         Trace sink used by the session.
 
@@ -219,8 +291,8 @@ class ChatSession:
     -------
     configure_generation(settings, *, trace_turn_id=None)
         Update generation settings after validating all supplied values.
-    reply(message, *, max_new_tokens=None, trace_turn_id=None)
-        Generate, return, and retain one assistant reply.
+    reply(message, *, language_context=None, **generation_options)
+        Generate and retain a reply, with optional original-user context.
     reset()
         Reset the conversation while keeping the model loaded.
     restore_history(messages)
@@ -248,6 +320,22 @@ class ChatSession:
     do not create a separate security boundary. Backend and Hub errors may
     propagate without conversion to RuntimeError.
 
+    With ``block_unrequested_cjk``, token suppression reduces unsolicited
+    CJK output. Only original user messages authorize those scripts, by
+    using them or positively requesting them. Later negative directives or
+    explicit switches to English override earlier authorization. Merely
+    discussing Japanese, or requesting Latin-script pinyin, does not grant
+    permission. System instructions and assistant replies never grant it.
+    Supply ``reply(language_context=...)`` when the prompt contains evidence
+    or generated instructions; RAG and tool adapters do this automatically.
+
+    Suppression is best-effort, not a language guarantee: script detection
+    uses curated Unicode ranges and a deterministic request heuristic, and
+    characters assembled from multiple byte-level tokens can escape the
+    standalone-token mask. Ordinary punctuation and fullwidth Latin are not
+    suppressed. Disable the setting for workflows requiring unrestricted
+    multilingual quotations or tokenizer-specific handling.
+
     """
 
     model_id: str
@@ -256,6 +344,7 @@ class ChatSession:
     thinking: bool
     temperature: float
     max_new_tokens: int | None
+    block_unrequested_cjk: bool
     messages: list[dict[str, str]]
     _system_prompt: str | None
     _model: Model | None
@@ -264,6 +353,8 @@ class ChatSession:
     # Token totals start at zero; replies add to them on the instance.
     input_token_total: int = 0
     output_token_total: int = 0
+    # Set for one answer by its caller, so Stop can end any reply.
+    stop_requested: Callable[[], bool] | None = None
 
     def __init__(
         self: ChatSession,
@@ -277,6 +368,7 @@ class ChatSession:
         allow_download: bool = True,
         revision: str | None = None,
         trace: TraceSink | None = None,
+        block_unrequested_cjk: bool = True,
     ) -> None:
         """Initialize and load one chat session.
 
@@ -317,6 +409,9 @@ class ChatSession:
         trace: TraceSink | None, optional
             Caller-owned trace sink. None selects a NullTraceLogger. Content
             retention depends on the sink and its flags. Defaults to ``None``.
+        block_unrequested_cjk: bool, optional
+            Best-effort suppression of unsolicited Chinese, Japanese, and
+            Korean script tokens. Defaults to ``True``.
 
         Raises
         ------
@@ -345,6 +440,12 @@ class ChatSession:
         self.messages = self._new_history()
         self._model = None
         self._tokenizer = None
+        self.block_unrequested_cjk = _check_bool(
+            block_unrequested_cjk, "block_unrequested_cjk"
+        )
+        self._cjk_token_ids: tuple[int, ...] | None = None
+        self._block_cjk = False
+        self._last_prompt_opens_thinking = False
         self.device = ""
         self._load(
             allow_download=_check_bool(allow_download, "allow_download"),
@@ -535,8 +636,10 @@ class ChatSession:
         message: str,
         *,
         max_new_tokens: int | None = None,
+        thinking: bool | None = None,
         trace_turn_id: str | None = None,
         token_callback: Callable[[str], None] | None = None,
+        language_context: Sequence[str] | None = None,
     ) -> str:
         """Generate, return, and retain one assistant reply.
 
@@ -554,6 +657,11 @@ class ChatSession:
             Per-reply generation-length override. ``None`` uses the session
             setting and, if that is also ``None``, the remaining model context.
             Defaults to ``None``.
+        thinking: bool | None, optional
+            Per-reply thinking override passed to a compatible chat
+            template. ``None`` inherits the session setting; ``True`` or
+            ``False`` overrides it for this reply only. Does not change
+            ``self.thinking``, including on failure. Defaults to ``None``.
         trace_turn_id: str | None, optional
             Optional trace identifier associating emitted events and artifacts
             with the current conversation turn. Defaults to ``None``.
@@ -561,6 +669,13 @@ class ChatSession:
             Receives decoded text pieces as they are generated, for live
             display. MLX streams; PyTorch calls it once with the whole reply.
             Its exceptions propagate. Defaults to ``None``.
+        language_context: Sequence[str] | None, optional
+            Original user-authored messages, oldest first with the current
+            question last, used only for CJK permission. Supply this when
+            ``message`` contains retrieved or generated material. An empty
+            sequence grants no permission. ``None`` uses user-role history
+            plus ``message``, appropriate for direct chat. Defaults to
+            ``None``. System and assistant messages are never inspected.
 
         Returns
         -------
@@ -570,12 +685,20 @@ class ChatSession:
         Raises
         ------
         RuntimeError
-            If the session is closed or the model returns no usable text.
+            If the session is closed or generation fails at runtime.
+        IncompleteModelResponse
+            If generation ends without a usable model response. This
+            exception subclasses RuntimeError.
+        GenerationCancelled
+            If generation is stopped by the caller. This exception
+            subclasses BaseException, not Exception.
         ValueError
             If ``message`` is empty, ``max_new_tokens`` is invalid, the model
             context size is unavailable when needed, or the conversation has
             exhausted the model context.
-            Also raised when ``token_callback`` is not callable.
+            Also raised when ``thinking`` is neither a bool nor None,
+            ``token_callback`` is not callable, or
+            ``language_context`` is not a sequence of strings.
 
         Notes
         -----
@@ -598,6 +721,25 @@ class ChatSession:
         if token_callback is not None and not callable(token_callback):
             raise ValueError("token_callback must be callable or None.")
 
+        effective_thinking = (
+            self.thinking if thinking is None
+            else _check_bool(thinking, "thinking")
+        )
+
+        if language_context is None:
+            user_texts = [
+                item["content"] for item in self.messages
+                if item["role"] == USER_ROLE
+            ] + [message]
+        elif (
+            isinstance(language_context, (str, bytes))
+            or not isinstance(language_context, Sequence)
+            or not all(isinstance(text, str) for text in language_context)
+        ):
+            raise ValueError("language_context must be a sequence of text.")
+        else:
+            user_texts = language_context
+
         reply_started_at = perf_counter()
         token_override = _check_max_new_tokens(max_new_tokens)
         messages = [
@@ -611,7 +753,7 @@ class ChatSession:
                     messages,
                     tokenize=False,
                     add_generation_prompt=True,
-                    enable_thinking=self.thinking,
+                    enable_thinking=effective_thinking,
                 )
             except (TypeError, ValueError):
                 rendered_prompt = None
@@ -621,12 +763,16 @@ class ChatSession:
             tokenize=True,
             return_dict=False,
             add_generation_prompt=True,
-            enable_thinking=self.thinking,
+            enable_thinking=effective_thinking,
         )
         token_budget = token_override or self.max_new_tokens
         if token_budget is None:
             token_budget = self._remaining_context(len(tokens))
 
+        self._block_cjk = (
+            self.block_unrequested_cjk and not _allows_cjk(user_texts)
+        )
+        blocked = self._blocked_token_ids()
         input_data: dict[str, object] = {
             "call_id": self.trace.new_id("llm-call"),
             "call_count_for_question": 1,
@@ -640,15 +786,18 @@ class ChatSession:
             "roles": [item["role"] for item in messages],
             "input_token_count": len(tokens),
             "prompt_token_count": len(tokens),
-            "thinking": self.thinking,
+            "thinking": effective_thinking,
             "generation": {
                 "temperature": self.temperature,
                 "max_new_tokens": token_budget,
                 "sampling": self.temperature > 0,
+                "cjk_blocking_requested": self._block_cjk,
+                "cjk_tokens_blocked": bool(blocked),
+                "cjk_suppressed_token_count": len(blocked),
             },
             "chat_template": {
                 "add_generation_prompt": True,
-                "enable_thinking": self.thinking,
+                "enable_thinking": effective_thinking,
             },
         }
         artifact_stem = trace_turn_id or self.trace.new_id("chat-input")
@@ -678,6 +827,7 @@ class ChatSession:
         self._last_generation_output_token_count = None
         self._last_generation_token_count_source = None
         self.last_finish_reason = None
+        self._last_prompt_opens_thinking = False
         self.input_token_total += len(tokens)
         generation_started_at = perf_counter()
         with self.trace.span(
@@ -724,8 +874,33 @@ class ChatSession:
             perf_counter() - generation_started_at
         ) * 1000
 
+        # Some templates open <think> in the assistant prompt rather than
+        # generating the opening tag. Inspect the rendered prompt only when
+        # the response has no visible thinking delimiter to disambiguate it.
+        if (
+            effective_thinking and self.last_finish_reason == "length"
+            and isinstance(answer, str)
+            and "<think>" not in answer and "</think>" not in answer
+        ):
+            if rendered_prompt is None:
+                try:
+                    rendered_prompt = self._tokenizer.apply_chat_template(
+                        messages, tokenize=False,
+                        add_generation_prompt=True,
+                        enable_thinking=effective_thinking,
+                    )
+                except (TypeError, ValueError):
+                    rendered_prompt = None
+            self._last_prompt_opens_thinking = (
+                isinstance(rendered_prompt, str)
+                and rendered_prompt.rstrip().endswith("<think>")
+            )
+
         if not isinstance(answer, str) or not answer.strip():
-            raise RuntimeError("The model returned no text.")
+            raise IncompleteModelResponse(
+                "The model returned no text.", reason="empty_answer",
+                finish_reason=self.last_finish_reason,
+            )
 
         if (
             self.trace.enabled
@@ -870,6 +1045,11 @@ class ChatSession:
         sampling = import_module("mlx_lm.sample_utils")
         sampler = sampling.make_sampler(temp=self.temperature)
 
+        options: dict[str, object] = {}
+        blocked = self._blocked_token_ids()
+        if blocked:
+            options["logits_processors"] = [_mlx_token_blocker(blocked)]
+
         parts: list[str] = []
         generated = 0
         for response in mlx_lm.stream_generate(
@@ -878,6 +1058,7 @@ class ChatSession:
             prompt=tokens,
             max_tokens=token_budget,
             sampler=sampler,
+            **options,
         ):
             # Each response is one generated token, even when its text is
             # empty (part of a character still being decoded).
@@ -887,10 +1068,24 @@ class ChatSession:
             self.last_finish_reason = response.finish_reason
             if token_callback is not None and response.text:
                 token_callback(response.text)
+            if self._stopped():
+                raise GenerationCancelled("Stopped by the user.")
 
         self._last_generation_output_token_count = generated
         self._last_generation_token_count_source = "generated_tokens"
         return "".join(parts)
+
+    def _stopped(self: ChatSession) -> bool:
+        """Return whether the caller asked to stop the current reply.
+
+        Returns
+        -------
+        bool
+            True once ``stop_requested`` returns True.
+
+        """
+
+        return self.stop_requested is not None and bool(self.stop_requested())
 
     def _torch_reply(
         self: ChatSession,
@@ -935,8 +1130,40 @@ class ChatSession:
         }
         if self.temperature > 0:
             options["temperature"] = self.temperature
+        blocked = self._blocked_token_ids()
+        if blocked:
+            options["suppress_tokens"] = list(blocked)
+        if self.stop_requested is not None:
+
+            def stop(input_ids, scores, **kwargs):
+                """End generation for every sequence once Stop is pressed.
+
+                Parameters
+                ----------
+                input_ids: torch.Tensor
+                    Prompt and generated token IDs, one row per sequence.
+                scores: torch.Tensor
+                    Next-token scores; not used.
+                **kwargs: object
+                    Further arguments from ``generate``; not used.
+
+                Returns
+                -------
+                torch.Tensor
+                    One Boolean per sequence, True once stopped.
+
+                """
+
+                return torch.full(
+                    (input_ids.shape[0],), self._stopped(),
+                    dtype=torch.bool, device=input_ids.device,
+                )
+
+            options["stopping_criteria"] = [stop]
         with torch.inference_mode():
             output = model.generate(**options)
+        if self._stopped():
+            raise GenerationCancelled("Stopped by the user.")
         generated = output[0, len(tokens) :].tolist()
         self.output_token_total += len(generated)
 
@@ -1072,6 +1299,7 @@ class ChatSession:
 
         self._model = None
         self._tokenizer = None
+        self._cjk_token_ids = None
         self.reset()
         gc.collect()
         if self.backend == BACKEND_MLX:
@@ -1080,6 +1308,32 @@ class ChatSession:
             import_module("torch").cuda.empty_cache()
         elif self.device == "mps":
             import_module("torch").mps.empty_cache()
+
+    def _blocked_token_ids(self: ChatSession) -> tuple[int, ...]:
+        """Return the token IDs the next reply must not generate.
+
+        Returns
+        -------
+        tuple[int, ...]
+            IDs of vocabulary tokens containing Chinese, Japanese, or Korean
+            characters when blocking applies to the current input;
+            otherwise an empty tuple.
+
+        Notes
+        -----
+        The IDs are found once per loaded tokenizer by decoding every
+        vocabulary entry. A tokenizer without a ``get_vocab`` mapping
+        blocks nothing. Characters split across several byte-level tokens
+        are not blocked. No assumption is made about how often a tokenizer
+        uses that representation. Special tokens are never suppressed.
+
+        """
+
+        if not getattr(self, "_block_cjk", False):
+            return ()
+        if getattr(self, "_cjk_token_ids", None) is None:
+            self._cjk_token_ids = _cjk_token_ids(self._tokenizer)
+        return self._cjk_token_ids
 
     def _new_history(self: ChatSession) -> list[dict[str, str]]:
         """Create the initial conversation history.
@@ -1265,3 +1519,145 @@ def _check_system_prompt(value: str | None) -> str | None:
         raise ValueError("system_prompt must be non-empty text or None.")
 
     return value.strip()
+
+
+def _allows_cjk(user_messages: Sequence[str]) -> bool:
+    """Resolve best-effort CJK permission from user-authored text only.
+
+    Parameters
+    ----------
+    user_messages: Sequence[str]
+        Original user messages in chronological order. Retrieved material,
+        system instructions, and assistant output must not be included.
+
+    Returns
+    -------
+    bool
+        Whether CJK output was authorized. Later explicit directives
+        supersede earlier ones. A negative or non-CJK directive overrides
+        script characters quoted in the same message; an affirmative CJK
+        directive after it can explicitly reauthorize output.
+
+    Notes
+    -----
+    Ordinary mentions of a language are not requests to use its script.
+    This deterministic English-directive heuristic is not a general natural
+    language interpreter. Unspecified follow-ups retain the latest user
+    decision, including authorization from actual script use.
+
+    """
+
+    allowed = False
+    for text in user_messages:
+        negative = list(_CJK_NEGATIVE.finditer(text))
+        decisions = [(match.end(), False) for match in negative]
+        decisions.extend(
+            (match.end(), False) for match in _NON_CJK_REQUEST.finditer(text)
+        )
+        decisions.extend(
+            (match.end(), True)
+            for match in _CJK_REQUEST.finditer(text)
+            if not any(
+                item.start() <= match.start() < item.end()
+                for item in negative
+            )
+        )
+        if decisions:
+            # On an exact tie the restrictive directive wins.
+            allowed = max(decisions, key=lambda item: (item[0], not item[1]))[
+                1
+            ]
+        elif _CJK.search(text):
+            allowed = True
+    return allowed
+
+
+def _cjk_token_ids(tokenizer: object) -> tuple[int, ...]:
+    """Find vocabulary tokens that contain Chinese, Japanese, or Korean text.
+
+    Parameters
+    ----------
+    tokenizer: object
+        Loaded tokenizer with ``get_vocab`` and ``decode``.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Sorted token IDs whose decoded text contains such a character, or
+        an empty tuple when the vocabulary is unavailable.
+
+    """
+
+    get_vocab = getattr(tokenizer, "get_vocab", None)
+    vocabulary = get_vocab() if callable(get_vocab) else None
+    if not isinstance(vocabulary, dict):
+        return ()
+    decode = getattr(tokenizer, "decode", None)
+    if not callable(decode):
+        return ()
+    special = getattr(tokenizer, "all_special_ids", ())
+    special = (
+        set(special) if isinstance(special, (list, tuple, set)) else set()
+    )
+    token_ids = {
+        value for value in vocabulary.values()
+        if type(value) is int and value >= 0 and value not in special
+    }
+    found = []
+    for token_id in sorted(token_ids):
+        text = decode([token_id])
+        if isinstance(text, str) and _CJK.search(text):
+            found.append(token_id)
+    return tuple(found)
+
+
+def _mlx_token_blocker(
+    token_ids: tuple[int, ...],
+) -> Callable[[object, object], object]:
+    """Return an MLX logits processor that blocks the given tokens.
+
+    Parameters
+    ----------
+    token_ids: tuple[int, ...]
+        Token IDs that must not be generated.
+
+    Returns
+    -------
+    Callable[[object, object], object]
+        Processor taking the tokens so far and the next-token logits, and
+        returning the logits with the blocked tokens set to minus infinity.
+
+    """
+
+    mx = import_module("mlx.core")
+    numpy = import_module("numpy")
+    penalties: dict[tuple[int, str], object] = {}
+
+    def block(tokens: object, logits: object) -> object:
+        """Set the logits of blocked tokens to minus infinity.
+
+        Parameters
+        ----------
+        tokens: object
+            Tokens generated so far (unused).
+        logits: object
+            Next-token logits of shape ``(..., vocabulary)``.
+
+        Returns
+        -------
+        object
+            Logits with the blocked tokens excluded.
+
+        """
+
+        size = int(logits.shape[-1])  # type: ignore[attr-defined]
+        dtype = logits.dtype  # type: ignore[attr-defined]
+        key = (size, str(dtype))
+        if key not in penalties:
+            penalty = numpy.zeros(size, dtype=numpy.float32)
+            inside = [token for token in token_ids if 0 <= token < size]
+            penalty[inside] = -numpy.inf
+            penalties[key] = mx.array(penalty, dtype=dtype)
+        return logits + penalties[key]  # type: ignore[operator]
+
+    return block

@@ -28,8 +28,9 @@ Key Features
 
 - **Layout-aware splitting**
 
-    Numbered lists split at their numbers; others split after a line that
-    ends an entry (a year, volume and pages, a PMID, or a DOI).
+    Numbered lists split at their numbers. Author-year lists use author
+    headings, including wrapped author lists with the year on a later line.
+    Other lists split after a line that ends an entry.
 
 - **Page furniture removed**
 
@@ -51,9 +52,14 @@ Module Structure
 
     Return the paper's passages before its reference list.
 
+- ``ReferenceList`` and ``reference_lists``
+
+    Every reference list of a paper (a main and a supplementary one),
+    with its heading and entries.
+
 - ``reference_list``
 
-    Return the paper's reference list, found by its heading.
+    Return one of the paper's reference lists, found by its heading.
 
 - ``reference_entries`` and ``numbered_reference_entries``
 
@@ -89,30 +95,36 @@ Examples
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 import re
 from typing import Final
+import unicodedata
 
 from kilin.chunking import Chunk
 
 __all__ = [
     "ReferenceEntry",
     "ReferenceLayout",
+    "ReferenceList",
     "joined_text",
     "numbered_reference_entries",
     "pdf_text",
     "reference_body",
     "reference_entries",
     "reference_list",
+    "reference_lists",
 ]
 
-# The heading that starts a reference list; the last one in the paper wins.
+# The heading that starts a reference list, also for a supplementary or
+# methods list ("Supplementary References", "Methods references",
+# "References and Notes"). A paper can have several; the caller picks one.
 _REFERENCES_HEADING: Final[re.Pattern[str]] = re.compile(
-    r"^\s*#*\s*(references|bibliography|literature cited|works cited)"
-    r"\s*:?\s*$",
+    r"^\s*#*\s*(?:(?:supplementary|supplemental|additional|online|si|"
+    r"methods?)\s+)?(references(?:\s+and\s+notes)?|notes\s+and\s+references"
+    r"|bibliography|literature cited|works cited)\s*:?\s*$",
     flags=re.I | re.M,
 )
 # A numbered reference entry: "12. Smith, J. ...", "[12] Smith ...".
@@ -140,7 +152,8 @@ _LONE_NUMBER: Final[re.Pattern[str]] = re.compile(
 _RIGHT_COLUMN_SHARE: Final[float] = 0.25
 # Running heads and footers: "PLOS ONE | https://...", "12 / 25".
 _FURNITURE: Final[re.Pattern[str]] = re.compile(
-    r"\|\s*https?://|\b\d+\s*/\s*\d+\s*$"
+    r"\|\s*https?://|(?<![\w./])\d+\s*/\s*\d+\s*$"
+    r"|^\s*\d+\s+of\s+\d+(?!\d)"
 )
 # Headings after the reference list, where it ends: alone on the line, or
 # followed by text ("Acknowledgements This work ..."). Not "Methods", which
@@ -148,14 +161,81 @@ _FURNITURE: Final[re.Pattern[str]] = re.compile(
 _AFTER_REFERENCES: Final[re.Pattern[str]] = re.compile(
     r"^\s*#*\s*(acknowledge?ments?|author contributions|funding|competing "
     r"interests|additional information|supplementary information|data "
-    r"availability|code availability|appendix)\s*(?::|$|\s+[A-Z][a-z])",
+    r"availability|code availability|appendix|"
+    r"(?:supplementary|supplemental)\s+"
+    r"(?:methods?|results?|discussion))\s*(?::|$|\s+[A-Z][a-z])",
     flags=re.I,
 )
+# A table or figure caption after the list ("Table 1. ...", "Fig. 2 |",
+# "Supplementary Figure S3:"), where the list ends: its rows and legend
+# are not references.
+_CAPTION: Final[re.Pattern[str]] = re.compile(
+    r"^\s*#*\s*(?:supplementary\s+|extended\s+data\s+)?"
+    r"(?:table|fig\.?|figure|box)\s*S?\d+[a-z]?\s*(?:[.:|]|$|\s+[A-Z])",
+    flags=re.I,
+)
+# Most a printed entry number may skip ahead of the previous one (a
+# missing or merged entry); a larger jump, or a number going back, is a
+# number inside an entry ("…919–\n927. https://doi…"), not a new entry.
+_NUMBER_STEP_MAX: Final[int] = 3
 # A line ending inside a URL or DOI ("https://doi.org/10.1016/j.x.2013."),
 # which continues on the next line even when it looks like an entry end.
 _BROKEN_URL: Final[re.Pattern[str]] = re.compile(
     r"(?:https?://|doi\.\s*org/|\b10\.\d{4,9}/)\S*[./_-]\s*$"
 )
+# The start of an author-year entry: "Smith, J. A., ... (2020)" (APA,
+# Harvard), "Smith JA, Lee B, ..." or "Hunter JD. 2007." (eLife), "The
+# pandas development team. 2020."; in an unnumbered list it starts a new
+# entry once the entry before has its year.
+_SURNAME: Final[str] = (
+    r"(?:(?i:van|von|der|den|de|del|di|da|du|la|le)\s+)*"
+    r"[^\W\d_a-zß-ÿ][\w'’\-]*(?:\s+[^\W\d_a-zß-ÿ][\w'’\-]*)?"
+)
+# The year must follow a sequence of surnames and initials, not a title
+# with a parenthesized year near its end ("Smith, J. Title ... (2020)").
+_APA_INITIALS: Final[str] = r"[A-Z]\.(?:\s*-?\s*[A-Z]\.)*"
+_APA_AUTHOR: Final[str] = rf"{_SURNAME},\s+{_APA_INITIALS}"
+_ELIFE_AUTHOR: Final[str] = (
+    rf"{_SURNAME}\s+[A-Z]{{1,3}}(?:-[A-Z]{{1,2}})?"
+)
+# The first line of a wrapped author list may not yet contain its year.
+# Start a new unnumbered entry at such a line only after the previous
+# entry's date is already known. The following author lines belong to
+# the new entry until its date is read.
+_WRAPPED_AUTHOR_HEAD: Final[re.Pattern[str]] = re.compile(
+    rf"^{_APA_AUTHOR}(?:,\s*(?:&\s*|and\s+)?{_APA_AUTHOR})+"
+    r"(?:,\s*(?:&|and)?)?\s*$"
+    rf"|^{_ELIFE_AUTHOR}(?:,\s*{_ELIFE_AUTHOR})+\s*,?\s*$"
+)
+_AUTHOR_YEAR_HEAD: Final[re.Pattern[str]] = re.compile(
+    rf"^{_APA_AUTHOR}(?:,?\s*(?:,|and\s+|&\s+)?{_APA_AUTHOR})*"
+    r"\s*\((?:19|20)\d\d[a-z]?\)"
+    rf"|^{_SURNAME}\s+[A-Z]{{1,3}}(?:-[A-Z]{{1,2}})?(?:,\s+{_SURNAME}\s+[A-Z]"
+    r"|\.\s+(?:19|20)\d\d[a-z]?\.)"
+    r"|^(?:The\s+)?[A-Z][\w-]*(?:\s+[\w-]+){0,4}\.\s+(?:19|20)\d\d[a-z]?\.\s"
+)
+# The year of an author-year entry: "(2020)", or "2020." before the title.
+_ENTRY_HAS_YEAR: Final[re.Pattern[str]] = re.compile(
+    r"\((?:19|20)\d\d[a-z]?\)|\b(?:19|20)\d\d[a-z]?\.(?=\s|$)"
+)
+# A number broken off the line before: the rest of a PMID ("PMID: 1772" /
+# "8438"), a DOI or URL ("joss." / "02668"), or a page range ("p. 87–" /
+# "90.").
+_OPEN_RANGE: Final[re.Pattern[str]] = re.compile(r"\d\s*[–-]\s*$")
+_SHORT_PMID: Final[re.Pattern[str]] = re.compile(r"PMID:\s*\d{1,6}\s*$")
+_DIGITS_LINE: Final[re.Pattern[str]] = re.compile(r"^\s*\d+\.?\s*$")
+_BARE_DIGITS: Final[re.Pattern[str]] = re.compile(r"^\s*\d+\s*$")
+# Accents printed apart from their letter ("Fu¨ rth", "Rı´o", "Carle´ n").
+_SPACING_ACCENT: Final[re.Pattern[str]] = re.compile(
+    r"([A-Za-zı])\s?([¨´`ˆ˜¸])\s?(?=\w)"
+)
+_COMBINING: Final[dict[str, str]] = {
+    "¨": "\u0308", "´": "\u0301", "`": "\u0300", "ˆ": "\u0302",
+    "˜": "\u0303", "¸": "\u0327",
+}
+# A list with fewer printed numbers than this share of its entries is
+# unnumbered: those few are stray numbers.
+_PRINTED_SHARE_MIN: Final[float] = 0.5
 # A line that always continues the entry before it (its DOI or PMID).
 _CONTINUATION: Final[re.Pattern[str]] = re.compile(
     r"^\s*(?:https?://|doi\b|pmid\b|pmcid\b)", re.I
@@ -219,8 +299,51 @@ class ReferenceEntry:
     printed: bool
 
 
-def reference_body(passages: Sequence[Chunk]) -> tuple[Chunk, ...]:
-    """Return the paper's passages before its reference list.
+@dataclass(frozen=True, slots=True)
+class ReferenceList:
+    """One reference list of a paper, as found by its heading.
+
+    Attributes
+    ----------
+    index: int
+        Its position among the paper's lists, from zero.
+    heading: str
+        The heading as printed ("References", "Supplementary References").
+    entries: tuple[ReferenceEntry, ...]
+        Its entries (``numbered_reference_entries``).
+
+    """
+
+    index: int
+    heading: str
+    entries: tuple[ReferenceEntry, ...]
+
+    @property
+    def label(self) -> str:
+        """Return a short description for asking the user.
+
+        Returns
+        -------
+        str
+            The heading, the entry count and the number range, such as
+            "Supplementary References (12 entries, 1–12)".
+
+        """
+
+        if not self.entries:
+            return f"{self.heading} (no entries)"
+        first, last = self.entries[0].number, self.entries[-1].number
+        count = len(self.entries)
+        return (
+            f"{self.heading} ({count} "
+            f"{'entry' if count == 1 else 'entries'}, {first}–{last})"
+        )
+
+
+def reference_body(
+    passages: Sequence[Chunk], which: int = -1
+) -> tuple[Chunk, ...]:
+    """Return the paper's passages that cite one of its reference lists.
 
     In-text citations are looked for here, so the reference list's own
     numbers are not mistaken for citations.
@@ -229,45 +352,156 @@ def reference_body(passages: Sequence[Chunk]) -> tuple[Chunk, ...]:
     ----------
     passages: Sequence[Chunk]
         The paper's passages, in order.
+    which: int, optional
+        The reference list, as an index into the paper's lists (``-1``,
+        the default, is the last).
 
     Returns
     -------
     tuple[Chunk, ...]
-        The passages before the last "References" (or "Bibliography",
-        "Literature cited", "Works cited") heading; the passage holding the
-        heading is cut just before it. Every passage when there is no
-        heading. Text after the reference list (figure legends printed at
-        the end, for example) is not included.
+        The passages before that list's heading ("References",
+        "Supplementary References", ...); the passage holding the heading
+        is cut just before it. For a later list, only the text after the
+        end of the list before it (a supplement citing its own list).
+        Every passage when there is no heading. Text after the list
+        (figure legends printed at the end, for example) is not included.
 
     """
 
-    for index in range(len(passages) - 1, -1, -1):
-        headings = list(_REFERENCES_HEADING.finditer(passages[index].text))
-        if not headings:
-            continue
+    headings = [
+        (index, match)
+        for index, passage in enumerate(passages)
+        for match in _REFERENCES_HEADING.finditer(passage.text)
+    ]
+    if not headings:
+        return tuple(passages)
+    try:
+        index, match = headings[which]
+    except IndexError:
+        index, match = headings[-1]
+    position = headings.index((index, match))
 
-        start = headings[-1].start()
-        kept = passages[index].text[:start]
-        body = tuple(passages[:index])
-        if kept.strip():
-            body += (
-                replace(
-                    passages[index],
-                    text=kept,
-                    end_line=passages[index].start_line + kept.count("\n"),
-                ),
-            )
+    body = _cut_before(passages, index, match.start())
+    if position == 0:
         return body
 
-    return tuple(passages)
+    # A later list's citing text starts where the list before it ends.
+    previous_index, previous = headings[position - 1]
+    stop = _list_end(passages, previous_index, previous.end())
+    if stop is None:
+        return body[previous_index:] if previous_index < len(body) else ()
+    stop_index, offset = stop
+    kept = list(body[stop_index:])
+    if kept:
+        first = kept[0]
+        head = first.text[:offset]
+        kept[0] = replace(
+            first,
+            text=first.text[offset:],
+            start_line=first.start_line + head.count("\n"),
+        )
+    return tuple(passage for passage in kept if passage.text.strip())
+
+
+def _cut_before(
+    passages: Sequence[Chunk], index: int, offset: int
+) -> tuple[Chunk, ...]:
+    """Return the passages up to a position, the last one cut there.
+
+    Parameters
+    ----------
+    passages: Sequence[Chunk]
+        The paper's passages, in order.
+    index: int
+        The passage holding the position.
+    offset: int
+        Where to cut in its text.
+
+    Returns
+    -------
+    tuple[Chunk, ...]
+        The passages before ``index``, and the start of passage ``index``
+        when it has text before ``offset``.
+
+    """
+
+    kept = passages[index].text[:offset]
+    body = tuple(passages[:index])
+    if kept.strip():
+        body += (
+            replace(
+                passages[index],
+                text=kept,
+                end_line=passages[index].start_line + kept.count("\n"),
+            ),
+        )
+    return body
+
+
+def _list_end(
+    passages: Sequence[Chunk], index: int, offset: int
+) -> tuple[int, int] | None:
+    """Find where a reference list that starts at a position ends.
+
+    Parameters
+    ----------
+    passages: Sequence[Chunk]
+        The paper's passages, in order.
+    index: int
+        The passage holding the list's heading.
+    offset: int
+        The end of the heading in its text.
+
+    Returns
+    -------
+    tuple[int, int] | None
+        The passage and offset of the first line that ends the list
+        (``_ends_list``); None when no line does.
+
+    """
+
+    for number in range(index, len(passages)):
+        text = passages[number].text
+        start = offset if number == index else 0
+        position = start
+        for line in text[start:].splitlines(keepends=True):
+            if _ends_list(line):
+                return number, position
+            position += len(line)
+    return None
+
+
+def _ends_list(line: str) -> bool:
+    """Return whether a line ends a reference list.
+
+    Parameters
+    ----------
+    line: str
+        A line after the list's heading.
+
+    Returns
+    -------
+    bool
+        True for a following heading ("Acknowledgements", "Supplementary
+        information"), a table or figure caption, or another reference
+        list's heading.
+
+    """
+
+    return bool(
+        _AFTER_REFERENCES.match(line)
+        or _CAPTION.match(line)
+        or _REFERENCES_HEADING.match(line)
+    )
 
 
 def reference_list(
     passages: Sequence[Chunk],
     layout: ReferenceLayout,
     file: Path | None = None,
+    which: int = -1,
 ) -> str:
-    """Return the paper's reference list, found by its heading.
+    """Return one of the paper's reference lists, found by its heading.
 
     Parameters
     ----------
@@ -280,12 +514,16 @@ def reference_list(
         page layout in column order (``pdf_text``), because extracted text
         can interleave the columns of a two-column list. Defaults to
         ``None``: the passages' text.
+    which: int, optional
+        The list, as an index into the paper's lists (``-1``, the
+        default, is the last).
 
     Returns
     -------
     str
-        Text after the last "References" (or "Bibliography", "Literature
-        cited", "Works cited") heading, ``layout.max_characters`` at most;
+        Text after that list's heading ("References", "Supplementary
+        References", "Bibliography", "Literature cited", "Works cited"), up
+        to the next list's heading and ``layout.max_characters`` at most;
         empty when there is none. Lines that overlapping passages repeat
         are included once. The passages are used when the PDF cannot be
         read or has no such heading.
@@ -296,9 +534,68 @@ def reference_list(
     headings = list(_REFERENCES_HEADING.finditer(text))
     if not headings:
         return ""
+    try:
+        heading = headings[which]
+    except IndexError:
+        heading = headings[-1]
+    position = headings.index(heading)
 
-    start = headings[-1].end()
-    return text[start : start + layout.max_characters].strip()
+    start = heading.end()
+    stop = (
+        headings[position + 1].start()
+        if position + 1 < len(headings) else len(text)
+    )
+    stop = min(stop, start + layout.max_characters)
+    return text[start:stop].strip()
+
+
+def reference_lists(
+    passages: Sequence[Chunk],
+    layout: ReferenceLayout,
+    file: Path | None = None,
+    *,
+    accept_short: Callable[[str], bool] | None = None,
+) -> list[ReferenceList]:
+    """Return every reference list of the paper that has entries.
+
+    A manuscript can print a main and a supplementary list, each numbered
+    from 1; a citation number then means a different entry in each, so
+    the caller checks one list and, when there are several, asks which.
+
+    Parameters
+    ----------
+    passages: Sequence[Chunk]
+        The paper's passages, in order.
+    layout: ReferenceLayout
+        The caller's thresholds.
+    file: pathlib.Path | None, optional
+        The paper on disk, for a PDF's column order. Defaults to ``None``.
+    accept_short: Callable[[str], bool] | None, optional
+        As for ``numbered_reference_entries``.
+
+    Returns
+    -------
+    list[ReferenceList]
+        In the paper's order; lists without entries (a heading in a table
+        of contents, for example) are left out, but ``index`` still counts
+        them, so it can be passed as ``which``.
+
+    """
+
+    text = _source_text(passages, file)
+    found: list[ReferenceList] = []
+    for index, heading in enumerate(_REFERENCES_HEADING.finditer(text)):
+        entries = numbered_reference_entries(
+            passages, layout, file, accept_short=accept_short, which=index
+        )
+        if entries:
+            found.append(
+                ReferenceList(
+                    index, " ".join(heading.group(0).split()).strip("#: "),
+                    tuple(entries),
+                )
+            )
+    return found
 
 
 def reference_entries(
@@ -335,8 +632,11 @@ def numbered_reference_entries(
     passages: Sequence[Chunk],
     layout: ReferenceLayout,
     file: Path | None = None,
+    *,
+    accept_short: Callable[[str], bool] | None = None,
+    which: int = -1,
 ) -> list[ReferenceEntry]:
-    """Split the paper's reference list into numbered entries.
+    """Split one of the paper's reference lists into numbered entries.
 
     Parameters
     ----------
@@ -347,6 +647,13 @@ def numbered_reference_entries(
     file: pathlib.Path | None, optional
         The paper on disk, for a PDF's column order (``reference_list``).
         Defaults to ``None``.
+    accept_short: Callable[[str], bool] | None, optional
+        Optional rule retaining an explicitly numbered short citation
+        that carries enough bibliographic information for the caller.
+        The default preserves the original minimum-word filtering.
+    which: int, optional
+        The list, as an index into the paper's lists (``-1``, the
+        default, is the last).
 
     Returns
     -------
@@ -357,19 +664,35 @@ def numbered_reference_entries(
         ("12. ...", "[12] ...") and no number stands alone, a new entry
         starts at each number; otherwise (as two-column PDFs print them)
         also after a line that ends an entry (a year, volume and pages, a
-        PMID, or a DOI), unless the next line is a DOI or PMID. Numbers
-        printed alone ("6.", "7.") are given, in order, to the entries
-        that start without one. Page numbers, running heads and footers
-        (short lines repeated ``layout.running_line_repeats`` or more times
-        in the paper), and entries of fewer than ``layout.entry_min_words``
-        words are dropped; the list stops at a following heading such as
-        "Acknowledgements". An entry without a printed number takes the
-        number after the previous entry's (``printed`` is then False).
-        Empty when the paper has no reference list.
+        PMID, or a DOI), unless the next line is a DOI or PMID (a URL or
+        DOI broken over lines is joined without a space), and at a
+        line that starts like an author-year entry ("Smith, J. A., ...
+        (2020)", "Smith JA, Lee B, ...", "Hunter JD. 2007.") once the entry
+        before has its year. In an unnumbered author-year list, a single
+        recognizable entry head is enough to keep following title lines
+        with that entry; ``numbered_entries_min`` applies only to numbered
+        lists. Numbers broken off a PMID, DOI or page range are joined
+        back, and accents
+        printed apart from their letters ("Fu¨ rth") are joined. A number
+        that does not follow the previous entry's (more than
+        ``_NUMBER_STEP_MAX`` ahead, or back) starts no entry: it is part
+        of the entry ("…919–\\n927. https://doi…"); a list that starts
+        again at 1 ends there. Numbers printed alone ("6.", "7.") are
+        given, in order, to the entries that start without one. Page
+        numbers, running heads and footers (short lines repeated
+        ``layout.running_line_repeats`` or more times in the paper), and
+        entries of fewer than ``layout.entry_min_words`` words are dropped
+        unless an explicitly numbered short entry passes
+        ``accept_short``. The list stops at a following heading such as
+        "Acknowledgements", a table or figure caption, or another list's
+        heading. An entry without a printed number takes the number after
+        the previous entry's (``printed`` is then False); when fewer than
+        half the entries print one, the list is numbered in order and none
+        counts as printed. Empty when the paper has no reference list.
 
     """
 
-    lines = reference_list(passages, layout, file).splitlines()
+    lines = reference_list(passages, layout, file, which).splitlines()
 
     # Running heads and footers repeat across pages; drop them first. They
     # are counted in the text the list was read from.
@@ -382,22 +705,36 @@ def numbered_reference_entries(
         line for line in lines
         if repeats[" ".join(line.split())] < layout.running_line_repeats
     ]
+    lines = _joined_numbers([_accents_joined(line) for line in lines])
 
     numbered = sum(bool(_ENTRY_START.match(line)) for line in lines)
-    by_number = numbered >= layout.numbered_entries_min and not any(
-        _LONE_NUMBER.match(line) for line in lines
+    lone_numbers = any(_LONE_NUMBER.match(line) for line in lines)
+    by_number = numbered >= layout.numbered_entries_min and not lone_numbers
+    # Author-year lists need head-based splitting even when short. A
+    # wrapped author line without its year also signals a possible head.
+    # Keep the numeric threshold for numbered lists only.
+    by_head = not numbered and not lone_numbers and any(
+        _AUTHOR_YEAR_HEAD.match(line.strip())
+        or _WRAPPED_AUTHOR_HEAD.match(line.strip())
+        for line in lines
     )
 
     # The list in order: entries (printed number or None, lines) and the
     # numbers printed alone, which belong to entries without a number.
     sequence: list[tuple[int | None, list[str]] | int] = []
     complete = True
+    last_printed: int | None = None
     for line in lines:
-        if _AFTER_REFERENCES.match(line):
+        if _ends_list(line):
             break
 
         if lone_number := _LONE_NUMBER.match(line):
-            sequence.append(int(lone_number.group(1) or lone_number.group(2)))
+            number = int(lone_number.group(1) or lone_number.group(2))
+            sequence.append(number)
+            if last_printed is None or (
+                last_printed < number <= last_printed + _NUMBER_STEP_MAX
+            ):
+                last_printed = number
             continue
 
         if (
@@ -408,12 +745,27 @@ def numbered_reference_entries(
             continue
 
         match = _ENTRY_START.match(line)
+        if match and last_printed is not None:
+            number = int(match.group(1) or match.group(2))
+            if number == 1 and last_printed >= layout.numbered_entries_min:
+                break  # Numbering starts again: another list.
+            if not last_printed < number <= last_printed + _NUMBER_STEP_MAX:
+                match = None  # A number inside the entry.
         text = (match.group(3) if match else line).strip()
         entries = [item for item in sequence if isinstance(item, tuple)]
         if not entries or match or (
-            not by_number and complete and not _CONTINUATION.match(text)
+            not by_number and not by_head and complete
+            and not _CONTINUATION.match(text)
+        ) or (
+            not by_number and (
+                _AUTHOR_YEAR_HEAD.match(text)
+                or (by_head and _WRAPPED_AUTHOR_HEAD.match(text))
+            )
+            and _ENTRY_HAS_YEAR.search(" ".join(entries[-1][1]))
         ):
             number = int(match.group(1) or match.group(2)) if match else None
+            if number is not None:
+                last_printed = number
             sequence.append((number, [text]))
         else:
             entries[-1][1].append(text)
@@ -428,9 +780,15 @@ def numbered_reference_entries(
         if isinstance(item, int):
             kept.append(item)
             continue
-        joined = re.sub(r"-\s+(?=[a-z])", "", " ".join(item[1]))
+        joined = re.sub(r"-\s+(?=[a-z])", "", _lines_joined(item[1]))
         joined = " ".join(joined.split())
-        if len(joined.split()) >= layout.entry_min_words:
+        if (
+            len(joined.split()) >= layout.entry_min_words
+            or (
+                item[0] is not None
+                and accept_short is not None and accept_short(joined)
+            )
+        ):
             kept.append((item[0], joined))
 
     numbers: dict[int, int] = {}
@@ -453,7 +811,114 @@ def numbered_reference_entries(
         previous = number if number is not None else previous + 1
         cleaned.append(ReferenceEntry(previous, item[1], number is not None))
 
+    printed = sum(entry.printed for entry in cleaned)
+    if printed < _PRINTED_SHARE_MIN * len(cleaned):
+        # A few stray numbers in an unnumbered list: number it in order.
+        cleaned = [
+            ReferenceEntry(position, entry.text, False)
+            for position, entry in enumerate(cleaned, start=1)
+        ]
     return cleaned
+
+
+def _lines_joined(lines: Sequence[str]) -> str:
+    """Return an entry's lines as one text.
+
+    Parameters
+    ----------
+    lines: Sequence[str]
+        The entry's lines, in order.
+
+    Returns
+    -------
+    str
+        The lines joined by spaces, except after a line that ends inside
+        a URL or DOI ("https://doi." / "org/10.1101/...", "10.1038/" /
+        "s41467-...", "j.neuron." / "2019.04.034"), which the next line
+        continues without one.
+
+    """
+
+    text = ""
+    for line in lines:
+        if text and not _BROKEN_URL.search(text):
+            text += " "
+        text += line.strip()
+    return text
+
+
+def _accents_joined(line: str) -> str:
+    """Return a line with accents printed apart joined to their letters.
+
+    Parameters
+    ----------
+    line: str
+        A line of extracted text.
+
+    Returns
+    -------
+    str
+        With "u¨ " written "ü", "ı´" written "í", "e´ " written "é"
+        (``_SPACING_ACCENT``), in composed form.
+
+    """
+
+    def joined(match: re.Match[str]) -> str:
+        """Return one letter with its accent.
+
+        Parameters
+        ----------
+        match: re.Match[str]
+            A letter, an accent printed apart, and spaces around it.
+
+        Returns
+        -------
+        str
+            The accented letter, composed.
+
+        """
+
+        letter = "i" if match.group(1) == "ı" else match.group(1)
+        return unicodedata.normalize(
+            "NFC", letter + _COMBINING[match.group(2)]
+        )
+
+    return _SPACING_ACCENT.sub(joined, line)
+
+
+def _joined_numbers(lines: list[str]) -> list[str]:
+    """Return lines with numbers broken off the line before joined to it.
+
+    Parameters
+    ----------
+    lines: list[str]
+        The reference list's lines.
+
+    Returns
+    -------
+    list[str]
+        A line of digits is appended to the line before when that one
+        ends in an open page range ("p. 87–" / "90."), or, without a full
+        stop, in a PMID too short to be whole ("PMID: 1772" / "8438") or
+        inside a URL or DOI ("joss." / "02668"), so it is not taken for an
+        entry number; numbers printed alone with a full stop ("6.") in a
+        two-column list are kept.
+
+    """
+
+    joined: list[str] = []
+    for line in lines:
+        if joined and (
+            (_DIGITS_LINE.match(line) and _OPEN_RANGE.search(joined[-1]))
+            or (_BARE_DIGITS.match(line) and (
+                _SHORT_PMID.search(joined[-1])
+                or _BROKEN_URL.search(joined[-1])
+            ))
+        ):
+            joined[-1] = joined[-1].rstrip() + line.strip()
+        else:
+            joined.append(line)
+    return joined
 
 
 def _source_text(passages: Sequence[Chunk], file: Path | None) -> str:

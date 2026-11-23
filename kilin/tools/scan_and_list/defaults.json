@@ -7,5 +7,8 @@
   },
   "HEURISTICS": {
     "UNSEARCHABLE_EXAMPLES": 5
+  },
+  "MODEL_CALLS": {
+    "THINKING": "inherit"
   }
 }

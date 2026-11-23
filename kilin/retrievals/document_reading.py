@@ -138,6 +138,24 @@ _CHARACTERS_PER_TOKEN: Final[int] = require_default_int(
 _MIN_STEM_LENGTH: Final[int] = require_default_int(
     _RETRIEVAL_DEFAULTS, "MIN_DOCUMENT_STEM_LENGTH", "RETRIEVAL"
 )
+# Nouns that mark the word before them as an author ("smith paper").
+_DOCUMENT_NOUNS: Final[str] = (
+    r"(?:paper|article|study|review|preprint|book|thesis|report|chapter|"
+    r"manuscript|work)s?(?![a-z])"
+)
+# Nouns that mark a plain-word stem as the name of a file, by the kind of
+# file: "the hinton paper" names ``hinton.pdf`` and "the chat module" names
+# ``chat.py``, but "the configuration file" names neither, because "file"
+# fits any file the question talks about.
+_DOCUMENT_SUFFIXES: Final[frozenset[str]] = frozenset(
+    {".pdf", ".md", ".txt", ".tex", ".rst", ".docx", ".doc", ".odt",
+     ".html", ".htm", ".epub"}
+)
+_DOCUMENT_MARKERS: Final[str] = (
+    rf"(?:{_DOCUMENT_NOUNS}|documents?(?![a-z]))"
+)
+_NOTEBOOK_MARKERS: Final[str] = r"notebooks?(?![a-z])"
+_CODE_MARKERS: Final[str] = r"(?:module|script)s?(?![a-z])"
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,11 +341,16 @@ def named_paths(
     -------
     list[pathlib.Path]
         Files named by full path; otherwise by file name; otherwise by
-        file stem of at least four characters ("smith2020"); otherwise,
+        file stem of at least four characters ("smith2020"; a plain-word
+        stem such as ``project`` only when marked as the name of that kind
+        of file, see ``_names_stem``); otherwise,
         with ``authors``, by a name that starts an author-year file stem
         ("smith", "Smith's paper", or "smith20" for ``smith2020.pdf``;
-        "lee25" for ``lee25networks.pdf``). Matching ignores case and
-        needs a boundary on both sides.
+        "lee25" for ``lee25networks.pdf``). A stem without digits
+        (``smith_review.pdf``) is matched by an author name only when the
+        question uses the word as one: possessive, or followed by a
+        document noun ("Smith's", "smith paper"). Matching ignores case
+        and needs a boundary on both sides.
 
     """
 
@@ -344,7 +367,7 @@ def named_paths(
         path
         for path in paths
         if len(path.stem) >= _MIN_STEM_LENGTH
-        and _mentions(text, path.stem.casefold())
+        and _names_stem(text, path)
     ]
     if stems or not authors:
         return stems
@@ -352,7 +375,101 @@ def named_paths(
     # Candidate author names: words of three or more letters, optionally
     # followed by digits ("lee25").
     words = set(re.findall(r"(?<![a-z0-9])[a-z]{3,}\d*(?![a-z])", text))
-    return [path for path in paths if _starts_stem(path.stem, words)]
+    # A stem without a year ("source_pipeline") is matched only by a word
+    # used as an author name, so ordinary words ("the source folder") do
+    # not select a file.
+    cited = {word for word in words if _cites_author(text, word)}
+    return [
+        path
+        for path in paths
+        if _starts_stem(
+            path.stem,
+            words if any(c.isdigit() for c in path.stem) else cited,
+        )
+    ]
+
+
+def _names_stem(text: str, path: Path) -> bool:
+    """Whether a question names a file by its stem.
+
+    Parameters
+    ----------
+    text: str
+        Case-folded question.
+    path: pathlib.Path
+        Candidate file.
+
+    Returns
+    -------
+    bool
+        True when the stem appears as a whole word and either looks like a
+        file name (it contains a digit, ``_``, ``-``, or ``.``, as in
+        ``smith2020`` or ``data_loader``), or is marked as one: in
+        backticks, or followed by a noun for that kind of file. A document
+        (``.pdf``, ``.md``, ...) takes a document noun ("the hinton paper",
+        "the architecture document"), a notebook takes "notebook", and any
+        other file takes "module" or "script" ("the project module").
+
+    Notes
+    -----
+    A plain-word stem alone ("the project type", "the chat model") does
+    not name ``project.py`` or ``chat.py``, and neither does a stem
+    followed by "file" ("the configuration file" for
+    ``configuration.md``, "the config file" for ``config.py``): such
+    phrases usually describe something the question is about, and a
+    wrong match would limit the search to one file.
+
+    """
+
+    stem = path.stem.casefold()
+    if not _mentions(text, stem):
+        return False
+    if any(character.isdigit() or character in "_-." for character in stem):
+        return True
+    if re.search(rf"`{re.escape(stem)}`", text):
+        return True
+    suffix = path.suffix.casefold()
+    if suffix in _DOCUMENT_SUFFIXES:
+        markers = _DOCUMENT_MARKERS
+    elif suffix == ".ipynb":
+        markers = _NOTEBOOK_MARKERS
+    else:
+        markers = _CODE_MARKERS
+    name = rf"(?<![\w.]){re.escape(stem)}(?![\w])"
+    return bool(re.search(rf"{name}\s+{markers}", text))
+
+
+def _cites_author(text: str, word: str) -> bool:
+    """Whether a word is used as an author name in a question.
+
+    Parameters
+    ----------
+    text: str
+        Case-folded question.
+    word: str
+        Candidate author word, possibly with year digits ("lee25").
+
+    Returns
+    -------
+    bool
+        True when the word has digits, is possessive ("smith's"), or is
+        followed, possibly after "et al", by a document noun such as
+        "paper", "article", or "study" ("smith paper", "lee et al.
+        review").
+
+    """
+
+    if any(character.isdigit() for character in word):
+        return True
+    name = rf"(?<![a-z0-9]){re.escape(word)}"
+    if re.search(rf"{name}(?:'s|\u2019s)(?![a-z])", text):
+        return True
+    return bool(
+        re.search(
+            rf"{name}(?:\s+et\s+al\.?)?\s+{_DOCUMENT_NOUNS}",
+            text,
+        )
+    )
 
 
 def _starts_stem(stem: str, words: set[str]) -> bool:

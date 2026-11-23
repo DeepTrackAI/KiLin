@@ -1,0 +1,246 @@
+{
+  "display_name": "Writing Assistant",
+  "description": "A scientific writing workspace for drafting, revising, researching, and checking manuscript text.",
+  "extensions": [
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".md",
+    ".txt",
+    ".tex",
+    ".bib",
+    ".bbl",
+    ".py",
+    ".m",
+    ".ipynb",
+    ".html"
+  ],
+  "max_file_bytes": 20971520,
+  "retrieval_instruction": "Retrieve relevant scientific or technical material when the user asks to draft from project sources, research a topic, or verify a manuscript claim.",
+  "system_prompt": "Assist with scientific and technical writing. Follow the user's requested language, format, and level of detail. Preserve scientific meaning, equations, LaTeX commands, labels, and existing bibliography keys when editing supplied text, unless the user explicitly requests changes. Do not invent research findings, bibliographic references, or technical details. Distinguish manuscript text from research evidence: numbered KíLín evidence labels are not manuscript citation keys. Ask for missing essential information or clearly flag it rather than fabricate it.",
+  "answer_guidance": "For ordinary drafting or editing, provide the requested text without an unnecessary preamble. For source-grounded drafting, give a clean manuscript draft followed by separate evidence notes. For research or verification, give a clear evidence-based answer. Respect any requested length or format.",
+  "capabilities": {
+    "code_graph": "auto",
+    "document_headers": true,
+    "source_cards": {
+      "enabled": false,
+      "automatic": false
+    }
+  },
+  "history": {
+    "recent_turns": 10,
+    "exclude_disliked_answers": true
+  },
+  "conversation_memory": {
+    "enabled": true,
+    "questions": "all",
+    "answers": "selected",
+    "max_hits": 4,
+    "max_tokens": 2000
+  },
+  "generation": {
+    "temperature": 0.6,
+    "thinking": false
+  },
+  "default_intent": "grounded_writing",
+  "intents": {
+    "writing_check": {
+      "description": "Check the grammar, spelling and style of a manuscript or document in the project, or a part of it, and list suggested corrections without rewriting it ('check the grammar and style of draft.tex', 'proofread the methods section', 'check the English of the second paragraph of the introduction', 'are there typos in my manuscript?'). Asks which document when none is named. Not for rewriting, polishing or shortening text (writing), and not for whether claims are supported by the sources (verification).",
+      "cues": [
+        "\\b(?:check|correct|fix|review)\\w*\\s+(?:\\w+\\s+){0,3}?(?:grammar|spelling|typos?|style|wording|english)\\b",
+        "\\bproofread\\w*\\b[^\\n]{0,80}?(?:\\S+\\.(?:tex|md|docx?|txt|pdf)\\b|\\b(?:manuscript|draft|paper|thesis|chapter|document|article|section)s?\\b)",
+        "\\b(?:any|are\\s+there)\\s+(?:\\w+\\s+){0,2}?(?:typos|(?:grammar|grammatical|spelling)\\s+(?:errors|mistakes))\\b",
+        "\\b(?:rephras\\w*|rewrit\\w*|reword\\w*|split\\w*|shorten\\w*|simplif\\w*|phrasing|alternatives?|better\\s+(?:version|wording))\\b[\\s\\S]{0,400}?\\bline\\s+\\d+\\b",
+        "\\bline\\s+\\d+\\b[\\s\\S]{0,400}?\\b(?:rephras\\w*|rewrit\\w*|reword\\w*|split\\w*|shorten\\w*|simplif\\w*|phrasing|alternatives?|better\\s+(?:version|wording))\\b"
+      ],
+      "requires": [
+        "\\b(?:grammar\\w*|proofread\\w*|spelling|typos?|stylistic|style|wording|copy-?edit\\w*)\\b|\\b(?:the|my|its|our)\\s+english\\b"
+      ],
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "writing_check"
+      }
+    },
+    "templated_report": {
+      "description": "Write a report on one document with one of the project's report templates (Markdown files in templates/), named by its title or file name, and save it to outputs/; also list the project's templates or check one. Examples: \"write a journal club summary of smith20\", \"fill the lab notes template for patil25\", \"which templates do I have?\", \"check my journal_club template\". When no template is named, the user chooses one. Not for a short informal summary (paper_overview).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "generate_paper_summary",
+        "template": "choose",
+        "part_tokens": 6000,
+        "repair_attempts": 3,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      },
+      "cues": [
+        "\\b(?:using|with|from|in|into|per)\\s+(?:the\\s+|my\\s+|our\\s+|this\\s+|a\\s+)?[\\w\\s-]{0,40}?\\btemplate\\b",
+        "\\btemplate\\b[\\s\\S]{0,40}?\\b(?:for|of|on)\\b",
+        "\\b(?:list|which|what|show|available)\\b[^\\n]{0,40}\\btemplates\\b|\\btemplates\\b[^\\n]{0,40}\\b(?:do\\s+(?:i|we)\\s+have|available)\\b",
+        "\\b(?:check|validate|test|verify)\\b[^\\n]{0,40}\\btemplate\\b"
+      ],
+      "requires": [
+        "\\b(?:templates?|reports?|briefings?|summar(?:y|ies)|protocols?|notes|write|prepare|make|generate|create|produce|draft|fill)\\b"
+      ]
+    },
+    "templated_project_report": {
+      "description": "Write one report on all the documents of the project with a project report template (scope: project, in templates/), reading every document, and save it to outputs/: a project overview, a literature table, or a template of the user's. Examples: \"write a project overview\", \"summarize the whole project\", \"make a literature table of all the papers\", \"wrap up everything in the collection\". When no template is named, the user chooses one. Not for an overview of one topic across the papers (report_generation), nor for one document (paper reports).",
+      "cues": [
+        "\\b(?:summar\\w*|overview|report|tables?|wrap\\s*up|synthes\\w*|review)\\b[^\\n]{0,60}?\\b(?:whole|entire|all)\\s+(?:of\\s+)?(?:the\\s+|this\\s+|my\\s+|our\\s+)?(?:project|collection|papers|documents|articles|sources)\\b",
+        "\\b(?:whole|entire)\\s+(?:project|collection)\\b[^\\n]{0,40}?\\b(?:summar\\w*|overview|report)\\b",
+        "\\bwrap\\s*up\\b[^\\n]{0,40}?\\b(?:everything|project|collection|all)\\b",
+        "\\bproject\\s+(?:report|summary|overview|wrap[\\s-]*up)\\b",
+        "\\b(?:every|each)\\s+(?:paper|document|article)\\b[^\\n]{0,60}?\\b(?:table|report|overview)\\b",
+        "\\bproject\\s+(?:report\\s+)?templates?\\b"
+      ],
+      "requires": [
+        "\\b(?:project|collection|all\\s+(?:the\\s+|of\\s+the\\s+)?(?:papers|documents|articles|sources)|every\\s+(?:paper|document|article)|everything|whole|entire|templates?|table)\\b"
+      ],
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "project_summary",
+        "template": "choose"
+      }
+    },
+    "grounded_writing": {
+      "description": "Write or expand manuscript text using indexed project sources when the requested scientific or technical details are not already established by the supplied text or conversation. Examples: \"write a section describing the architecture using project documentation\", \"draft a methods overview from the indexed sources\", \"expand this section with evidence\", \"write a technical section on indexing\". Retrieve evidence before drafting and identify unsupported details. Not for purely stylistic editing or drafting from adequate supplied notes (writing), a standalone factual question (research), or a claim check without drafting (verification).",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|write|compose|develop|expand|revise|rewrite|update|polish|improve)\\b[^\\n]{0,220}\\b(?:based\\s+on|using|from|grounded\\s+in|supported\\s+by|drawing\\s+on)\\s+(?:(?:the|my|our)\\s+)?(?:(?:indexed|project|attached|provided|retrieved)\\s+)?(?:sources|papers|documents|docs|documentation|evidence|references)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|write|compose|develop|expand|revise|rewrite|update|polish|improve)\\b[^\\n]{0,180}\\b(?:source[- ]grounded|evidence[- ]grounded|evidence[- ]based|fact[- ]checked)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|write|compose|develop)\\s+(?:(?:an?|the|my|our)\\s+)?(?:(?:scientific|technical)\\s+)?(?:section|subsection|paragraph|overview|introduction|abstract|background|methods)\\s+(?:on|about|describing|explaining|covering|of|to)\\b"
+      ],
+      "system_prompt": "Draft scientifically and technically accurate manuscript text from the retrieved project evidence and any text the user supplies. Do not invent facts, bibliographic entries, or citation keys; retain existing LaTeX commands, mathematics, and bibliography keys. Provide two separate sections: \"Manuscript draft\" containing clean, copyable manuscript prose, and \"Evidence notes\" mapping source-dependent claims in that draft to numbered retrieval citations such as [1]. Put the numbered citations immediately after the corresponding claims in the evidence notes, never inside the manuscript draft. The general instruction to cite retrieved evidence applies to evidence notes, not to manuscript prose. Do not convert retrieval numbers into LaTeX bibliography keys or infer unsupported details. If sources are missing or insufficient, identify the gap explicitly in the notes and avoid claiming verification. When evidence does not support a requested assertion, omit or qualify it instead of presenting it as fact.",
+      "answer_guidance": "Output a \"Manuscript draft\" first, followed by separate \"Evidence notes\". Keep retrieval citation markers such as [1] in the notes only; link each important source-dependent statement to its evidence there. Preserve the user's requested format (including LaTeX) for the draft. Do not invent manuscript citation keys or a bibliography. State evidential limitations in the notes.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 16,
+        "passages_per_source": 4,
+        "max_passages": 48,
+        "evidence_tokens": 20000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "writing": {
+      "description": "Draft, outline, rewrite, edit, polish, shorten, expand, translate, or improve manuscript text using facts and text already provided by the user or recent conversation, without project retrieval. Examples: \"rewrite this abstract\", \"improve the introduction\", \"draft a conclusion from these notes\", \"make this paragraph clearer\". Use grounded_writing when creating or substantively expanding scientific text requires new factual information from project sources; use research or verification for questions or claim checks that do not ask for a draft.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:rewrite|revise|edit|polish|proofread|rephrase|shorten|expand|tighten)\\s+(?:this|the|my|our|following)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|outline|write)\\s+(?:an?|the|this|my|our)\\s+(?:abstract|introduction|paragraph|section|conclusion|outline|draft)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:improve|make)\\s+(?:this|the|my|our)\\s+(?:abstract|introduction|paragraph|section|text|draft)\\b"
+      ],
+      "system_prompt": "Work from the user's supplied text and relevant recent conversation, without retrieving project sources. For a revision, preserve the author's meaning, technical terminology, mathematical expressions, LaTeX syntax, and existing citation keys. Do not introduce new factual claims or bibliography entries. Do not add KíLín evidence labels such as [1] or convert those labels into LaTeX citations. Return the proposed draft or revision directly; explain edits only when requested.",
+      "history": {
+        "policy": "recent"
+      },
+      "retrieval": {
+        "mode": "none"
+      }
+    },
+    "research": {
+      "description": "Find, summarize, or explain facts and background from the indexed papers, documentation, and other project sources to inform a manuscript. Examples: 'what do the sources say about this method?', 'find evidence about indexing', 'explain how source cards work'. Do not edit a supplied draft or evaluate a particular claim for correctness; use writing, grounded_writing, or verification instead.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:find|retrieve|locate|search\\s+for)\\s+(?:the\\s+)?(?:relevant\\s+)?(?:sources|papers|references|documentation|evidence)\\b",
+        "^\\s*what\\s+do\\s+(?:the\\s+)?(?:sources|documents|papers|documentation)\\s+say\\b"
+      ],
+      "system_prompt": "Answer from the retrieved project evidence. Put numbered source references such as [1] directly after the factual statements they support. Distinguish what the indexed sources establish from what remains unknown. Do not invent references, and do not treat retrieval numbers as bibliography keys for the manuscript.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 16,
+        "passages_per_source": 4,
+        "max_passages": 48,
+        "evidence_tokens": 20000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "verification": {
+      "description": "Check whether scientific or technical statements in a draft are supported, contradicted, or not established by the indexed project sources. Examples: 'verify these claims', 'fact-check this paragraph', 'does the evidence support this statement?'. Report findings without automatically rewriting manuscript text. Not for proofreading, formatting, or stylistic editing.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:verify|fact[ -]?check|check\\s+(?:the\\s+)?(?:factual\\s+)?(?:accuracy|claims|statements))\\b",
+        "^\\s*(?:does|do)\\s+(?:the|these)\\s+(?:sources|papers|documents|evidence)\\s+support\\b"
+      ],
+      "system_prompt": "Evaluate each requested scientific or technical statement against the retrieved evidence. Clearly distinguish supported, contradicted, and not-established statements, citing the corresponding source numbers such as [1]. Absence of supporting evidence is not proof that a statement is false. Do not silently rewrite the manuscript or convert internal evidence numbers into bibliography keys.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 18,
+        "passages_per_source": 4,
+        "max_passages": 54,
+        "evidence_tokens": 24000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files and what it does with them: how to add, upload, import, attach, drag, or remove files or folders ('how do I add my papers?', 'how to drag files', 'can I upload a folder?', 'what do you mean by adding files?', 'what do you do with my files?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "(how (do|can|should) i|how to|can i|where (do|should|can) i) (add|upload|import|attach|drag|drop|put|place|remove|delete)( and drop| in)? (my |a |the |some |more |new |these |this |our )?(whole |own |other )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?",
+        "what do you mean( by)? (add|adding|upload|uploading|attach|attaching|import|importing|sources?|files?)( .*)?",
+        "what (do|will|can) you do (with|to|for) (my|the|these|our) (files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
+      ]
+    }
+  },
+  "welcome_prompts": [
+    "What would you like to write today?",
+    "Which text shall we work on?",
+    "Paste a passage for editing, or ask what I can do for you."
+  ],
+  "welcome_templates": [
+    "What would you like to write about {theme}?",
+    "Which part of your writing on {theme} shall we work on?"
+  ],
+  "suggestions": [
+    "What can you do for me?",
+    "How do I add my files?",
+    "Shorten this sentence: Here is where you can put the sentence that you would like me to make a little bit shorter.",
+    "Rephrase this sentence more formally: Here's where you'd put the sentence you want to sound a bit more formal.",
+    "Make this sentence sound friendlier: Your sentence goes here, and I will rewrite it in a warmer tone.",
+    "Make this sentence clearer: The place here is where a sentence that is not so clear in what it says can go."
+  ],
+  "suggestion_templates": {
+    "writing_check": "Check the grammar and spelling of {file}.",
+    "research": "What do the project sources say about {topic}?",
+    "grounded_writing": [
+      "Draft a short background paragraph about {topic} using the project sources.",
+      "Write a related-work section on {topic} from the project sources."
+    ],
+    "verification": "Check whether the main claims of {file} are supported by the other project sources.",
+    "assistant_help": "What can you do for me?"
+  }
+}

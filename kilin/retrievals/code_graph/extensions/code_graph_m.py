@@ -1,10 +1,12 @@
 """Extract lightweight MATLAB relationships using textual patterns.
 
 This extension recognizes selected inheritance and function-call forms in
-MATLAB source. It uses regular expressions and known entity names, not a
-MATLAB parser or interpreter. Complex declarations, strings, comments, and
-nested constructs can therefore be incomplete or ambiguous. The source is
-never executed by this hook.
+MATLAB source, skipping comments and strings. A call written as
+``py.module.function(...)`` is a call into Python and is linked to that
+Python function. It uses regular expressions and known entity names, not a
+MATLAB parser or interpreter. Complex declarations and nested constructs
+can therefore be incomplete or ambiguous. The source is never executed by
+this hook.
 
 Key Features
 ------------
@@ -20,6 +22,10 @@ Key Features
 
 Module Structure
 ----------------
+
+- ``CALLS_INTO``
+
+    Prefix MATLAB writes before a call into Python (``py``).
 
 - ``extract_code_relations``
 
@@ -37,6 +43,7 @@ Examples
 from __future__ import annotations
 
 import re
+from typing import Final
 
 from kilin.retrievals.code_graph.code_graph import (
     CodeRelation,
@@ -45,10 +52,14 @@ from kilin.retrievals.code_graph.code_graph import (
 )
 from kilin.sources.sources import SourceFile
 
-
 __all__ = [
+    "CALLS_INTO",
     "extract_code_relations",
 ]
+
+# MATLAB calls Python as py.module.function(...); the graph links such a
+# call to the Python function.
+CALLS_INTO: Final[dict[str, str]] = {"py": ".py"}
 
 # Match only structural forms needed by the graph. This keeps the parser
 # deterministic without attempting to interpret MATLAB at runtime.
@@ -62,7 +73,17 @@ _FUNCTION = re.compile(
     r"([A-Za-z]\w*)\s*\(",
     re.IGNORECASE | re.MULTILINE,
 )
-_CALL = re.compile(r"\b([A-Za-z]\w*)\s*\(")
+# A call, possibly through a dotted name ("obj.save(", "py.mod.f(").
+_CALL = re.compile(r"(?<![\w.])([A-Za-z]\w*(?:\.[A-Za-z]\w*)*)\s*\(")
+# Comments and strings, removed before looking for calls. A quote right
+# after a name, bracket or another quote is the transpose operator.
+_SKIPPED = re.compile(
+    r"^\s*%\{.*?^\s*%\}"
+    r"|%[^\n]*"
+    r'|"(?:[^"\n]|"")*"'
+    r"|(?<![\w)\]}'.])'(?:[^'\n]|'')*'",
+    re.DOTALL | re.MULTILINE,
+)
 
 # MATLAB control statements can resemble function calls in simple text
 # matching, so exclude them from call relationships.
@@ -90,8 +111,9 @@ def extract_code_relations(
     Notes
     -----
     Regular-expression matches are structural hints, not full MATLAB parsing.
-    Complex comments, strings, multiline declarations, and nested definitions
-    can be ambiguous or missed.
+    Comments and strings are skipped. Multiline declarations and nested
+    definitions can be ambiguous or missed. ``py.module.function(...)`` is
+    a call into Python (``CALLS_INTO``).
 
     """
 
@@ -124,10 +146,17 @@ def extract_code_relations(
             if index + 1 < len(functions)
             else None
         )
-        body = source_file.text[function_match.end() : end]
+        body = _SKIPPED.sub(" ", source_file.text[function_match.end() : end])
 
         for call_match in _CALL.finditer(body):
-            target = call_match.group(1)
+            parts = call_match.group(1).split(".")
+            # A call through an object is matched by its last name; a call
+            # into another language keeps its prefix.
+            target = (
+                call_match.group(1)
+                if len(parts) > 1 and parts[0] in CALLS_INTO
+                else parts[-1]
+            )
             if target.lower() in _CONTROL:
                 continue
 
@@ -135,7 +164,7 @@ def extract_code_relations(
                 CodeRelation(
                     function,
                     "calls",
-                    _resolve_name(target, known),
+                    _resolve_name(target, known, function, module),
                 )
             )
 

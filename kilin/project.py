@@ -43,10 +43,6 @@ Key Features
 Module Structure
 ----------------
 
-- ``PROJECT_TYPE_ID_CODE`` and ``PROJECT_TYPE_ID_LITERATURE``
-
-    String identifiers for the standard packaged project types.
-
 - ``PROJECT_TYPE_IDS``
 
     All packaged type IDs in deterministic filename order, not an enum.
@@ -91,6 +87,10 @@ Module Structure
 
     Validate and save settings without changing source ownership.
 
+- ``delete_project``
+
+    Move a project into the ``.deleted`` folder beside it.
+
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
 
@@ -105,7 +105,7 @@ Access submodule-only configuration helpers through their actual namespace:
 
 >>> import kilin.project
 >>> profile = kilin.project.default_project_profile(
-...     kilin.PROJECT_TYPE_ID_CODE
+...     kilin.PROJECT_TYPE_IDS[0]
 ... )
 
 """
@@ -144,12 +144,9 @@ from kilin.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
-from kilin.project_type import (
-    ProjectTypeId,
-    load_project_types,
-    project_type,
-)
+from kilin.project_type import ProjectTypeId, load_project_types
 from kilin.project_layout import (
+    CORE_PROJECT_FOLDERS,
     ensure_project_folders,
     install_project_resources,
     plan_project_layout,
@@ -173,10 +170,9 @@ from kilin.runtime import (
     SelectedBackend,
 )
 from kilin.trace_logging import NullTraceLogger, TraceSink
+from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 
 __all__ = [
-    "PROJECT_TYPE_ID_CODE",
-    "PROJECT_TYPE_ID_LITERATURE",
     "PROJECT_TYPE_IDS",
     "ProjectTypeId",
     "ProjectProfile",
@@ -189,11 +185,11 @@ __all__ = [
     "prepare_project_workspace",
     "default_project_profile",
     "configure_project",
+    "delete_project",
 ]
 
-# Standard identifiers do not require their definitions to be installed.
-PROJECT_TYPE_ID_CODE: Final[ProjectTypeId] = "code"
-PROJECT_TYPE_ID_LITERATURE: Final[ProjectTypeId] = "literature"
+# Deleted projects are moved here, beside the projects themselves.
+DELETED_PROJECTS_FOLDER: Final[str] = ".deleted"
 
 # Loading rejects an empty or invalid registry before projects can open.
 PROJECT_TYPE_IDS: Final[tuple[ProjectTypeId, ...]] = tuple(
@@ -231,6 +227,9 @@ _PROFILE_RETRIEVAL_COUNT: Final[int] = require_default_int(
 )
 _PROFILE_THINKING: Final[bool] = require_default_bool(
     _PROFILE_DEFAULTS, "THINKING", "PROJECT_PROFILE"
+)
+_PROFILE_BLOCK_UNREQUESTED_CJK: Final[bool] = require_default_bool(
+    _PROFILE_DEFAULTS, "BLOCK_UNREQUESTED_CJK", "PROJECT_PROFILE"
 )
 _PROFILE_TEMPERATURE: Final[float] = require_default_number(
     _PROFILE_DEFAULTS, "TEMPERATURE", "PROJECT_PROFILE", allow_zero=True
@@ -275,6 +274,7 @@ count = {retrieval_count}
 thinking = {thinking}
 temperature = {temperature}
 max_new_tokens = {max_new_tokens}
+block_unrequested_cjk = {block_unrequested_cjk}
 """
 
 _EDITABLE_SETTINGS = {
@@ -294,6 +294,7 @@ _EDITABLE_SETTINGS = {
     "thinking": "generation",
     "temperature": "generation",
     "max_new_tokens": "generation",
+    "block_unrequested_cjk": "generation",
 }
 
 
@@ -316,11 +317,22 @@ def _default_profile_text(
     Returns
     -------
     str
-        Complete profile text using the current shared backend, model, query,
-        chunking, retrieval, and generation defaults.
+        Complete profile text using packaged settings and optional project-
+        type defaults for thinking and temperature.
 
     """
 
+    definition = load_project_types()[type_id]
+    thinking = (
+        _PROFILE_THINKING
+        if definition.generation_thinking is None
+        else definition.generation_thinking
+    )
+    temperature = (
+        _PROFILE_TEMPERATURE
+        if definition.generation_temperature is None
+        else definition.generation_temperature
+    )
     return _DEFAULT_PROFILE.format(
         type_id=type_id,
         source=source,
@@ -331,9 +343,10 @@ def _default_profile_text(
         max_tokens=_PROFILE_MAX_TOKENS,
         overlap_tokens=_PROFILE_OVERLAP_TOKENS,
         retrieval_count=_PROFILE_RETRIEVAL_COUNT,
-        thinking=str(_PROFILE_THINKING).lower(),
-        temperature=_PROFILE_TEMPERATURE,
+        thinking=str(thinking).lower(),
+        temperature=temperature,
         max_new_tokens=_PROFILE_MAX_NEW_TOKENS,
+        block_unrequested_cjk=str(_PROFILE_BLOCK_UNREQUESTED_CJK).lower(),
         backend=BACKEND_AUTO,
         chat_mlx=DEFAULT_CHAT_MODEL_MLX,
         chat_torch=DEFAULT_CHAT_MODEL_TORCH,
@@ -372,7 +385,9 @@ def default_project_profile(type_id: ProjectTypeId) -> ProjectProfile:
         raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
     extensions = _PROJECT_EXTENSIONS[type_id]
     parser = ConfigParser()
-    parser.read_string(_default_profile_text(type_id, "sources", extensions))
+    parser.read_string(
+        _default_profile_text(type_id, PROJECT_SOURCES_DIRECTORY, extensions)
+    )
     return _read_profile(parser)
 
 
@@ -506,6 +521,11 @@ class ProjectProfile:
         Chat generation temperature.
     max_new_tokens: int | None
         Optional maximum generated tokens per answer.
+    block_unrequested_cjk: bool
+        Whether to suppress unsolicited Chinese, Japanese, and Korean
+        script tokens on a best-effort basis, using original user text for
+        permission. Profiles without the setting use
+        ``PROJECT_PROFILE.BLOCK_UNREQUESTED_CJK``.
 
     Attributes
     ----------
@@ -545,6 +565,11 @@ class ProjectProfile:
         Chat generation temperature.
     max_new_tokens: int | None
         Optional maximum generated tokens per answer.
+    block_unrequested_cjk: bool
+        Whether to suppress unsolicited Chinese, Japanese, and Korean
+        script tokens on a best-effort basis, using original user text for
+        permission. Profiles without the setting use
+        ``PROJECT_PROFILE.BLOCK_UNREQUESTED_CJK``.
 
     Methods
     -------
@@ -580,6 +605,7 @@ class ProjectProfile:
     thinking: bool
     temperature: float
     max_new_tokens: int | None
+    block_unrequested_cjk: bool = _PROFILE_BLOCK_UNREQUESTED_CJK
 
     def chat_model(self, backend: SelectedBackend) -> str:
         """Return the chat model configured for one selected backend.
@@ -673,8 +699,8 @@ def initialize_project(
         New or empty destination. Existing projects and nonempty directories
         are rejected without modification, including partial initialization.
     type_id: ProjectTypeId
-        Registered project type. Its source_directory convention selects the
-        new source subdirectory.
+        Registered project type. Every type gets the same ``sources/``
+        subdirectory.
 
     Returns
     -------
@@ -705,8 +731,7 @@ def initialize_project(
     if type_id not in PROJECT_TYPE_IDS:
         raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
     root = destination_path(directory)
-    source = project_type(type_id).source_directory
-    return _initialize_profile(root, type_id, source)
+    return _initialize_profile(root, type_id)
 
 
 class _InitializationJournal:
@@ -824,12 +849,14 @@ def _prepared_profile(
 def _preparing_project(
     root: Path,
     type_id: ProjectTypeId,
-    source: str,
     *,
     settings: dict[str, object] | None = None,
     allocate: bool = False,
 ) -> Iterator[tuple[QAProject, _InitializationJournal]]:
     """Reserve a new project, initialize resources, and publish its profile.
+
+    Every creation path uses this context, so every new project keeps its
+    sources in ``sources/`` whatever its project type.
 
     Parameters
     ----------
@@ -837,9 +864,6 @@ def _preparing_project(
         Explicit destination or preferred default directory.
     type_id: ProjectTypeId
         Registered project type.
-    source: str
-        Relative source location for the new project. It must not alias the
-        workspace root, its reservation marker, or managed state entries.
     settings: dict[str, object] | None, optional
         Profile overrides validated before creation. Defaults to None.
     allocate: bool, optional
@@ -859,33 +883,20 @@ def _preparing_project(
 
     """
 
-    relative = Path(source)
-    reserved = {
-        "indexes", "logs", "outputs", "templates", "profile.ini",
-        "sources.json", "source_snapshot.json", ".kilin-creating",
-    }
-    if (
-        relative.is_absolute() or not relative.parts
-        or ".." in relative.parts
-        or relative.parts[0].lower() in reserved
-    ):
-        raise ValueError(
-            "The source folder conflicts with managed workspace entries; "
-            "use prepare_sources_workspace to import it under sources/."
-        )
-    text, profile = _prepared_profile(type_id, source, settings)
+    text, profile = _prepared_profile(
+        type_id, PROJECT_SOURCES_DIRECTORY, settings
+    )
     layout = plan_project_layout(type_id)
     with claim_workspace(root, allocate=allocate) as actual_root:
         root = actual_root
         profile_path = root / "profile.ini"
         journal = _InitializationJournal(root)
-        for name in ("indexes", "logs", "outputs", "templates"):
+        for name in CORE_PROJECT_FOLDERS:
             journal.note(root / name)
         for resource in layout.resources:
             journal.note(root / resource.destination)
-        source_path = root / source
-        if source_path != root:
-            journal.note(source_path)
+        source_path = root / PROJECT_SOURCES_DIRECTORY
+        journal.note(source_path)
         try:
             source_path.mkdir(parents=True, exist_ok=True)
             ensure_project_folders(root)
@@ -907,9 +918,7 @@ def _preparing_project(
             raise
 
 
-def _initialize_profile(
-    root: Path, type_id: ProjectTypeId, source: str
-) -> QAProject:
+def _initialize_profile(root: Path, type_id: ProjectTypeId) -> QAProject:
     """Create a project profile after successful resource initialization.
 
     Parameters
@@ -918,8 +927,6 @@ def _initialize_profile(
         Workspace root.
     type_id: ProjectTypeId
         Expected project type.
-    source: str
-        Source folder within a new profile.
 
     Returns
     -------
@@ -928,7 +935,7 @@ def _initialize_profile(
 
     """
 
-    with _preparing_project(root, type_id, source):
+    with _preparing_project(root, type_id):
         pass
     return open_project(root)
 
@@ -953,13 +960,14 @@ def prepare_project_workspace(
     Returns
     -------
     QAProject
-        Independent project containing selected source copies and provenance.
+        Independent project containing selected source copies, in its
+        ``sources/`` folder, and provenance.
 
     Raises
     ------
     ValueError
         If the project type or source/destination relationship is invalid,
-        or the source basename conflicts with managed workspace entries.
+        or the source is a filesystem root.
     OSError
         If scanning, exclusive creation, copying, or publication fails.
 
@@ -977,6 +985,8 @@ def prepare_project_workspace(
     source = Path(source_directory).expanduser().resolve(strict=True)
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
+    if source == Path(source.anchor):
+        raise ValueError(f"Choose a source folder, not the drive: {source}")
     if not str(workspace_root).strip():
         raise ValueError("Choose a workspace parent folder.")
     sandbox = Path(workspace_root).expanduser().resolve()
@@ -986,7 +996,7 @@ def prepare_project_workspace(
     safe_name = safe_name or "project"
     preferred = sandbox / f"project_{safe_name}"
     with _preparing_project(
-        preferred, type_id, source.name, allocate=True
+        preferred, type_id, allocate=True
     ) as (project, journal):
         _synchronize_snapshot(project, source, sandbox, journal)
     return open_project(project.root)
@@ -1022,7 +1032,9 @@ def synchronize_project_workspace(
     Notes
     -----
     Unlike cumulative add_project_sources, this explicit operation may replace
-    local snapshot edits and remove copies deleted from the original. Existing
+    local snapshot edits and remove copies deleted from the original. The
+    copy is the project's saved source folder: ``sources/`` for new mirrors,
+    the original's name for older ones, which are never renamed. Existing
     resource templates are not restored. Synchronization is not atomic across
     all files; a failure may leave earlier snapshot changes in place.
 
@@ -1068,14 +1080,25 @@ def _synchronize_snapshot(
     """
 
     root = project.root
-    snapshot = root / source.name
+    # New mirrors copy into sources/; mirrors created before that convention
+    # keep the original's name and are never renamed. No other folder is
+    # accepted, because a rebuild replaces the whole copy.
+    snapshot = next(
+        (
+            path
+            for path in (root / PROJECT_SOURCES_DIRECTORY, root / source.name)
+            if path.resolve() == project.source
+        ),
+        None,
+    )
+    if snapshot is None:
+        raise ValueError(
+            "Managed workspace project.source must be "
+            f"{PROJECT_SOURCES_DIRECTORY}/ or, for an older mirror, "
+            f"{source.name}/."
+        )
     if snapshot.is_symlink():
         raise ValueError("Managed source copy must not be a symbolic link.")
-    if project.source != snapshot.resolve(strict=True):
-        raise ValueError(
-            "Managed workspace project.source must keep the source folder "
-            f"set to {source.name}."
-        )
     excludes: tuple[str, ...] = ()
     if sandbox.is_relative_to(source):
         excludes = (sandbox.relative_to(source).as_posix(),)
@@ -1241,7 +1264,7 @@ def open_project(directory: str | Path) -> QAProject:
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
 
-    for name in ("indexes", "logs", "outputs", "templates"):
+    for name in CORE_PROJECT_FOLDERS:
         folder = root / name
         if folder.is_symlink():
             raise ValueError(f"Project folder must not be a link: {folder}")
@@ -1256,6 +1279,62 @@ def open_project(directory: str | Path) -> QAProject:
         logs=logs,
         profile=profile,
     )
+
+
+def delete_project(directory: str | Path) -> Path:
+    """Move a project into the ``.deleted`` folder beside it.
+
+    Deletion keeps the files, like deleting a conversation: the project
+    leaves the projects list but can be moved back by hand. A project of the
+    same name already there is kept, and the moved one gets a ``_2``,
+    ``_3``, ... suffix.
+
+    Parameters
+    ----------
+    directory: str | pathlib.Path
+        Folder containing profile.ini.
+
+    Returns
+    -------
+    pathlib.Path
+        Where the project now is.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the folder or its profile.ini is missing.
+    ValueError
+        If the folder or the ``.deleted`` folder is a link, or ``.deleted`` is
+        itself a project.
+    OSError
+        If the folder cannot be created or the project cannot be moved.
+
+    Notes
+    -----
+    The caller closes the project first; nothing here checks whether it is
+    open.
+
+    """
+
+    given = Path(directory).expanduser()
+    if given.is_symlink():
+        raise ValueError(f"Project folder must not be a link: {given}")
+    root = given.resolve(strict=True)
+    if not (root / "profile.ini").is_file():
+        raise FileNotFoundError(f"Missing project profile: {root}")
+    deleted = root.parent / DELETED_PROJECTS_FOLDER
+    if deleted.is_symlink():
+        raise ValueError(f"The deleted folder must not be a link: {deleted}")
+    if (deleted / "profile.ini").exists():
+        raise ValueError(f"{deleted} is a project, so nothing is moved there.")
+    deleted.mkdir(exist_ok=True)
+    destination = deleted / root.name
+    number = 2
+    while destination.exists() or destination.is_symlink():
+        destination = deleted / f"{root.name}_{number}"
+        number += 1
+    root.rename(destination)
+    return destination
 
 
 def _read_json_if_possible(path: Path) -> dict[str, object] | None:
@@ -1460,6 +1539,12 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
             parser,
             "generation",
             "max_new_tokens",
+        ),
+        # Optional, so profiles written before this setting stay valid.
+        block_unrequested_cjk=(
+            _boolean(parser, "generation", "block_unrequested_cjk")
+            if parser.has_option("generation", "block_unrequested_cjk")
+            else _PROFILE_BLOCK_UNREQUESTED_CJK
         ),
     )
 

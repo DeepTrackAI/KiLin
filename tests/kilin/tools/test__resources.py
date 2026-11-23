@@ -19,9 +19,12 @@ import unittest
 
 from kilin.project import initialize_project
 from kilin.project_layout import plan_project_layout
-from kilin.project_type import project_type
+from kilin.project_type import load_project_types, project_type
 from kilin.tools._registry import TOOL_REGISTRY
 from kilin.tools.generate_paper_summary import SHIPPED_TEMPLATES_DIR
+from kilin.tools.project_summary import (
+    SHIPPED_TEMPLATES_DIR as PROJECT_TEMPLATES_DIR,
+)
 
 
 class TestToolResources(unittest.TestCase):
@@ -32,7 +35,7 @@ class TestToolResources(unittest.TestCase):
 
         """
 
-        for kind in ("code", "literature"):
+        for kind in load_project_types():
             definition = project_type(kind)
             for intent in definition.intents.values():
                 use = intent.tool
@@ -51,13 +54,13 @@ class TestToolResources(unittest.TestCase):
                         self.assertFalse(asset.source.is_symlink())
 
     def test_core_installs_exactly_the_planned_resource_files(self) -> None:
-        """Create both project types using their core resource plans.
+        """Create all packaged types using their core resource plans.
 
         """
 
         with TemporaryDirectory() as temporary:
             parent = Path(temporary)
-            for kind in ("code", "literature"):
+            for kind in load_project_types():
                 with self.subTest(project_type=kind):
                     plan = plan_project_layout(kind)
                     root = parent / kind
@@ -90,7 +93,8 @@ class TestToolResources(unittest.TestCase):
         }
         self.assertEqual(
             owned,
-            set(SHIPPED_TEMPLATES_DIR.glob("*.md")),
+            set(SHIPPED_TEMPLATES_DIR.glob("*.md"))
+            | set(PROJECT_TEMPLATES_DIR.glob("*.md")),
         )
         self.assertEqual(plan_project_layout("code").resources, ())
 

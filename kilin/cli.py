@@ -133,12 +133,14 @@ def _ensure_gui_environment(backend: Backend) -> None:
     if all(find_spec(module) is not None for module in modules[selected]):
         return
 
+    from kilin.gui._paths import gui_install_command
+
     uv = shutil.which("uv")
     project = Path(__file__).resolve().parents[1]
     if uv is None or not (project / "pyproject.toml").is_file():
         raise RuntimeError(
-            "The GUI dependencies are missing. From the KíLín repository, "
-            f"run: uv sync --extra gui --extra {selected}"
+            "The GUI dependencies are missing. Install them with: "
+            + gui_install_command(selected)
         )
 
     print(f"Preparing the KíLín GUI ({selected.upper()})…")

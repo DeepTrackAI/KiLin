@@ -19,6 +19,7 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from kilin import chat
+from kilin._model_completion import GenerationCancelled
 from kilin.trace_logging import (
     TRACE_EVENT_LLM_CALL_INPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT,
@@ -498,6 +499,122 @@ class TestChatReply(unittest.TestCase):
 
         self.session = _session(system_prompt="Instruction")
 
+    def test_thinking_override_and_inheritance_on_both_backends(self) -> None:
+        """Use the effective policy at tokenization without changing state."""
+
+        for backend in ("torch", "mlx"):
+            for configured in (True, False):
+                for options in (
+                    {}, {"thinking": None},
+                    {"thinking": True}, {"thinking": False},
+                ):
+                    with self.subTest(
+                        backend=backend, configured=configured,
+                        options=options,
+                    ):
+                        session = _session(
+                            thinking=configured, max_new_tokens=8
+                        )
+                        session.backend = backend
+                        override = options.get("thinking")
+                        expected = (
+                            configured if override is None else override
+                        )
+                        with patch.object(
+                            session, f"_{backend}_reply",
+                            return_value="Answer",
+                        ) as generate:
+                            session.reply("Question", **options)
+                        generate.assert_called_once_with([4, 5, 6], 8)
+                        template = session._tokenizer.apply_chat_template
+                        template.assert_called_once()
+                        self.assertIs(
+                            template.call_args.kwargs["enable_thinking"],
+                            expected,
+                        )
+                        self.assertIs(session.thinking, configured)
+
+    def test_thinking_override_does_not_leak_to_next_reply(self) -> None:
+        """Explicit on and off overrides affect exactly one invocation."""
+
+        for backend in ("torch", "mlx"):
+            for configured in (True, False):
+                with self.subTest(backend=backend, configured=configured):
+                    session = _session(
+                        thinking=configured, max_new_tokens=8
+                    )
+                    session.backend = backend
+                    with patch.object(
+                        session, f"_{backend}_reply", return_value="Answer"
+                    ):
+                        session.reply("First", thinking=not configured)
+                        session.reply("Second")
+                    calls = (
+                        session._tokenizer.apply_chat_template.call_args_list
+                    )
+                    self.assertEqual(
+                        [call.kwargs["enable_thinking"] for call in calls],
+                        [not configured, configured],
+                    )
+                    self.assertIs(session.thinking, configured)
+
+    def test_invalid_thinking_is_rejected_before_model_work(self) -> None:
+        """Validate request overrides without changing history or counters."""
+
+        session = self.session
+        history = list(session.messages)
+        with patch.object(session, "_torch_reply") as generate:
+            for value in ("false", "true", 0, 1, 0.0, [], {}):
+                with self.subTest(value=value):
+                    with self.assertRaisesRegex(ValueError, "thinking"):
+                        session.reply("Question", thinking=value)
+        generate.assert_not_called()
+        session._tokenizer.apply_chat_template.assert_not_called()
+        self.assertEqual(session.messages, history)
+        self.assertFalse(session.thinking)
+        self.assertEqual(session.input_token_total, 0)
+        self.assertEqual(session.output_token_total, 0)
+
+    def test_failed_thinking_override_preserves_configured_setting(
+        self,
+    ) -> None:
+        """Tokenization and inference failures cannot persist an override."""
+
+        for backend in ("torch", "mlx"):
+            for stage in ("template", "generation"):
+                for configured in (True, False):
+                    with self.subTest(
+                        backend=backend, stage=stage, configured=configured
+                    ):
+                        session = _session(
+                            thinking=configured, max_new_tokens=8
+                        )
+                        session.backend = backend
+                        template = session._tokenizer.apply_chat_template
+                        if stage == "template":
+                            template.side_effect = RuntimeError("failed")
+                        with patch.object(
+                            session, f"_{backend}_reply",
+                            side_effect=RuntimeError("failed"),
+                        ):
+                            with self.assertRaisesRegex(
+                                RuntimeError, "failed"
+                            ):
+                                session.reply(
+                                    "Question", thinking=not configured
+                                )
+                        self.assertIs(session.thinking, configured)
+                        self.assertEqual(session.messages, [])
+                        template.side_effect = None
+                        with patch.object(
+                            session, f"_{backend}_reply", return_value="Answer"
+                        ):
+                            session.reply("Retry")
+                        self.assertIs(
+                            template.call_args.kwargs["enable_thinking"],
+                            configured,
+                        )
+
     def test_successful_reply_updates_history(self) -> None:
         """Commit exactly one stripped user/assistant exchange."""
 
@@ -873,6 +990,35 @@ class TestTorchGeneration(unittest.TestCase):
             session._torch_reply([4], 2)
         self.assertEqual(session.last_finish_reason, "stop")
 
+    def test_stop_ends_generation_without_a_reply(self) -> None:
+        """Stop is a stopping criterion; a stopped reply is not returned."""
+
+        session = _session()
+        torch, model, _ = self._torch_inputs([7, 8])
+        session._model = model
+        stopped = False
+        session.stop_requested = lambda: stopped
+        with patch.object(chat, "import_module", return_value=torch):
+            session._torch_reply([4], 2)
+            (criterion,) = model.generate.call_args.kwargs[
+                "stopping_criteria"
+            ]
+            criterion(Mock(shape=(1, 3)), None)
+            self.assertEqual(torch.full.call_args.args[1], False)
+            stopped = True
+            with self.assertRaises(GenerationCancelled):
+                session._torch_reply([4], 2)
+
+    def test_no_stopping_criterion_without_stop(self) -> None:
+        """Generation options are unchanged when Stop is not offered."""
+
+        session = _session()
+        torch, model, _ = self._torch_inputs([7, 8])
+        session._model = model
+        with patch.object(chat, "import_module", return_value=torch):
+            session._torch_reply([4], 2)
+        self.assertNotIn("stopping_criteria", model.generate.call_args.kwargs)
+
     def test_generation_failure_propagates(self) -> None:
         """Do not account for tokens when model.generate raises."""
 
@@ -956,6 +1102,26 @@ class TestMlxGeneration(unittest.TestCase):
         self.assertEqual(session.output_token_total, 1)
 
 
+    def test_stop_ends_the_stream_at_the_next_token(self) -> None:
+        """Stop after the first token: it is shown, then the reply ends."""
+
+        session = _session()
+        responses = [
+            SimpleNamespace(text="A", finish_reason=None),
+            SimpleNamespace(text="B", finish_reason=None),
+        ]
+        mlx_lm = Mock()
+        mlx_lm.stream_generate.return_value = iter(responses)
+        modules = {"mlx_lm": mlx_lm, "mlx_lm.sample_utils": Mock()}
+        shown: list[str] = []
+        session.stop_requested = lambda: bool(shown)
+        with patch.object(chat, "import_module", side_effect=modules.get):
+            with self.assertRaises(GenerationCancelled):
+                session._mlx_reply([4], 3, token_callback=shown.append)
+        self.assertEqual(shown, ["A"])
+        self.assertEqual(session.output_token_total, 1)
+
+
 class TestChatTracing(unittest.TestCase):
     """Test trace metadata, artifacts, and failure ordering."""
 
@@ -973,6 +1139,50 @@ class TestChatTracing(unittest.TestCase):
             lambda name, value, **kwargs: {"name": name, "value": value}
         )
         return trace
+
+    def test_trace_and_rendering_use_effective_thinking(self) -> None:
+        """Keep forensic prompts, input metadata, and tokenization aligned."""
+
+        for backend in ("torch", "mlx"):
+            for configured in (True, False):
+                for override in (None, True, False):
+                    with self.subTest(
+                        backend=backend, configured=configured,
+                        override=override,
+                    ):
+                        trace = self._trace(content=True)
+                        session = _session(
+                            thinking=configured, trace=trace,
+                            max_new_tokens=8,
+                        )
+                        session.backend = backend
+                        template = session._tokenizer.apply_chat_template
+                        template.side_effect = ["prompt", [4, 5, 6]]
+                        session._tokenizer.encode.return_value = [7]
+                        expected = (
+                            configured if override is None else override
+                        )
+                        with patch.object(
+                            session, f"_{backend}_reply", return_value="Answer"
+                        ):
+                            session.reply("Question", thinking=override)
+                        self.assertEqual(template.call_count, 2)
+                        for call in template.call_args_list:
+                            self.assertIs(
+                                call.kwargs["enable_thinking"], expected
+                            )
+                        self.assertEqual(trace.emit.call_count, 2)
+                        call = trace.emit.call_args_list[0]
+                        self.assertEqual(
+                            call.args[0], TRACE_EVENT_LLM_CALL_INPUT
+                        )
+                        data = call.kwargs["data"]
+                        self.assertIs(data["thinking"], expected)
+                        self.assertIs(
+                            data["chat_template"]["enable_thinking"], expected
+                        )
+                        self.assertIs(session.thinking, configured)
+                        trace.settings_changed.assert_not_called()
 
     def test_enabled_trace_emits_input_and_output_metadata(self) -> None:
         """Forward call IDs and record retokenized output counts."""
@@ -1220,6 +1430,142 @@ class TestChatValidationHelpers(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     chat._check_system_prompt(value)
+
+
+
+class TestUnpromptedScriptBlocking(unittest.TestCase):
+    """Block Chinese, Japanese, and Korean tokens unless the input has them."""
+
+    @staticmethod
+    def _tokenizer() -> Mock:
+        """Create a tokenizer whose vocabulary mixes scripts."""
+
+        pieces = {
+            0: "The", 1: " first", 2: "优先",
+            3: "、", 4: "é", 5: "の",
+        }
+        tokenizer = Mock()
+        tokenizer.get_vocab.return_value = {
+            text: token for token, text in pieces.items()
+        }
+        tokenizer.decode.side_effect = lambda ids, **_: pieces.get(ids[0], "x")
+        tokenizer.apply_chat_template.return_value = [4, 5, 6]
+        return tokenizer
+
+    def test_finds_tokens_with_cjk_characters(self) -> None:
+        """Only tokens containing CJK script characters are found."""
+
+        self.assertEqual(chat._cjk_token_ids(self._tokenizer()), (2, 5))
+        self.assertEqual(chat._cjk_token_ids(Mock()), ())
+
+    def test_reply_blocks_only_without_cjk_input(self) -> None:
+        """English input blocks the tokens; CJK input allows them."""
+
+        session = _session()
+        session._tokenizer = self._tokenizer()
+        with patch.object(
+            session, "_torch_reply", return_value="Answer"
+        ):
+            session.reply("Which device is used?")
+            self.assertEqual(session._blocked_token_ids(), (2, 5))
+            session.reply("使用哪个设备?")
+            self.assertEqual(session._blocked_token_ids(), ())
+            session.reply("And now in English?")
+            self.assertEqual(session._blocked_token_ids(), (2, 5))
+
+    def test_request_words_allow_cjk_without_characters(self) -> None:
+        """Explicit language or script requests allow the tokens."""
+
+        session = _session()
+        session._tokenizer = self._tokenizer()
+        with patch.object(
+            session, "_torch_reply", return_value="Answer"
+        ):
+            for message in (
+                "What is the kanji for river?",
+                "Translate the abstract into Chinese.",
+                "Write it in KOREAN hangul.",
+            ):
+                session.reset()
+                session.reply(message)
+                self.assertEqual(session._blocked_token_ids(), ())
+            session.reset()
+            session.reply("Which chinesewall function is used?")
+            self.assertEqual(session._blocked_token_ids(), (2, 5))
+
+    def test_blocking_can_be_turned_off(self) -> None:
+        """A session created without blocking never blocks tokens."""
+
+        session = _session(block_unrequested_cjk=False)
+        session._tokenizer = self._tokenizer()
+        with patch.object(
+            session, "_torch_reply", return_value="Answer"
+        ):
+            session.reply("Which device is used?")
+        self.assertEqual(session._blocked_token_ids(), ())
+        with patch.object(chat.ChatSession, "_load"):
+            with self.assertRaisesRegex(ValueError, "block_unrequested_cjk"):
+                chat.ChatSession(
+                    "group/model", backend="torch", block_unrequested_cjk=1
+                )
+
+    def test_torch_generation_suppresses_blocked_tokens(self) -> None:
+        """PyTorch generation receives the blocked IDs."""
+
+        session = _session()
+        torch, model, _ = TestTorchGeneration._torch_inputs([7, 99])
+        session._model = model
+        session._tokenizer = self._tokenizer()
+        session._tokenizer.eos_token_id = 99
+        session._block_cjk = True
+        with patch.object(chat, "import_module", return_value=torch):
+            session._torch_reply([4, 5], 4)
+        self.assertEqual(
+            model.generate.call_args.kwargs["suppress_tokens"], [2, 5]
+        )
+
+    def test_mlx_generation_uses_a_logits_processor(self) -> None:
+        """MLX generation masks the blocked IDs with minus infinity."""
+
+        numpy = __import__("numpy")
+        session = _session()
+        session._tokenizer = self._tokenizer()
+        session._block_cjk = True
+        mlx_lm = Mock()
+        mlx_lm.stream_generate.return_value = iter(
+            [SimpleNamespace(text="A", finish_reason="stop")]
+        )
+        modules = {
+            "mlx_lm": mlx_lm,
+            "mlx_lm.sample_utils": Mock(),
+            "mlx.core": SimpleNamespace(array=numpy.asarray),
+            "numpy": numpy,
+        }
+        with patch.object(chat, "import_module", side_effect=modules.get):
+            session._mlx_reply([4, 5], 5)
+            (processor,) = mlx_lm.stream_generate.call_args.kwargs[
+                "logits_processors"
+            ]
+            logits = processor(None, numpy.zeros((1, 6), dtype="float32"))
+        self.assertEqual(
+            numpy.isinf(logits[0]).tolist(),
+            [False, False, True, False, False, True],
+        )
+
+    def test_nothing_blocked_keeps_generation_options(self) -> None:
+        """Without blocked tokens, MLX gets no logits processor."""
+
+        session = _session()
+        mlx_lm = Mock()
+        mlx_lm.stream_generate.return_value = iter(
+            [SimpleNamespace(text="A", finish_reason="stop")]
+        )
+        modules = {"mlx_lm": mlx_lm, "mlx_lm.sample_utils": Mock()}
+        with patch.object(chat, "import_module", side_effect=modules.get):
+            session._mlx_reply([4, 5], 5)
+        self.assertNotIn(
+            "logits_processors", mlx_lm.stream_generate.call_args.kwargs
+        )
 
 
 if __name__ == "__main__":

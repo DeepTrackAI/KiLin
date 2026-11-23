@@ -7,12 +7,16 @@ project's ``outputs/`` folder. Templates live in the project's
 ``templates/`` folder, which receives only the project type's required
 templates on creation; the question picks one by title or name, and the
 intent's default applies otherwise. It is KíLín's reference example of a
-custom tool (see tutorial 160): it composes existing capabilities instead
+custom tool (see tutorial 170): it composes existing capabilities instead
 of re-implementing them.
 
-1. Choose the paper: a file in ``outputs/`` the question names, the only
-   ``outputs/`` file when the question says "my paper", or else the
-   indexed source ``choose_document`` picks (asking the user when unclear).
+1. Choose the paper: a file in ``outputs/`` the question names by its
+   file name or path, the only ``outputs/`` file for "my paper"
+   without a named source, the sole saved PDF for "this PDF" when no
+   sources are indexed, or else the indexed source
+   ``choose_document`` picks (asking the user when unclear). Reports KíLín
+   saved in ``outputs/`` are never taken for a paper the question names
+   only by its source's name.
 2. Show the plan; a guessed paper is always confirmed before any work.
 3. Read it in parts: the shared note-taking service writes notes with passage
    numbers, because a whole paper is too long for one small-model prompt.
@@ -29,10 +33,10 @@ of re-implementing them.
 
 A template or paper that cannot be read gives an answer saying so, without
 model calls. Problems that remain after the allowed fixes are recorded in
-the result summary and the trace, and the report is saved anyway. The
-checks verify structure and length, not truth: the model can still misstate
-what the paper says. The citation uses only the PDF metadata and the first
-page; without a metadata title it names the file. Reference entries are
+the result summary and the trace; an invalid report is not published.
+The checks verify structure and length, not truth: the model can still misstate
+what the paper says. The citation uses PDF or Word metadata and the opening
+passages; without a metadata title it names the file. Reference entries are
 found with layout rules, so an unusual layout can split or join entries
 wrongly, but every entry is the paper's own text.
 
@@ -75,7 +79,13 @@ Module Structure
 
 - ``choose_template``
 
-    Pick the template a question asks for.
+    Pick the template a question asks for, or ask which.
+
+- ``TEMPLATE_CHOOSE``, ``routing`` and ``templates_answer``
+
+    The setting value that lets any project template be used, the cues
+    and router description built from the project's templates, and the
+    answer listing them.
 
 - ``paper_citation``
 
@@ -137,12 +147,19 @@ Examples
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 import re
 from time import perf_counter
 from typing import Final
 
+from kilin.tools._shared.model_results import (
+    incomplete_notice,
+    partial_result,
+)
+from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import (
     estimate_tokens,
@@ -162,13 +179,13 @@ from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
+    ToolRouting,
     check_choice,
     check_int,
     reject_unknown,
 )
 from kilin.tools._shared.outputs import (
     OUTPUTS_FOLDER,
-    find_output,
     load_output,
     output_files,
     publish_output_file,
@@ -183,9 +200,11 @@ from kilin.tools._shared.planning import (
     PLAN_CHOICE_QUICK,
     ConfirmationPolicy,
     ToolPlan,
+    ask_choice,
     confirm_plan,
 )
 from kilin.workspace_resources import (
+    PROJECT_SOURCES_DIRECTORY,
     WorkspaceResource,
     templates_folder,
 )
@@ -197,16 +216,16 @@ from kilin.tools.generate_paper_summary._configuration import (
     DEFAULT_CONFIRMATION,
     DEFAULT_LARGE_BATCHES,
     DEFAULT_MAX_MODEL_CALLS,
-    DEFAULT_NOTE_TOKENS,
     DEFAULT_PART_TOKENS,
     DEFAULT_REFERENCE_ITEMS,
     DEFAULT_REPAIR_ATTEMPTS,
-    DEFAULT_SECTION_TOKENS,
     DEFAULT_TEMPLATE,
     EARLIER_SECTION_WORDS,
     ENTRY_MIN_WORDS,
     HEADLINE_TOKENS,
     NUMBERED_ENTRIES_MIN,
+    NOTE_REPLY_TOKENS,
+    SECTION_REPLY_TOKENS,
     ORGANISATION_WORDS,
     PART_PROMPT_TOKENS,
     PROMPT_TOKENS_PER_SECOND,
@@ -219,6 +238,7 @@ from kilin.tools.generate_paper_summary._configuration import (
     RUNNING_LINE_WORDS,
     SECTION_PROMPT_TOKENS,
 )
+from kilin.tools._shared.report_templates import SCOPE_DOCUMENT
 from kilin.tools.generate_paper_summary._report_template import (
     SECTION_SOURCE_CITATION,
     SECTION_SOURCE_NOTES,
@@ -235,6 +255,7 @@ from kilin.tools.generate_paper_summary._report_template import (
 
 __all__ = [
     "REFERENCE_LAYOUT",
+    "TEMPLATE_CHOOSE",
     "SummarySettings",
     "choose_paper",
     "choose_template",
@@ -245,23 +266,57 @@ __all__ = [
     "parse_settings",
     "workspace_resources",
     "references_prompt",
+    "routing",
     "run",
     "section_prompt",
     "summary_file_text",
+    "templates_answer",
 ]
 
 # One or more passage citations, with separators: " [1], [3]", "[2][24]".
 # They are removed from the saved file, where passage numbers mean nothing.
 _CITATION = re.compile(r"(?:\s*,?\s*\[\d+(?:\s*[,–-]\s*\d+)*\])+")
-# Words that point at the user's own paper in outputs/.
+# Words that point at the user's own paper in outputs/. "This paper" is
+# not among them: it usually means the paper the conversation is about.
 _OWN_PAPER = re.compile(
-    r"\b(outputs?|my (paper|manuscript|pdf|draft|article)|this (pdf|paper))\b",
+    r"\b(outputs?|my (paper|manuscript|pdf|draft|article))\b",
+    flags=re.I,
+)
+# "This PDF" can identify a sole PDF in an outputs-only workspace.
+_THIS_PDF = re.compile(r"\bthis pdf\b", flags=re.I)
+# An explicitly mentioned filename must prevent a loose "my paper" fallback.
+_FILE_REFERENCE = re.compile(
+    r"(?<![\w./-])[\w./-]+\.[a-z][a-z0-9_-]+"
+    r"(?!(?:[\w/-]|\.[\w./-]))",
     flags=re.I,
 )
 # File types in outputs/ that can be a paper.
-_SUFFIXES: Final[tuple[str, ...]] = (".pdf", ".md", ".txt")
+_SUFFIXES: Final[tuple[str, ...]] = (".pdf", ".doc", ".docx", ".md", ".txt")
 # Template setting: a plain file name, so it cannot point outside templates/.
 _TEMPLATE_NAME = re.compile(r"[A-Za-z0-9][\w-]*")
+# The ``template`` value of an intent that uses any template of the
+# project: the one the question names, else the user's choice.
+TEMPLATE_CHOOSE: Final[str] = "choose"
+# Words asking to write a report, before a template's name ("write a
+# journal club of smith20"); or words after it ("journal club for ...").
+_WRITE_WORDS: Final[str] = (
+    r"\b(?:write|prepare|make|generate|create|produce|draft|fill(?:\s+in)?|"
+    r"do|give\s+me|turn)\b[^\n]{0,60}?"
+)
+_FOR_WORDS: Final[str] = r"\s+(?:of|for|on|from|about)\b"
+# A request for the project's templates, or to check one.
+_LIST_TEMPLATES: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:list|which|what|show|available)\b[^\n]{0,40}\btemplates\b"
+    r"|\btemplates\b[^\n]{0,40}\b(?:do\s+(?:i|we)\s+have|available)\b",
+    re.IGNORECASE,
+)
+_CHECK_TEMPLATE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:check|validate|test|verify)\b[^\n]{0,40}\btemplate\b",
+    re.IGNORECASE,
+)
+# Templates described to the router, and characters of each description.
+_ROUTED_TEMPLATES: Final[int] = 30
+_ROUTED_DESCRIPTION: Final[int] = 120
 
 # Numeric and vocabulary heuristics come from this tool's defaults.json.
 _BEGINNING_PASSAGES: Final[int] = BEGINNING_PASSAGES
@@ -319,10 +374,6 @@ class SummarySettings:
         ``.md`` in the project's ``templates/`` folder.
     part_tokens: int
         Estimated tokens of paper per reading part (1000-16000).
-    note_tokens: int
-        Longest notes for one part, in tokens (100-1500).
-    section_tokens: int
-        Longest section without a word or item limit, in tokens (100-2000).
     repair_attempts: int
         Targeted fixes allowed per section that misses its limit (0-4).
     max_model_calls: int
@@ -337,8 +388,6 @@ class SummarySettings:
 
     template: str = DEFAULT_TEMPLATE
     part_tokens: int = DEFAULT_PART_TOKENS
-    note_tokens: int = DEFAULT_NOTE_TOKENS
-    section_tokens: int = DEFAULT_SECTION_TOKENS
     repair_attempts: int = DEFAULT_REPAIR_ATTEMPTS
     max_model_calls: int = DEFAULT_MAX_MODEL_CALLS
     confirmation: ConfirmationPolicy = DEFAULT_CONFIRMATION
@@ -372,8 +421,6 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
     names = (
         "template",
         "part_tokens",
-        "note_tokens",
-        "section_tokens",
         "repair_attempts",
         "max_model_calls",
         "confirmation",
@@ -394,12 +441,6 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
         template=template,
         part_tokens=check_int(
             where, data, "part_tokens", defaults.part_tokens, 1000, 16000
-        ),
-        note_tokens=check_int(
-            where, data, "note_tokens", defaults.note_tokens, 100, 1500
-        ),
-        section_tokens=check_int(
-            where, data, "section_tokens", defaults.section_tokens, 100, 2000
         ),
         repair_attempts=check_int(
             where, data, "repair_attempts", defaults.repair_attempts, 0, 4
@@ -423,7 +464,7 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
 def workspace_resources(
     settings: SummarySettings,
 ) -> tuple[WorkspaceResource, ...]:
-    """Declare the report template needed by one configured intent.
+    """Declare the report templates needed by one configured intent.
 
     Parameters
     ----------
@@ -434,7 +475,10 @@ def workspace_resources(
     -------
     tuple[WorkspaceResource, ...]
         One shipped template to install when available, otherwise
-        an empty tuple for a user-provided custom template.
+        an empty tuple for a user-provided custom template. An intent
+        using any template (``TEMPLATE_CHOOSE``) installs every shipped
+        template and ``templates/README.md``, which explains how to
+        write one.
 
     Notes
     -----
@@ -443,12 +487,45 @@ def workspace_resources(
 
     """
 
+    if settings.template == TEMPLATE_CHOOSE:
+        return tuple(
+            WorkspaceResource(source, f"templates/{source.name}")
+            for source in sorted(SHIPPED_TEMPLATES_DIR.glob("*.md"))
+        )
     name = f"{settings.template}.md"
     source = SHIPPED_TEMPLATES_DIR / name
     if not source.exists():
         # A custom project-type template may be supplied by the user later.
         return ()
     return (WorkspaceResource(source, f"templates/{name}"),)
+
+
+def _mentions_output_name(text: str, name: str) -> bool:
+    """Whether a question names one complete filename or relative path.
+
+    Parameters
+    ----------
+    text: str
+        Question normalized to forward slashes and case-folded.
+    name: str
+        File name or path, normalized in the same way.
+
+    Returns
+    -------
+    bool
+        True only for a complete name, not a suffix of a longer name
+        or part of another directory path. A final sentence period is
+        allowed, but an extra filename extension is not.
+
+    """
+
+    return bool(
+        re.search(
+            rf"(?<![\w./-]){re.escape(name)}"
+            r"(?!(?:[\w/-]|\.[\w./-]))",
+            text,
+        )
+    )
 
 
 def choose_paper(
@@ -483,10 +560,15 @@ def choose_paper(
 
     Notes
     -----
-    A file in ``outputs/`` the question names, or the only one when it
-    says "outputs" or "my paper", comes first. Otherwise
-    ``choose_document`` decides from the question and the earlier turns it
-    points back to, and asks the user when the paper is unclear.
+    An explicitly named ``outputs/`` filename or relative path comes
+    first. Names must match completely; ambiguous basenames require a
+    relative path. Without a filename, "my paper" or "outputs" can use
+    the only output when no indexed source is named. "This PDF" may use
+    the sole saved PDF only if the project has no indexed sources.
+    Otherwise ``choose_document`` decides from the question and earlier
+    turns, asking the user when the paper is unclear. Stem or author
+    matching never silently chooses a generated report for an indexed
+    source.
 
     """
 
@@ -519,14 +601,52 @@ def choose_paper(
         document = load_output(root, name)
         return document.path, document.passages, reason, False
 
-    hits = named_paths(request.question, outputs, authors=True)
-    if len(hits) == 1:
-        return from_outputs(hits[0], "named in the question")
+    # Prefer a complete outputs/ path over an unqualified basename.
+    # A full path disambiguates reports with the same name in subfolders.
+    text = request.question.replace("\\", "/").casefold()
+    qualified = [
+        path for path in outputs
+        if _mentions_output_name(
+            text, f"{OUTPUTS_FOLDER}/{path.as_posix().casefold()}"
+        ) or (
+            path.parent != Path(".")
+            and _mentions_output_name(text, path.as_posix().casefold())
+        )
+    ]
+    bare = [
+        path for path in outputs
+        if _mentions_output_name(text, path.name.casefold())
+    ]
+    if len(qualified) > 1 or (qualified and any(
+        path not in qualified for path in bare
+    )):
+        return "Name one saved file in outputs/, including its relative path."
+    if len(qualified) == 1:
+        return from_outputs(qualified[0], "named in the question")
+    if len(bare) > 1:
+        return (
+            "Several files in outputs/ have that name. Include the "
+            "relative path to select one."
+        )
+    if len(bare) == 1:
+        return from_outputs(bare[0], "named in the question")
 
-    if _OWN_PAPER.search(request.question):
-        only = find_output(request.question, root, suffixes=_SUFFIXES)
-        if only is not None:
-            return from_outputs(only, "the only outputs file")
+    sources = list(dict.fromkeys(chunk.path for chunk in context.chunks))
+    has_file_name = bool(_FILE_REFERENCE.search(text))
+    if (
+        not has_file_name
+        and _OWN_PAPER.search(request.question)
+        and not named_paths(request.question, sources, authors=True)
+    ):
+        if len(outputs) == 1:
+            return from_outputs(outputs[0], "the only outputs file")
+
+    if not sources and not has_file_name and _THIS_PDF.search(text):
+        pdfs = [path for path in outputs if path.suffix.lower() == ".pdf"]
+        if len(pdfs) == 1:
+            return from_outputs(pdfs[0], "the only outputs PDF")
+        if len(pdfs) > 1:
+            return "Several PDFs are in outputs/. Name the one to use."
 
     chosen = choose_document(
         request,
@@ -544,9 +664,12 @@ def choose_paper(
 
 
 def choose_template(
-    question: str, folder: Path, default: str
-) -> ReportTemplate:
-    """Pick the template a question asks for.
+    question: str,
+    folder: Path,
+    default: str,
+    choose: Callable[[str, tuple[str, ...]], int | None] | None = None,
+) -> ReportTemplate | None:
+    """Pick the template a question asks for, or ask which.
 
     Parameters
     ----------
@@ -555,41 +678,410 @@ def choose_template(
     folder: pathlib.Path
         The project's templates folder.
     default: str
-        Template used when the question names none.
+        Template used when the question names none; ``TEMPLATE_CHOOSE``
+        to use the project's only template or ask which.
+    choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
+        ``ToolContext.choose``, to ask which template when the default is
+        ``TEMPLATE_CHOOSE`` and the question names none. Defaults to
+        ``None``.
 
     Returns
     -------
-    ReportTemplate
-        The first template in the folder whose title ("Research
-        Briefing"), file name ("research_briefing"), or file name with
-        spaces occurs in the question; otherwise the default, read from
-        the folder. Missing project-owned templates are not restored.
+    ReportTemplate | None
+        The uniquely named template (by title, ID, or filename), or the
+        default. With ``TEMPLATE_CHOOSE``, the only valid template or the
+        user's choice; None when the user cancels or chooses an invalid
+        index. A named template always takes precedence over the default.
 
     Raises
     ------
     ValueError
-        If the chosen template does not exist or breaks a template rule;
-        the message names the line and lists the project's templates.
+        If the chosen template does not exist or breaks a template rule,
+        or with ``TEMPLATE_CHOOSE`` the project has no valid template or
+        nobody can be asked, or more than one template is named; the
+        message identifies the problem or lists the project's templates.
+
+    """
+
+    found = _templates(folder)
+    named = _named_templates(question, found)
+    if len(named) > 1:
+        raise ValueError(_ambiguous_templates(named))
+    if named:
+        _, template, error = named[0]
+        if template is None:
+            raise ValueError(error)
+        return template
+
+    if default != TEMPLATE_CHOOSE:
+        template = load_template(default, folder)
+        if template.scope != SCOPE_DOCUMENT:
+            raise ValueError(
+                f"Template {template.name!r} is for project reports, "
+                "not individual papers."
+            )
+        return template
+    usable = [template for _, template, _ in found if template]
+    if len(usable) == 1:
+        return usable[0]
+    if not usable:
+        raise ValueError(templates_answer(folder))
+    if choose is None:
+        raise ValueError(
+            "Which template? Name one in the question, for example "
+            f"“write a {usable[0].title.lower()} of smith20”.\n\n"
+            + templates_answer(folder)
+        )
+    index = choose(
+        "Which template should the report use?",
+        tuple(f"{t.title} ({t.name})" for t in usable),
+    )
+    if type(index) is not int or not 0 <= index < len(usable):
+        return None
+    return usable[index]
+
+
+def _templates(
+    folder: Path,
+) -> list[tuple[str, ReportTemplate | None, str]]:
+    """Return the project's templates, read and checked.
+
+    Parameters
+    ----------
+    folder: pathlib.Path
+        The project's templates folder.
+
+    Returns
+    -------
+    list[tuple[str, ReportTemplate | None, str]]
+        Each template's file name (without ``.md``), the template (None
+        when it breaks a rule) and the error (``""`` when valid), by name;
+        empty without the folder. Project templates (``scope: project``),
+        for reports on a whole project, are left out.
+
+    """
+
+    if not folder.is_dir():
+        return []
+    found: list[tuple[str, ReportTemplate | None, str]] = []
+    for name in template_names(folder):
+        try:
+            template = load_template(name, folder)
+        except ValueError as error:
+            found.append((name, None, str(error)))
+            continue
+        if template.scope == SCOPE_DOCUMENT:
+            found.append((name, template, ""))
+    return found
+
+
+def _named_templates(
+    question: str,
+    found: list[tuple[str, ReportTemplate | None, str]],
+) -> list[tuple[str, ReportTemplate | None, str]]:
+    """Find templates named by complete IDs, filenames, or titles.
+
+    Shorter names embedded in a longer matched name are discarded, but
+    separate mentions of distinct templates remain ambiguous. Name
+    separators (space, underscore, hyphen) are interchangeable.
+
+    Parameters
+    ----------
+    question: str
+        The user's request.
+    found: list[tuple[str, ReportTemplate | None, str]]
+        Project templates, including invalid ones without a usable title.
+
+    Returns
+    -------
+    list[tuple[str, ReportTemplate | None, str]]
+        All distinct templates explicitly mentioned, in folder order.
 
     """
 
     text = " ".join(question.casefold().split())
+    hits: list[tuple[str, tuple[int, int]]] = []
+    for name, template, _ in found:
+        aliases = {name, f"{name}.md"}
+        if template is not None:
+            aliases.add(template.title)
+        for alias in aliases:
+            words = [
+                part for part in re.split(r"[\s_-]+", alias.casefold())
+                if part
+            ]
+            if not words:
+                continue
+            pattern = (
+                r"(?<!\w)" + r"[\s_-]+".join(
+                    re.escape(word) for word in words
+                ) + r"(?!\w)"
+            )
+            hits.extend(
+                (name, match.span())
+                for match in re.finditer(pattern, text)
+            )
+
+    named = {
+        name for name, (start, end) in hits
+        if not any(
+            other_start <= start and end <= other_end
+            and (other_start, other_end) != (start, end)
+            for _, (other_start, other_end) in hits
+        )
+    }
+    return [item for item in found if item[0] in named]
+
+
+def _ambiguous_templates(
+    named: list[tuple[str, ReportTemplate | None, str]],
+) -> str:
+    """Explain why a request cannot select one report template.
+
+    Parameters
+    ----------
+    named: list[tuple[str, ReportTemplate | None, str]]
+        Distinct template matches.
+
+    Returns
+    -------
+    str
+        A request to name exactly one template by its filename.
+
+    """
+
+    options = ", ".join(f"`{name}.md`" for name, _, _ in named)
+    return (
+        f"Several report templates match this question: {options}. "
+        "Name exactly one template by its filename."
+    )
+
+
+def _project_templates(folder: Path) -> list[tuple[str, ReportTemplate]]:
+    """Return the valid project report templates in a folder.
+
+    Parameters
+    ----------
+    folder: pathlib.Path
+        The project's templates folder.
+
+    Returns
+    -------
+    list[tuple[str, ReportTemplate]]
+        Each template with ``scope: project`` and its file name, by name.
+
+    """
+
+    if not folder.is_dir():
+        return []
+    found: list[tuple[str, ReportTemplate]] = []
     for name in template_names(folder):
-        words = (name.casefold(), name.casefold().replace("_", " "))
         try:
             template = load_template(name, folder)
         except ValueError:
-            # Broken templates are reported only when they are chosen.
-            if any(word in text for word in words):
-                raise
             continue
+        if template.scope != SCOPE_DOCUMENT:
+            found.append((name, template))
+    return found
 
-        if template.title.casefold() in text or any(
-            word in text for word in words
-        ):
-            return template
 
-    return load_template(default, folder)  # Raises, listing the templates.
+def templates_answer(folder: Path) -> str:
+    """Return the answer listing the project's templates.
+
+    Parameters
+    ----------
+    folder: pathlib.Path
+        The project's templates folder.
+
+    Returns
+    -------
+    str
+        Each valid template's title, file name and description, then the
+        project report templates (``scope: project``, used by
+        ``project_summary``), the templates that break a rule with the
+        problem, and where the format is explained: the project's
+        ``templates/README.md``, or for a project created before it was
+        installed, the guide shipped with KíLín.
+
+    """
+
+    found = _templates(folder)
+    lines = [
+        f"- **{template.title}** (`{name}.md`): {template.description}"
+        for name, template, _ in found if template is not None
+    ]
+    projects = [
+        f"- **{template.title}** (`{name}.md`): {template.description}"
+        for name, template in _project_templates(folder)
+    ]
+    broken = [
+        f"- `{name}.md` cannot be used: {error}"
+        for name, template, error in found if template is None
+    ]
+    head = (
+        "**Report templates in this project**" if lines
+        else "This project has no usable report template."
+    )
+    parts = [head, "", *lines]
+    if projects:
+        parts += [
+            "", "**Report templates for the whole project**", "",
+            *projects,
+            "",
+            "These read every document of the project (“write a "
+            "project overview”).",
+        ]
+    if broken:
+        parts += ["", "**Templates with problems**", "", *broken]
+    guide = (
+        "`templates/README.md` explains how to write one"
+        if (folder / "README.md").is_file()
+        else "the guide shipped with KíLín "
+        "(`kilin/tools/generate_paper_summary/templates/README.md`) "
+        "explains how to write one"
+    )
+    parts += [
+        "",
+        "Name one to use it (“write a research briefing of smith20”). "
+        "Templates are Markdown files in the project's `templates/` "
+        f"folder; {guide}.",
+    ]
+    return "\n".join(parts)
+
+
+def _template_check(question: str, folder: Path) -> str:
+    """Return the answer to a request to check a template.
+
+    Parameters
+    ----------
+    question: str
+        The question, naming the template.
+    folder: pathlib.Path
+        The project's templates folder.
+
+    Returns
+    -------
+    str
+        For the named template, that it can be used, with its sections
+        and their limits, or the rule it breaks; the list of templates
+        when the question names none.
+
+    """
+
+    named = _named_templates(question, _templates(folder))
+    if len(named) > 1:
+        return _ambiguous_templates(named)
+    for name, template, error in named:
+        if template is None:
+            return f"`{name}.md` cannot be used: {error}"
+        sections = []
+        for section in template.sections:
+            limit = (
+                f"{section.words[0]}–{section.words[1]} words"
+                if section.words
+                else f"{section.items[0]}–{section.items[1]} items"
+                if section.items
+                else section.source
+            )
+            sections.append(f"- {section.name} ({limit})")
+        return "\n".join([
+            f"**{template.title}** (`{name}.md`) can be used.",
+            "",
+            template.description,
+            "",
+            *sections,
+        ])
+    return templates_answer(folder)
+
+
+def routing(
+    settings: SummarySettings,
+    root: Path,
+    others: tuple[SummarySettings, ...] = (),
+) -> ToolRouting | None:
+    """Return the routing the project's templates add to this intent.
+
+    Parameters
+    ----------
+    settings: SummarySettings
+        The intent's settings.
+    root: pathlib.Path
+        The project's workspace.
+    others: tuple[SummarySettings, ...], optional
+        The settings of the project type's other intents using this tool;
+        templates they name keep their own intent. Defaults to none.
+
+    Returns
+    -------
+    ToolRouting | None
+        For an intent using any template (``TEMPLATE_CHOOSE``): a cue per
+        valid template not named by another intent (``others``) whose
+        title or file name has at least two words,
+        matched after a word asking to write ("write a journal club of
+        smith20") or before "of", "for", "on", "from" or "about" ("journal
+        club for smith20"); and a description listing the templates for
+        the router. None for an intent with a fixed template, or a project
+        without templates.
+
+    """
+
+    if settings.template != TEMPLATE_CHOOSE:
+        return None
+    claimed = {other.template for other in others}
+    usable = [
+        template
+        for name, template, _ in _templates(templates_folder(root))
+        if template is not None and name not in claimed
+    ]
+    if not usable:
+        return None
+    cues: list[str] = []
+    for template in usable:
+        phrases = {
+            " ".join(phrase.casefold().split())
+            for phrase in (template.title, template.name.replace("_", " "))
+            if len(phrase.replace("_", " ").split()) >= 2
+        }
+        if not phrases:
+            continue
+        alternatives = "|".join(
+            r"[\s_-]+".join(re.escape(word) for word in phrase.split())
+            for phrase in sorted(phrases)
+        )
+        cues.append(rf"{_WRITE_WORDS}\b(?:{alternatives})\b")
+        cues.append(rf"\b(?:{alternatives})\b{_FOR_WORDS}")
+    described = "; ".join(
+        f"{template.title} ({template.name}): "
+        + _shortened(template.description, _ROUTED_DESCRIPTION)
+        for template in usable[:_ROUTED_TEMPLATES]
+    )
+    return ToolRouting(
+        tuple(cues), f"Report templates in this project: {described}."
+    )
+
+
+def _shortened(text: str, limit: int) -> str:
+    """Return a description for the router, at most ``limit`` characters.
+
+    Parameters
+    ----------
+    text: str
+        A template's description.
+    limit: int
+        Most characters.
+
+    Returns
+    -------
+    str
+        Without its final full stop; when longer, cut at a word and ended
+        with "…".
+
+    """
+
+    text = " ".join(text.split()).rstrip(". ")
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
 
 
 def paper_citation(file: Path | None, passages: tuple[Chunk, ...]) -> str:
@@ -600,7 +1092,7 @@ def paper_citation(file: Path | None, passages: tuple[Chunk, ...]) -> str:
     Parameters
     ----------
     file: pathlib.Path | None
-        The paper on disk, for its PDF metadata; None when unknown.
+        The paper on disk, for PDF or Word metadata; None when unknown.
     passages: tuple[Chunk, ...]
         The paper's passages, for the DOI, year, and author count.
 
@@ -609,8 +1101,8 @@ def paper_citation(file: Path | None, passages: tuple[Chunk, ...]) -> str:
     str
         For example ``Smith, J. A. et al. A Study of
         ... https://doi.org/10.1038/... (2025).``: the first author and the
-        title come from the PDF metadata; the DOI and year are added only
-        when printed on the first page. Without a metadata title of at
+        title come from PDF or Word metadata; the DOI and year are added
+        only when found in the opening passages. Without a title of at
         least three words, the file name, saying so (for example
         ``smith2020.pdf (the file has no title metadata).``).
 
@@ -620,24 +1112,34 @@ def paper_citation(file: Path | None, passages: tuple[Chunk, ...]) -> str:
         f"{file.name if file else 'The paper'} (the file has no title "
         "metadata)."
     )
-    if file is None or file.suffix.lower() != ".pdf" or not file.is_file():
+    if file is None or not file.is_file():
         return fallback
 
-    try:
-        from pypdf import PdfReader
+    suffix = file.suffix.lower()
+    if suffix == ".pdf":
+        try:
+            from pypdf import PdfReader
 
-        metadata = PdfReader(file).metadata or {}
-    except Exception:  # Unreadable metadata: name the file instead.
+            metadata = PdfReader(file).metadata or {}
+            raw_title = metadata.get("/Title")
+            raw_author = metadata.get("/Author")
+        except Exception:  # pylint: disable=broad-exception-caught
+            return fallback
+    elif suffix in {".doc", ".docx"}:
+        from kilin.sources._word_metadata import read_word_metadata
+
+        raw_title, raw_author = read_word_metadata(file)
+    else:
         return fallback
 
-    title = " ".join(str(metadata.get("/Title") or "").split()).rstrip(".")
+    title = " ".join(str(raw_title or "").split()).rstrip(".")
     if len(title.split()) < 3:
         return fallback
 
     first = paper_beginning(passages)
     authors = [
         name.strip()
-        for name in re.split(r";|,| and ", str(metadata.get("/Author") or ""))
+        for name in re.split(r";|,| and ", str(raw_author or ""))
         if name.strip() and not name.strip().lower().startswith("for ")
     ]
 
@@ -1111,19 +1613,47 @@ def run(
         the paper cannot be used, or the user cancels, a message saying so
         and no evidence.
 
+    Raises
+    ------
+    IncompleteModelResponse
+        If no usable cited notes can be produced for a report. The
+        normal template and paper-selection errors return ToolResult.
+
     """
 
     trace = context.trace
     summary: dict[str, object] = {"name": "generate_paper_summary"}
+    folder = templates_folder(context.project_root)
+    if _LIST_TEMPLATES.search(request.question):
+        context.done("Listed the templates", evidence_count=0)
+        summary["listed_templates"] = True
+        return ToolResult(templates_answer(folder), (), summary)
+    if _CHECK_TEMPLATE.search(request.question):
+        context.done("Checked the template", evidence_count=0)
+        summary["checked_template"] = True
+        return ToolResult(
+            _template_check(request.question, folder), (), summary
+        )
+    # Reuse the shared choice protocol: it emits the options to the GUI
+    # before waiting for the callback, and validates the returned index.
+    chooser = (
+        partial(ask_choice, context=context)
+        if getattr(context, "choose", None) is not None
+        else None
+    )
     try:
         template = choose_template(
             request.question,
-            templates_folder(context.project_root),
+            folder,
             settings.template,
+            chooser,
         )
     except ValueError as error:
         context.done("Could not read the template", evidence_count=0)
         return ToolResult(str(error), (), summary)
+    if template is None:
+        context.done("No template chosen", evidence_count=0)
+        return ToolResult("No template was chosen.", (), summary)
     summary["template"] = template.name
 
     context.progress("Choosing the paper to summarize")
@@ -1166,11 +1696,11 @@ def run(
         batches=len(parts),
         batches_to_run=len(to_read),
         estimated_seconds=round(
-            _estimate(to_read, texts, settings, template), 1
+            _estimate(to_read, texts, template), 1
         ),
         quick_items=len(parts[0]),
         quick_seconds=round(
-            _estimate(parts[:1], texts, settings, template), 1
+            _estimate(parts[:1], texts, template), 1
         ),
         details=(
             *(
@@ -1214,51 +1744,96 @@ def run(
 
     started = perf_counter()
     runs = parts[:1] if choice == PLAN_CHOICE_QUICK else to_read
+    failures: list[dict[str, object]] = []
     notes = take_notes(
         _notes_task(template),
         path.name,
         texts,
         runs,
-        settings.note_tokens,
         context,
         what="paper",
         whole=choice != PLAN_CHOICE_QUICK,
+        failures=failures,
     )
+    reading_incomplete = bool(failures)
+    read_indices = {index for number, _ in notes for index in runs[number - 1]}
+    read = len(read_indices)
+
+    if not any(lines for _, lines in notes):
+        if failures:
+            return partial_result(
+                ToolResult(
+                    "No usable notes are available. No report file was saved.",
+                    (), {**summary, "valid": False, "saved": None,
+                         "saved_pdf": None, "passages_read": read},
+                ), failures, completed=False,
+            )
+        raise IncompleteModelResponse(
+            "No usable cited notes were produced for the report.",
+            reason="no_notes",
+        )
 
     # Python owns the structure: the model writes the headline and each
     # section separately, and each piece is checked against its limit.
-    headline, fixes = _write_headline(template, path.name, notes, context)
+    try:
+        headline, fixes = _write_headline(template, path.name, notes, context)
+    except IncompleteModelResponse as error:
+        headline, fixes = template.title, []
+        failures.append({"item": "Headline", **error.to_dict()})
     # The PDF on disk lets the shared extractor read two columns in order.
     entries = reference_entries(
         passages, REFERENCE_LAYOUT, _paper_file(path, context)
     )
     written: list[tuple[str, str]] = []
+    accepted: list[tuple[str, str]] = []
     unsupported: list[str] = []
     for section in template.sections:
-        if section.source == SECTION_SOURCE_CITATION:
-            # Copied, not written: the model never touches the citation.
-            citation = paper_citation(_paper_file(path, context), passages)
-            written.append((section.name, citation))
-            continue
-
-        if section.source == SECTION_SOURCE_REFERENCES:
-            context.progress(f"Choosing {section.name}")
-            content, problem = _fill_references(
-                template, section, path.name, notes, entries, context
-            )
-            if problem:
-                unsupported.append(problem)
-            written.append((section.name, content))
-            continue
-
-        content, section_fixes = _write_section(
-            template, section, path.name, notes, written, settings, context
-        )
-        fixes.extend(section_fixes)
+        try:
+            if section.source == SECTION_SOURCE_CITATION:
+                # Bibliographic data is copied, not generated.
+                content = paper_citation(_paper_file(path, context), passages)
+            elif section.source == SECTION_SOURCE_REFERENCES:
+                context.progress(f"Choosing {section.name}")
+                content, problem = _fill_references(
+                    template, section, path.name, notes, entries, context
+                )
+                if problem:
+                    unsupported.append(problem)
+            else:
+                content, section_fixes = _write_section(
+                    template, section, path.name, notes, accepted, settings,
+                    context, incomplete_reading=reading_incomplete,
+                )
+                fixes.extend(section_fixes)
+            accepted.append((section.name, content))
+        except IncompleteModelResponse as error:
+            failures.append({"item": section.name, **error.to_dict()})
+            content = f"*Not completed: {error}*"
+        # Failed placeholders remain visible, but never feed later sections.
         written.append((section.name, content))
 
     if template.max_total_words:
         written = _fit_total(written, template)
+    if failures:
+        # A partial artifact may contain validated sections and explicit
+        # omissions, never an unmarked invalid section rescued by another's
+        # failure. Validate after any document-wide shortening as well.
+        accepted_names = {name for name, _ in accepted}
+        for index, (section, (name, content)) in enumerate(
+            zip(template.sections, written)
+        ):
+            if name not in accepted_names:
+                continue
+            problem = section_problem(section, content)
+            if problem:
+                failures.append({
+                    "item": name, "message": problem,
+                    "reason": "report_validation",
+                })
+                written[index] = (name, f"*Not completed: {problem}*")
+                accepted_names.remove(name)
+        accepted = [(name, text) for name, text in accepted
+                    if name in accepted_names]
     draft = _draft(headline, written, template)
 
     context.progress("Checking the template")
@@ -1272,11 +1847,57 @@ def run(
         turn_id=context.trace_turn_id,
     )
 
+    if (not check.valid or unsupported or failures) and not (
+        failures and accepted
+    ):
+        problems = check.problems() + unsupported
+        summary.update({
+            "status": "incomplete",
+            "reason": "report_validation",
+            "message": "The generated report failed its template checks.",
+            "valid": False,
+            "problems": problems,
+            "repairs": repairs,
+            "passages_read": read,
+            "notes": sum(len(lines) for _, lines in notes),
+            "saved": None,
+            "saved_pdf": None,
+            "seconds": round(perf_counter() - started, 1),
+            "model": context.model_id,
+        })
+        trace.emit(
+            "tool.generate_paper_summary.incomplete", component="tool",
+            data=summary, turn_id=context.trace_turn_id,
+        )
+        context.done(
+            "Report validation failed; no file saved", evidence_count=0
+        )
+        return partial_result(
+            ToolResult(
+                "The report could not be completed because its validation "
+                "failed. No report file was saved.\n\n"
+                + "\n".join(f"- {problem}" for problem in problems),
+                (), summary,
+            ), failures, completed=False,
+        )
+
     file_text = summary_file_text(draft, path)
+    suffix = "_summary.md"
+    if failures:
+        suffix = "_summary_partial.md"
+        file_text = (
+            "> **Partial report:** incomplete items are marked below. "
+            "Do not treat omissions as negative evidence.\n\n"
+            + file_text + incomplete_notice(failures) + "\n"
+        )
     saved = save_output_file(
-        context.project_root, f"{path.stem}_summary.md", file_text
+        context.project_root, path.stem + suffix, file_text
     )
-    pdf, pdf_note = _write_pdf(file_text, saved, template, context)
+    # A partial draft must not replace the completed report or its PDF.
+    pdf, pdf_note = (
+        (None, "No PDF was produced for this partial report.") if failures
+        else _write_pdf(file_text, saved, template, context)
+    )
     trace.emit(
         "tool.generate_paper_summary.saved",
         component="tool",
@@ -1287,12 +1908,12 @@ def run(
     # The answer says where the files are and then shows the saved file
     # itself, so the chat and the file never differ. Checks and fixes are
     # recorded in the turn and the trace.
-    read = sum(len(part) for part in runs)
     files = f"`{saved.as_posix()}`" + (
         f" and `{pdf.as_posix()}`" if pdf else ""
     )
     lead = [
-        f"Done: the {template.title.lower()} of {path.name} is saved as "
+        ("Partial report: the " if failures else "Done: the ")
+        + f"{template.title.lower()} of {path.name} is saved as "
         f"{files}."
     ]
     if pdf_note:
@@ -1303,7 +1924,7 @@ def run(
             + (
                 " (quick version: the first part)."
                 if choice == PLAN_CHOICE_QUICK
-                else " (the model-call limit was reached)."
+                else " (reading coverage is incomplete)."
             )
         )
 
@@ -1311,7 +1932,7 @@ def run(
         {
             "passages_read": read,
             "notes": sum(len(lines) for _, lines in notes),
-            "valid": check.valid and not unsupported,
+            "valid": check.valid and not unsupported and not failures,
             "problems": check.problems() + unsupported,
             "repairs": repairs,
             "saved": saved.as_posix(),
@@ -1320,6 +1941,12 @@ def run(
             "model": context.model_id,
         }
     )
+    if failures:
+        summary.update({
+            "status": "partial", "reason": "item_completion",
+            "message": "Some report items could not be completed.",
+            "incomplete_items": failures,
+        })
     trace.emit(
         "tool.generate_paper_summary.result",
         component="tool",
@@ -1330,7 +1957,10 @@ def run(
         },
         turn_id=context.trace_turn_id,
     )
-    context.done(f"Saved {saved.as_posix()}", evidence_count=len(passages))
+    context.done(
+        f"Saved {saved.as_posix()}",
+        evidence_count=read if failures else len(passages),
+    )
 
     evidence = tuple(
         {
@@ -1343,6 +1973,7 @@ def run(
             "cell": chunk.cell,
         }
         for index, chunk in enumerate(passages)
+        if not failures or index in read_indices
     )
     answer = " ".join(lead) + "\n\n---\n\n" + file_text.strip()
     return ToolResult(answer, evidence, summary)
@@ -1438,6 +2069,8 @@ def _write_section(
     written: list[tuple[str, str]],
     settings: SummarySettings,
     context: ToolContext,
+    *,
+    incomplete_reading: bool = False,
 ) -> tuple[str, list[str]]:
     """Write one section from the notes, then fix it toward its limits.
 
@@ -1454,9 +2087,11 @@ def _write_section(
     written: list[tuple[str, str]]
         Sections written so far, so they are not repeated.
     settings: SummarySettings
-        The intent's settings (``repair_attempts``, ``section_tokens``).
+        The intent's repair-attempt setting.
     context: ToolContext
         KíLín's services.
+    incomplete_reading: bool, optional
+        Warn that failed reading parts are not evidence of absence.
 
     Returns
     -------
@@ -1470,8 +2105,15 @@ def _write_section(
 
     context.progress(f"Writing {section.name}")
     system, prompt = section_prompt(template, section, name, notes, written)
-    tokens = _section_tokens(section, settings)
-    content = _content(context.ask_model(system, prompt, tokens), section)
+    coverage = (
+        "\n\nSome reading parts failed. Use only the supplied notes. "
+        "When these do not cover a topic, say it could not be established "
+        "from the available notes, not that it is absent from the paper."
+        if incomplete_reading else ""
+    )
+    content = _content(
+        context.ask_model(system, prompt + coverage, None), section
+    )
     problem = section_problem(section, content)
 
     fixes: list[str] = []
@@ -1487,7 +2129,9 @@ def _write_section(
         system, prompt = fix_prompt(
             section, content, problem, notes if short else None
         )
-        content = _content(context.ask_model(system, prompt, tokens), section)
+        content = _content(
+            context.ask_model(system, prompt + coverage, None), section
+        )
         problem = section_problem(section, content)
 
     if problem and section.words and (
@@ -1716,7 +2360,7 @@ def _paper_file(path: Path, context: ToolContext) -> Path | None:
     """
 
     root = context.project_root
-    for candidate in (root / path, root / "sources" / path):
+    for candidate in (root / path, root / PROJECT_SOURCES_DIRECTORY / path):
         if candidate.is_file():
             return candidate
 
@@ -1792,23 +2436,20 @@ def _headline(reply: str) -> str:
     return line.strip().lstrip("#").strip().strip('"“”*').strip()
 
 
-def _section_tokens(
-    section: TemplateSection, settings: SummarySettings
-) -> int:
-    """Return the reply room for one section, in tokens.
+def _section_reply_estimate(section: TemplateSection) -> int:
+    """Estimate section output for the plan, not generation control.
 
     Parameters
     ----------
     section: TemplateSection
         The section.
-    settings: SummarySettings
-        The intent's settings (``section_tokens``).
 
     Returns
     -------
     int
         Two tokens per word of the word maximum plus 80; else 90 tokens
-        per item of the item maximum plus 40; else ``section_tokens``.
+        per item of the item maximum plus 40; otherwise the packaged section
+        estimate.
 
     """
 
@@ -1818,13 +2459,12 @@ def _section_tokens(
     if section.items:
         return 90 * section.items[1] + 40
 
-    return settings.section_tokens
+    return SECTION_REPLY_TOKENS
 
 
 def _estimate(
     parts: list[list[int]],
     texts: list[str],
-    settings: SummarySettings,
     template: ReportTemplate,
 ) -> float:
     """Return the approximate seconds of a run, for the plan.
@@ -1835,8 +2475,6 @@ def _estimate(
         Passage indices of the parts to read.
     texts: list[str]
         Every passage's text.
-    settings: SummarySettings
-        The intent's settings.
     template: ReportTemplate
         The report template.
 
@@ -1855,10 +2493,10 @@ def _estimate(
             estimate_tokens(texts[index]) for index in part
         )
         total += _CALL_SECONDS + prompt / _PROMPT_TOKENS_PER_SECOND
-        # Notes use about half of their reply room.
-        total += settings.note_tokens / 2 / _REPLY_TOKENS_PER_SECOND
+        # Planning estimates are independent of generation limits.
+        total += NOTE_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
 
-    notes = len(parts) * settings.note_tokens * _REPLY_SHARE
+    notes = len(parts) * NOTE_REPLY_TOKENS * _REPLY_SHARE
     written = [
         section
         for section in template.sections
@@ -1869,7 +2507,7 @@ def _estimate(
         reply = (
             _REFERENCES_REPLY_TOKENS
             if section.source == SECTION_SOURCE_REFERENCES
-            else _section_tokens(section, settings) * _REPLY_SHARE
+            else _section_reply_estimate(section) * _REPLY_SHARE
         )
         total += _CALL_SECONDS + reply / _REPLY_TOKENS_PER_SECOND
     total += (

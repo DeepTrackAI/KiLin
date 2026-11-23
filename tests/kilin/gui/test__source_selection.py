@@ -11,10 +11,15 @@ synthetic preview rows. It requires no models, workspace, or UI process.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
-import subprocess
 import unittest
+
+from tests.kilin.gui._frontend_support import (
+    extract_function,
+    run_node,
+)
 
 
 _APP_JS = (
@@ -30,6 +35,14 @@ class TestGUIFileSelection(unittest.TestCase):
     def test_oversized_selection_uses_reason_code(self) -> None:
         """Exercise the real frontend checks with reworded explanations."""
 
+        source = _APP_JS.read_text(encoding="utf-8")
+        functions = "\n".join(
+            extract_function(source, name)
+            for name in (
+                "isOversizedSkippedFile", "skippedReason",
+                "selectedFileSizeLimit", "renderPreview",
+            )
+        )
         script = r"""
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -37,18 +50,9 @@ const vm = require("node:vm");
 const source = fs.readFileSync(process.argv[1], "utf8");
 const codes = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 
-function extract(name) {
-  const start = source.indexOf(`function ${name}(`);
-  assert.notEqual(start, -1, `Missing frontend function: ${name}`);
-  const end = source.indexOf("\n}", start);
-  assert.notEqual(end, -1, `Incomplete frontend function: ${name}`);
-  return source.slice(start, end + 2);
-}
-
-const names = [
-  "isOversizedSkippedFile", "selectedFileSizeLimit", "renderPreview"
-];
-const functions = names.map(extract).join("\n");
+"""
+        script += "const functions = " + json.dumps(functions) + ";\n"
+        script += r"""
 // Every relevant decision must use the same code-only classifier.
 assert.equal(
   (source.match(/isOversizedSkippedFile\(item\)/g) || []).length, 5
@@ -101,15 +105,12 @@ assert.equal(vm.runInNewContext("selectedFileSizeLimit()", context), 50);
 vm.runInNewContext("renderPreview()", context);
 assert.equal(count.textContent, "2 of 3 files selected · 1 unavailable");
 """
-        result = subprocess.run(
-            [
-                shutil.which("node"), "-e", script, str(_APP_JS),
+        result = run_node(
+            script,
+            args=(
+                str(_APP_JS),
                 str(_APP_JS.parents[2] / "repository_reason_codes.json"),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
+            ),
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 

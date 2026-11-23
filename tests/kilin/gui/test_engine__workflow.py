@@ -11,12 +11,20 @@ The fake session exposes the project and conversation fields used by the GUI.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import ANY, MagicMock, patch
 import unittest
 
+from kilin._model_completion import GenerationCancelled
+from kilin.conversation_format import conversation_state
+from kilin.conversation_memory.models import new_turn_uuid
 from kilin.gui.engine import ChatEngine
+from kilin.project_behavior import (
+    effective_project_type,
+    project_behavior_settings,
+)
 from kilin.gui.model_catalog import MODEL_CHOICES
 from kilin.workspace import prepare_sources_workspace
 
@@ -67,12 +75,15 @@ class TestEngineWorkflow(unittest.TestCase):
             question,
             token_callback=ANY,
             phase_callback=ANY,
+            activity_callback=ANY,
             pdf_writer=ANY,
+            stop_requested=ANY,
             **options,
         )
         options = session.ask.call_args.kwargs
         self.assertTrue(callable(options["token_callback"]))
         self.assertTrue(callable(options["phase_callback"]))
+        self.assertTrue(callable(options["activity_callback"]))
 
     @patch("kilin.gui.engine.download_model")
     def test_download_accepts_explicit_catalog_and_custom_models(
@@ -138,23 +149,33 @@ class TestEngineWorkflow(unittest.TestCase):
         )
         self.assertEqual(answered["turn"]["answer"], "New answer")
         self.assertEqual(events[-1]["event"], "reset")
+        activity = {
+            "index": 0, "phase": "routing",
+            "label": "Identifying intent", "started_ms": 0,
+        }
+        session.ask.call_args.kwargs["activity_callback"](activity)
+        self.assertEqual(events[-1], {"event": "answer_activity", **activity})
 
     @patch("kilin.gui.engine.RAGSession")
     @patch("kilin.gui.engine.prepare_sources_workspace")
-    def test_blank_source_requires_workspace_without_using_examples(
+    def test_blank_source_requests_core_allocation_without_examples(
         self, prepare, rag_session
         ) -> None:
-        """Reject a source-free request without its explicit destination."""
+        """Let the core name empty projects without example paths."""
 
         events: list[dict[str, object]] = []
         engine = ChatEngine(self.root, events.append)
+        prepare.side_effect = RuntimeError("allocation unavailable")
 
         engine.open_project([], "literature", "", selected_files={})
 
-        prepare.assert_not_called()
+        prepare.assert_called_once_with(
+            [], "literature", None, selected_files={},
+            workspace_root=self.root,
+        )
         rag_session.assert_not_called()
         self.assertEqual(events[-1]["event"], "error")
-        self.assertIn("Choose a workspace folder", events[-1]["message"])
+        self.assertIn("allocation unavailable", events[-1]["message"])
         self.assertIsNone(engine.session)
         self.assertEqual(list(self.root.iterdir()), [])
 
@@ -170,6 +191,204 @@ class TestEngineWorkflow(unittest.TestCase):
 
         self.assert_question_forwarded(session, "Question", retrieval_count=8)
         self.assertEqual(events[-1]["event"], "answered")
+
+    def test_stop_ends_the_answer_and_keeps_the_project_open(self) -> None:
+        """Stop reaches the running answer; nothing reloads or fails."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(Path("/sandbox"), events.append)
+        session = self.model_session()
+        engine.session = session
+        engine.cancel_answer()
+        seen = []
+
+        def answer(question, **options):
+            """Stop part-way, as the input thread does on Stop."""
+
+            # A Stop pressed before the answer started does not end it.
+            seen.append(options["stop_requested"]())
+            engine.cancel_answer()
+            seen.append(options["stop_requested"]())
+            raise GenerationCancelled("The answer was stopped.")
+
+        session.ask.side_effect = answer
+        engine.ask("Question")
+
+        self.assertEqual(seen, [False, True])
+        self.assertEqual(events[-1]["event"], "answer_cancelled")
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        self.assertIs(engine.session, session)
+        session.close.assert_not_called()
+        # After the answer, Stop does nothing until the next one.
+        engine.cancel_answer()
+        self.assertFalse(session.ask.call_args.kwargs["stop_requested"]())
+
+    def test_tool_settings_are_listed_and_saved_for_the_project(self):
+        """Save a tool's settings; a rejected value comes back by tool."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(Path("/sandbox"), events.append)
+        session = self.model_session()
+        engine.session = session
+        engine.tool_settings()
+        tools = events[-1]["tools"]
+        self.assertEqual(events[-1]["event"], "tool_settings")
+        name = tools[0]["name"]
+        key, value = next(
+            (key, value) for key, value in tools[0]["settings"].items()
+            if type(value) is int
+        )
+
+        engine.save_tool_settings(name, {key: value + 1})
+        self.assertIs(events[-1]["saved"], True)
+        saved = next(item for item in events[-1]["tools"]
+                     if item["name"] == name)
+        self.assertEqual(saved["settings"][key], value + 1)
+        profile = (session.project.root / "profile.ini").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"[tool.{name}]", profile)
+
+        engine.save_tool_settings(name, {key: "not a number"})
+        self.assertEqual(events[-1]["event"], "tool_settings")
+        self.assertEqual(events[-1]["tool"], name)
+        self.assertIn(key, events[-1]["error"])
+        self.assertFalse(any(event["event"] == "error" for event in events))
+
+    def test_project_behavior_is_saved_only_for_active_project(self):
+        """Use core validation and reject stale or foreign GUI edits."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        root = str(session.project.root)
+        engine.behavior_settings()
+        self.assertEqual(events[-1]["event"], "project_behavior")
+        current = events[-1]["behavior"]
+        self.assertEqual(current["project"], root)
+        values = dict(current["global"]["values"])
+        values["description"] = "Personal research"
+        engine.save_behavior_settings(
+            root, "global", None, values, current["revision"], 17,
+        )
+        result = events[-1]
+        self.assertTrue(result["saved"])
+        self.assertEqual(result["request_id"], 17)
+        self.assertEqual(result["behavior"]["global"]["values"][
+            "description"], "Personal research")
+        saved_bytes = (
+            session.project.root / "project_behavior.json"
+        ).read_bytes()
+        engine.save_behavior_settings(
+            root, "global", None, values, current["revision"], 18,
+        )
+        self.assertIn("changed since", events[-1]["error"])
+        engine.save_behavior_settings(
+            "/different/project", "global", None, values,
+            result["behavior"]["revision"], 19,
+        )
+        self.assertIn("different project", events[-1]["error"])
+        self.assertEqual(
+            (session.project.root / "project_behavior.json").read_bytes(),
+            saved_bytes,
+        )
+
+    def test_indexing_capabilities_rebuild_and_rollback(self):
+        """Commit capability settings only after index preparation succeeds."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        root = str(session.project.root)
+        current = project_behavior_settings(root)
+        values = {"code_graph": False, "document_headers": False}
+        engine.save_behavior_settings(
+            root, "capabilities", None, values,
+            current["revision"], 32,
+        )
+        self.assertEqual(events[-1]["event"], "project_behavior")
+        self.assertTrue(events[-1]["saved"])
+        self.assertEqual(events[-1]["scope"], "capabilities")
+        session.refresh_sources.assert_called_once()
+        self.assertEqual(effective_project_type(root).code_graph, False)
+        before = (Path(root) / "project_behavior.json").read_bytes()
+        session.refresh_sources.reset_mock()
+        session.refresh_sources.side_effect = [
+            RuntimeError("index unavailable"), None,
+        ]
+        engine.save_behavior_settings(
+            root, "capabilities", None, current["capabilities"]["defaults"],
+            events[-1]["behavior"]["revision"], 33,
+        )
+        self.assertIn("index unavailable", events[-1]["error"])
+        self.assertEqual(events[-1]["request_id"], 33)
+        self.assertEqual(
+            (Path(root) / "project_behavior.json").read_bytes(), before
+        )
+        self.assertEqual(session.refresh_sources.call_count, 2)
+
+    def test_memory_policy_saves_do_not_refresh_source_indexes(self):
+        """Memory edits use the existing GUI bridge without reindexing."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        root = str(session.project.root)
+        settings = project_behavior_settings(root)
+        values = dict(settings["memory"]["values"])
+        values["enabled"] = True
+        engine.save_behavior_settings(
+            root, "memory", None, values, settings["revision"], 51,
+        )
+        self.assertEqual(events[-1]["event"], "project_behavior")
+        self.assertTrue(events[-1]["saved"])
+        self.assertEqual(events[-1]["scope"], "memory")
+        self.assertTrue(effective_project_type(root)
+                        .conversation_memory.enabled)
+        session.refresh_sources.assert_not_called()
+
+        current = events[-1]["behavior"]
+        item = next(x for x in current["intents"]
+                    if x["id"] == "code_explanation")
+        intent_values = dict(item["memory"]["values"])
+        intent_values["indexing"] = "explicit"
+        engine.save_behavior_settings(
+            root, "intent_memory", "code_explanation", intent_values,
+            current["revision"], 52,
+        )
+        self.assertEqual(events[-1]["scope"], "intent_memory")
+        self.assertEqual(events[-1]["request_id"], 52)
+        self.assertEqual(
+            effective_project_type(root)
+            .intents["code_explanation"].memory_indexing,
+            "explicit",
+        )
+        session.refresh_sources.assert_not_called()
+
+    def test_indexing_capability_failure_removes_new_override(self):
+        """First-time failed rebuild cannot leave a behavior override."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        root = str(session.project.root)
+        current = project_behavior_settings(root)
+        session.refresh_sources.side_effect = [
+            RuntimeError("index failed"), None,
+        ]
+        engine.save_behavior_settings(
+            root, "capabilities", None,
+            {"code_graph": False, "document_headers": False},
+            current["revision"], 34,
+        )
+        self.assertEqual(events[-1]["event"], "project_behavior")
+        self.assertIn("index failed", events[-1]["error"])
+        self.assertFalse((Path(root) / "project_behavior.json").exists())
+        self.assertEqual(session.refresh_sources.call_count, 2)
 
     def test_generation_settings_are_passed_with_the_question(self) -> None:
         """Chat controls affect answers without editing the project profile."""
@@ -192,6 +411,156 @@ class TestEngineWorkflow(unittest.TestCase):
             "Question", retrieval_count=6, generation_settings=settings
         )
 
+    def test_answer_settings_are_saved_without_a_question(self) -> None:
+        """Thinking switched in the menu is saved and used at once."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(Path("/sandbox"), events.append)
+        session = self.model_session()
+        engine.session = session
+        thinking = session.project.profile.thinking
+
+        engine.save_answer_settings({"thinking": not thinking})
+
+        self.assertEqual(session.project.profile.thinking, not thinking)
+        saved = (session.project.root / "profile.ini").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"thinking = {not thinking}", saved)
+        session.chat_session.configure_generation.assert_called_with({
+            "temperature": session.project.profile.temperature,
+            "thinking": not thinking,
+            "max_new_tokens": session.project.profile.max_new_tokens,
+        })
+        session.ask.assert_not_called()
+        # The page is told the saved values are now in effect.
+        self.assertEqual(events, [{
+            "event": "answer_settings_saved",
+            "temperature": session.project.profile.temperature,
+            "thinking": not thinking,
+            "max_new_tokens": session.project.profile.max_new_tokens,
+        }])
+
+        engine.session = None
+        engine.save_answer_settings({"thinking": True})
+        self.assertEqual(events[-1]["event"], "error")
+        self.assertIn("Open a project first", events[-1]["message"])
+
+    def test_answer_settings_acknowledge_matching_project(self) -> None:
+        """A correlated reply reports the persisted full configuration."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        project = str(session.project.root)
+        engine.save_answer_settings(
+            {"temperature": 0.6, "max_new_tokens": 512}, 7, project
+        )
+        self.assertEqual(events[-1], {
+            "event": "answer_settings_saved",
+            "request_id": 7,
+            "project": project,
+            "temperature": 0.6,
+            "thinking": session.project.profile.thinking,
+            "max_new_tokens": 512,
+        })
+        self.assertEqual(session.project.profile.temperature, 0.6)
+        self.assertEqual(session.project.profile.max_new_tokens, 512)
+
+    def test_answer_settings_reject_stale_project_identity(self) -> None:
+        """A delayed save cannot mutate a different active project."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        initial = session.project.profile.thinking
+        engine.save_answer_settings(
+            {"thinking": not initial}, 8, "/another/project"
+        )
+        self.assertEqual(events[-1]["event"], "answer_settings_failed")
+        self.assertEqual(events[-1]["request_id"], 8)
+        self.assertEqual(events[-1]["project"], "/another/project")
+        self.assertFalse(events[-1]["verified"])
+        self.assertEqual(session.project.profile.thinking, initial)
+
+    def test_answer_settings_failure_reports_verified_profile(self) -> None:
+        """Rejected values revert to the actual persisted project state."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        project = str(session.project.root)
+        original = session.project.profile
+        engine.save_answer_settings({"temperature": -1}, 9, project)
+        failure = events[-1]
+        self.assertEqual(failure["event"], "answer_settings_failed")
+        self.assertEqual(failure["request_id"], 9)
+        self.assertEqual(failure["project"], project)
+        self.assertTrue(failure["verified"])
+        self.assertEqual(failure["temperature"], original.temperature)
+        self.assertEqual(failure["thinking"], original.thinking)
+        session.chat_session.configure_generation.assert_called_with({
+            "temperature": original.temperature,
+            "thinking": original.thinking,
+            "max_new_tokens": original.max_new_tokens,
+        })
+
+    def test_answer_settings_reconcile_after_post_write_error(self) -> None:
+        """Reread disk after a save succeeds but its trace step fails."""
+
+        from kilin.project import configure_project
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        project = str(session.project.root)
+
+        def write_then_fail(directory, settings, *, trace):
+            """Simulate a post-commit error without rolling back disk."""
+            configure_project(directory, settings)
+            raise RuntimeError("trace failed after writing")
+
+        with patch(
+            "kilin.gui.engine.configure_project",
+            side_effect=write_then_fail,
+        ):
+            engine.save_answer_settings({"temperature": 0.5}, 10, project)
+        failure = events[-1]
+        self.assertEqual(failure["event"], "answer_settings_failed")
+        self.assertTrue(failure["verified"])
+        self.assertEqual(failure["temperature"], 0.5)
+        self.assertEqual(session.project.profile.temperature, 0.5)
+        session.chat_session.configure_generation.assert_called_with({
+            "temperature": 0.5,
+            "thinking": session.project.profile.thinking,
+            "max_new_tokens": session.project.profile.max_new_tokens,
+        })
+
+    def test_answer_settings_unverifiable_failure_requires_reopen(
+        self,
+    ) -> None:
+        """Do not claim a saved state when the profile cannot be read."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        project = str(session.project.root)
+        with patch(
+            "kilin.gui.engine.open_project",
+            side_effect=OSError("cannot read profile"),
+        ):
+            engine.save_answer_settings({"temperature": -1}, 11, project)
+        failure = events[-1]
+        self.assertEqual(failure["event"], "answer_settings_failed")
+        self.assertFalse(failure["verified"])
+        self.assertNotIn("temperature", failure)
+        self.assertEqual(failure["request_id"], 11)
+
     @patch("kilin.gui.engine.RAGSession")
     @patch("kilin.gui.engine.open_project")
     def test_resume_does_not_copy_sources(
@@ -211,6 +580,107 @@ class TestEngineWorkflow(unittest.TestCase):
         open_saved.assert_called_once_with(str(project.root))
         rag_session.assert_called_once()
         self.assertEqual(events[-1]["event"], "opened")
+
+    @patch("kilin.gui.engine.RAGSession")
+    def test_chat_events_refresh_the_workspace_tree(self, rag):
+        """Creating or deleting a chat sends the updated project files."""
+
+        session = self.model_session()
+        rag.return_value = session
+        events = []
+        engine = ChatEngine(self.root, events.append)
+        self.addCleanup(engine.close)
+        engine.resume_project(str(session.project.root))
+        old = engine.active_conversation
+        root = session.project.root
+
+        def shown(path: Path) -> bool:
+            """Whether the latest chat event lists this file."""
+            latest = [
+                event for event in events
+                if event["event"] in {"conversation_opened", "conversations"}
+            ][-1]
+            return path.relative_to(root).as_posix() in latest[
+                "workspace_files"
+            ]
+
+        engine.create_conversation()
+        new = engine.conversation_store.state_path(engine.active_conversation)
+        self.assertTrue(shown(new))
+        path = engine.conversation_store.state_path(old)
+        self.assertTrue(shown(path))
+
+        engine.delete_conversation(old.conversation_id)
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        self.assertFalse(path.exists())
+        self.assertFalse(shown(path))
+
+    @patch("kilin.gui.engine.RAGSession")
+    def test_new_chat_reopens_an_unused_empty_chat(self, rag):
+        """Empty chats are not listed, so one left unused is reused."""
+
+        session = self.model_session()
+        rag.return_value = session
+        events = []
+        engine = ChatEngine(self.root, events.append)
+        self.addCleanup(engine.close)
+        engine.resume_project(str(session.project.root))
+        store = engine.conversation_store
+        first = engine.active_conversation
+        path = store.state_path(first)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        conversation_state(payload)["turns"] = [{
+            "conversation_turn_uuid": new_turn_uuid(),
+            "question": "Asked",
+        }]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        engine.create_conversation()
+        empty = engine.active_conversation
+        engine.select_conversation(first.conversation_id)
+        engine.create_conversation()
+
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        self.assertEqual(
+            engine.active_conversation.conversation_id, empty.conversation_id
+        )
+        self.assertEqual(len(list(path.parent.glob("conversation_*.json"))), 2)
+
+    @patch("kilin.gui.engine.RAGSession")
+    def test_branch_from_a_message_keeps_its_first_turns(self, rag):
+        """The engine branches the active chat at the requested turn."""
+
+        session = self.model_session()
+        rag.return_value = session
+        events = []
+        engine = ChatEngine(self.root, events.append)
+        self.addCleanup(engine.close)
+        engine.resume_project(str(session.project.root))
+        parent = engine.active_conversation
+        path = engine.conversation_store.state_path(parent)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        turns = [
+            {"conversation_turn_uuid": new_turn_uuid(),
+             "question": "First"},
+            {"conversation_turn_uuid": new_turn_uuid(),
+             "question": "Second"},
+        ]
+        conversation_state(payload)["turns"] = turns
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        engine.create_conversation(branch=True, turn_count=1)
+
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        branch = engine.active_conversation
+        self.assertEqual(branch.parent_conversation_id,
+                         parent.conversation_id)
+        self.assertEqual(branch.origin_turn_count, 1)
+        saved = json.loads(
+            engine.conversation_store.state_path(branch).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(conversation_state(saved)["turns"], turns[:1])
 
     @patch("kilin.gui.engine.RAGSession")
     def test_deleting_active_chat_preserves_trace_and_switches(self, rag):
@@ -247,7 +717,7 @@ class TestEngineWorkflow(unittest.TestCase):
             self.assertNotIn(
                 "Keep this historical trace", path.read_text(encoding="utf-8")
             )
-        archived = list((path.parent / "deleted").glob("*.json"))
+        archived = list((path.parent / ".deleted").glob("*.json"))
         self.assertEqual(len(archived), 1)
         self.assertEqual(archived[0].read_bytes(), before)
         self.assertNotEqual(

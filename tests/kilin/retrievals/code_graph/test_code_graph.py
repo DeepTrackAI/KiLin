@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from kilin.retrievals.code_graph import code_graph as cg
 from kilin.retrievals.code_graph.extensions import code_graph_m as matlab
 from kilin.retrievals.code_graph.extensions import code_graph_py as py
+from kilin.sources import extract_source_units
 from tests.kilin.retrievals._support import source_file, source_unit
 
 
@@ -67,8 +68,52 @@ class TestCodeGraphNames(unittest.TestCase):
         self.assertEqual(cg._resolve_name("missing", known), "missing")
         cg._remember_name(known, "other.alpha")
         self.assertEqual(cg._resolve_name("alpha", known), "alpha")
+        # An explicit qualified reference names its own entity.
+        self.assertEqual(cg._resolve_name("pkg.alpha", known), "pkg.alpha")
+
+    def test_dotted_suffix_and_enclosing_scope_resolve_names(self) -> None:
+        """Qualified suffixes and Python's scope lookup break ties.
+
+        """
+        known: dict[str, set[str]] = {}
+        for name in (
+            "pkg.py_ext.extract", "pkg.pdf_ext.extract",
+            "pkg.match._candidate", "pkg.store._candidate",
+            "pkg.store.Store._candidate", "pkg.other.close",
+            "pkg.store.Store.close",
+        ):
+            cg._remember_name(known, name)
         self.assertEqual(
-            cg._resolve_name("pkg.alpha", known), "other.alpha"
+            cg._resolve_name("py_ext.extract", known), "pkg.py_ext.extract"
+        )
+        self.assertEqual(cg._resolve_name("extract", known), "extract")
+        self.assertEqual(
+            cg._resolve_name(
+                "_candidate", known, "pkg.match.find", "pkg.match"
+            ),
+            "pkg.match._candidate",
+        )
+        scope = ("pkg.store.Store.add", "pkg.store")
+        # A plain name in a method is the module's, not the class's.
+        self.assertEqual(
+            cg._resolve_name("_candidate", known, *scope),
+            "pkg.store._candidate",
+        )
+        self.assertEqual(
+            cg._resolve_name("self._candidate", known, *scope),
+            "pkg.store.Store._candidate",
+        )
+        self.assertEqual(
+            cg._resolve_name("self.close", known, *scope),
+            "pkg.store.Store.close",
+        )
+        # Another object's attribute is not resolved by the caller's scope.
+        self.assertEqual(
+            cg._resolve_name("stream.close", known, *scope), "stream.close"
+        )
+        self.assertEqual(
+            cg._resolve_name("_candidate", known, "pkg.other.f", "pkg.other"),
+            "_candidate",
         )
 
 
@@ -278,6 +323,164 @@ class TestRemainingGraphBranches(unittest.TestCase):
         )
         self.assertFalse(any(r.relation == "inherits" for r in relations))
 
+
+
+class TestCodeGraphLanguages(unittest.TestCase):
+    """Match calls within a language, and across one only when declared."""
+
+    @staticmethod
+    def _calls(files):
+        graph = cg.build_code_graph(files, extract_source_units(files))
+        return {
+            (relation.source, relation.target)
+            for relation in graph.relations
+            if relation.relation == "calls"
+        }
+
+    def test_plain_call_stays_in_its_language(self) -> None:
+        calls = self._calls(
+            [
+                source_file("lib/stats.py", "def max(values):\n    pass\n"),
+                source_file("run.m", "function run(x)\ny = max(x);\nend\n"),
+            ]
+        )
+        self.assertIn(("run.run", "max"), calls)
+        self.assertNotIn(("run.run", "lib.stats.max"), calls)
+
+    def test_matlab_py_prefix_links_to_python(self) -> None:
+        calls = self._calls(
+            [
+                source_file("lib/stats.py", "def smooth(x):\n    pass\n"),
+                source_file(
+                    "run.m",
+                    "function run(x)\n"
+                    "y = py.lib.stats.smooth(x);\n"
+                    "z = py.numpy.sum(x);\n"
+                    "end\n",
+                ),
+            ]
+        )
+        self.assertIn(("run.run", "lib.stats.smooth"), calls)
+        # A Python package outside the repository stays as written.
+        self.assertIn(("run.run", "py.numpy.sum"), calls)
+
+    def test_matlab_qualified_python_calls_do_not_guess_by_leaf(
+        self,
+    ) -> None:
+        """An unrelated Python function is not a prefixed call target."""
+
+        calls = self._calls(
+            [
+                source_file(
+                    "project/real.py", "def smooth(x):\n    return x\n"
+                ),
+                source_file(
+                    "run.m",
+                    "function run(x)\n"
+                    "a = py.project.real.smooth(x);\n"
+                    "b = py.numpy.smooth(x);\n"
+                    "c = py.different.smooth(x);\n"
+                    "d = py.smooth(x);\n"
+                    "end\n",
+                ),
+            ]
+        )
+        self.assertIn(("run.run", "project.real.smooth"), calls)
+        self.assertIn(("run.run", "py.numpy.smooth"), calls)
+        self.assertIn(("run.run", "py.different.smooth"), calls)
+        # An unqualified cross-language call can still use a unique leaf.
+        self.assertNotIn(("run.run", "py.smooth"), calls)
+        self.assertEqual(
+            {target for caller, target in calls if caller == "run.run"},
+            {"project.real.smooth", "py.numpy.smooth",
+             "py.different.smooth"},
+        )
+
+    def test_prefixed_qualified_suffix_requires_unique_target(
+        self,
+    ) -> None:
+        """Qualified suffixes match only one full candidate."""
+
+        known = {
+            ".py": {
+                "smooth": {"pkg.real.smooth", "other.real.smooth"}
+            },
+            ".m": {},
+        }
+        reachable = cg._reachable_names(known, ".m", {"py": ".py"})
+        self.assertEqual(
+            cg._resolve_name("py.pkg.real.smooth", reachable),
+            "pkg.real.smooth",
+        )
+        self.assertEqual(
+            cg._resolve_name("py.real.smooth", reachable),
+            "py.real.smooth",
+        )
+        self.assertEqual(
+            cg._resolve_name("py.numpy.smooth", reachable),
+            "py.numpy.smooth",
+        )
+
+    def test_html_handler_reaches_javascript(self) -> None:
+        files = [
+            source_file("app.js", "function save() {\n  return 1;\n}\n"),
+            source_file(
+                "index.html", '<button onclick="save()">Save</button>\n'
+            ),
+        ]
+        units = extract_source_units(files, as_code=True)
+        graph = cg.build_code_graph(files, units)
+        self.assertIn(
+            cg.CodeRelation("index", "calls", "app.save"), graph.relations
+        )
+
+    def test_notebook_and_python_share_names(self) -> None:
+        self.assertEqual(cg._language(Path("a.ipynb")), ".py")
+        self.assertEqual(cg._language(Path("A.R")), ".r")
+
+    def test_file_named_after_its_function_means_the_function(self) -> None:
+        calls = self._calls(
+            [
+                source_file(
+                    "lib/helper.m", "function y = helper(x)\ny = x;\nend\n"
+                ),
+                source_file(
+                    "lib/main.m", "function main()\nhelper(1);\nend\n"
+                ),
+            ]
+        )
+        self.assertIn(("lib.main.main", "lib.helper.helper"), calls)
+
+    def test_resolution_never_changes_the_known_names(self) -> None:
+        known = {".py": {"f": {"a.f"}}, ".m": {"f": {"b.f"}}}
+        names = cg._reachable_names(known, ".m", {"py": ".py"})
+        names["f"].add("changed")
+        self.assertEqual(known[".m"]["f"], {"b.f"})
+        self.assertEqual(cg._resolve_name("py.a.f", names), "a.f")
+        self.assertEqual(cg._resolve_name("f", names), "f")
+
+
+class TestMatlabCommentsAndStrings(unittest.TestCase):
+    """Comments and strings never look like calls."""
+
+    def test_comments_and_strings_are_skipped(self) -> None:
+        text = (
+            "function out = run(x)\n"
+            "% RUN(X) calls helper(x) in this comment\n"
+            "%{\nblock(1)\n%}\n"
+            "msg = 'quoted(1)';\n"
+            'other = "double(2)";\n'
+            "y = x';\n"
+            "out = helper(y); % trailing(3)\n"
+            "end\n"
+        )
+        relations = matlab.extract_code_relations(
+            source_file("run.m", text), {}
+        )
+        self.assertEqual(
+            {relation.target for relation in relations},
+            {"helper"},
+        )
 
 
 class TestGraphDeterminismRegression(unittest.TestCase):

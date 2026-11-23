@@ -50,10 +50,18 @@ from kilin.tools._defaults import (
 )
 from kilin.tools._shared.planning import CONFIRMATION_CHOICES
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "JUDGE_REPLY_TOKENS",
+    "MODEL_CALLS",
     "CALL_SECONDS",
-    "DEFAULT_ANSWER_TOKENS",
     "DEFAULT_CONFIRMATION",
+    "DEFAULT_DISCOVERY_STRATEGY",
+    "DEFAULT_DISCOVERY_TOKENS",
     "DEFAULT_FILES",
     "DEFAULT_LARGE_BATCHES",
     "DEFAULT_PASSAGES",
@@ -71,12 +79,17 @@ __all__ = [
 _TOOL = "suggest_reference"
 _DEFAULTS = load_tool_defaults(Path(__file__).with_name("defaults.json"))
 _GROUPS = {
+    "MODEL_CALLS": {
+        "THINKING",
+    },
     "SETTINGS": {
-        "FILES", "PASSAGES", "PASSAGE_TOKENS", "ANSWER_TOKENS",
+        "FILES", "PASSAGES", "PASSAGE_TOKENS",
         "QUICK_FILES", "CONFIRMATION", "LARGE_BATCHES",
+        "DISCOVERY_STRATEGY", "DISCOVERY_TOKENS",
     },
     "STATEMENT": {"MIN_WORDS", "ROUTER_TOKENS", "ROUTER_WORD_SHARE"},
     "ESTIMATES": {
+        "JUDGE_REPLY_TOKENS",
         "PROMPT_TOKENS_PER_SECOND", "REPLY_TOKENS_PER_SECOND",
         "CALL_SECONDS", "PROMPT_OVERHEAD_TOKENS", "REPLY_SHARE",
     },
@@ -99,9 +112,6 @@ DEFAULT_PASSAGES: Final[int] = require_int(
 DEFAULT_PASSAGE_TOKENS: Final[int] = require_int(
     _SETTINGS, "PASSAGE_TOKENS", _WHERE, 300, 16000
 )
-DEFAULT_ANSWER_TOKENS: Final[int] = require_int(
-    _SETTINGS, "ANSWER_TOKENS", _WHERE, 100, 1000
-)
 DEFAULT_QUICK_FILES: Final[int] = require_int(
     _SETTINGS, "QUICK_FILES", _WHERE, 1, 20
 )
@@ -112,6 +122,14 @@ if DEFAULT_CONFIRMATION not in CONFIRMATION_CHOICES:
     raise ValueError(f"{_WHERE}.CONFIRMATION is not a supported policy.")
 DEFAULT_LARGE_BATCHES: Final[int] = require_int(
     _SETTINGS, "LARGE_BATCHES", _WHERE, 0, 1000
+)
+DEFAULT_DISCOVERY_STRATEGY: Final[str] = require_string(
+    _SETTINGS, "DISCOVERY_STRATEGY", _WHERE
+)
+if DEFAULT_DISCOVERY_STRATEGY not in ("hybrid", "source_first"):
+    raise ValueError(f"{_WHERE}.DISCOVERY_STRATEGY is unsupported.")
+DEFAULT_DISCOVERY_TOKENS: Final[int] = require_int(
+    _SETTINGS, "DISCOVERY_TOKENS", _WHERE, 300, 16000
 )
 
 MIN_WORDS: Final[int] = require_int(
@@ -124,6 +142,9 @@ ROUTER_WORD_SHARE: Final[float] = require_number(
     _STATEMENT, "ROUTER_WORD_SHARE", "STATEMENT", 0.0, 1.0
 )
 
+JUDGE_REPLY_TOKENS: Final[int] = require_int(
+    _ESTIMATES, "JUDGE_REPLY_TOKENS", "ESTIMATES", 1, 131072
+)
 PROMPT_TOKENS_PER_SECOND: Final[float] = require_number(
     _ESTIMATES, "PROMPT_TOKENS_PER_SECOND", "ESTIMATES", 0.001, 1e9
 )
@@ -138,4 +159,8 @@ PROMPT_OVERHEAD_TOKENS: Final[int] = require_int(
 )
 REPLY_SHARE: Final[float] = require_number(
     _ESTIMATES, "REPLY_SHARE", "ESTIMATES", 0.0, 1.0
+)
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )

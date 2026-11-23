@@ -187,6 +187,10 @@ class ToolPlan:
     quick_note: str, optional
         One line under ``quick_label`` saying what it covers (for example
         "6 passages mention “XYZ”"). Defaults to ``""``.
+    operation: str, optional
+        ``"model"`` for the existing model-call plan or ``"network"``
+        for explicitly approved bibliographic requests. Defaults to
+        ``"model"`` and is omitted from serialized ordinary plans.
 
     """
 
@@ -202,6 +206,7 @@ class ToolPlan:
     details: tuple[str, ...] = ()
     quick_label: str = ""
     quick_note: str = ""
+    operation: str = "model"
 
     def to_dict(self) -> dict[str, object]:
         """Return the plan as JSON-compatible data.
@@ -215,6 +220,8 @@ class ToolPlan:
 
         data = asdict(self)
         data["details"] = list(self.details)
+        if self.operation == "model":
+            data.pop("operation")
         return data
 
 

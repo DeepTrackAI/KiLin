@@ -2,9 +2,10 @@
 
 ``ConversationStore`` maintains a registry of ``conversation_*.json`` files
 under ``logs/traces``. It discovers saved metadata, chooses an active record,
-creates empty conversations, and branches by copying a saved resumable state.
-A branch records its parent's identifier and checkpoint reference; it does
-not duplicate the parent's complete trace-event history.
+creates empty conversations, and branches by copying a saved resumable state,
+or only its first turns. A branch records its parent's identifier, checkpoint
+reference, and the number of turns it kept; it does not duplicate the
+parent's complete trace-event history.
 
 Files use only the canonical grouped conversation-session record through
 the shared internal conversation-format contract. Writes use unique
@@ -23,8 +24,8 @@ Key Features
 
 - **Branch metadata**
 
-    Record parent identity and the saved checkpoint from which a branch was
-    created.
+    Record parent identity, the saved checkpoint from which a branch was
+    created, and how many of its turns the branch kept.
 
 - **Canonical storage**
 
@@ -66,6 +67,7 @@ import re
 from uuid import uuid4
 
 from kilin.atomic_writes import atomic_write_text
+from kilin.conversation_memory.models import require_saved_turn_ids
 from kilin.conversation_ownership import (
     ConversationFileLock,
     conversation_write_ownership,
@@ -82,6 +84,9 @@ __all__ = ["ConversationInfo", "ConversationStore"]
 # Do not constrain loaded IDs to the generated UUID format: older records and
 # imported conversations may use other alphanumeric identifiers.
 _ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+# A branch's name, "Branch: <name>" or "Branch 2: <name>", starts with this.
+_BRANCH_PREFIX_PATTERN = re.compile(r"Branch(?: \d+)?: ")
 
 # Saved metadata uses UTC ISO 8601 timestamps, with optional fractions.
 # Both the current ``Z`` spelling and historical ``+00:00`` are accepted.
@@ -117,6 +122,9 @@ class ConversationInfo:
         Creation timestamp as an ISO 8601 UTC string.
     updated_at_utc: str
         Last metadata-update timestamp as an ISO 8601 UTC string.
+    origin_turn_count: int | None
+        Number of the parent's turns a branch kept, or None for a new
+        independent conversation and records saved before branch points.
 
     Attributes
     ----------
@@ -136,6 +144,9 @@ class ConversationInfo:
         Creation timestamp as an ISO 8601 UTC string.
     updated_at_utc: str
         Last metadata-update timestamp as an ISO 8601 UTC string.
+    origin_turn_count: int | None
+        Number of the parent's turns a branch kept, or None for a new
+        independent conversation and records saved before branch points.
 
     """
 
@@ -145,6 +156,7 @@ class ConversationInfo:
     origin_checkpoint_id: str | None
     created_at_utc: str
     updated_at_utc: str
+    origin_turn_count: int | None = None
 
 
 class ConversationStore:
@@ -177,7 +189,7 @@ class ConversationStore:
         Return the registered conversations in creation order.
     select(conversation_id)
         Select a registered conversation without loading model history.
-    create(*, branch_from=None)
+    create(*, branch_from=None, turn_count=None)
         Create an empty conversation or a resumable copy of a parent.
     rename(conversation_id, name)
         Normalize and persist a conversation display name.
@@ -189,6 +201,8 @@ class ConversationStore:
         Move a conversation's file aside and select another conversation.
     state_path(conversation)
         Resolve the registered file path of a conversation.
+    contains_turn(conversation_id, turn_uuid)
+        Check whether an active saved conversation contains a turn.
 
     Notes
     -----
@@ -321,6 +335,7 @@ class ConversationStore:
         self,
         *,
         branch_from: str | None = None,
+        turn_count: int | None = None,
         ownership: ConversationFileLock | None = None,
     ) -> ConversationInfo:
         """Create an empty conversation or a resumable copy of a parent.
@@ -331,6 +346,10 @@ class ConversationStore:
             Identifier of a registered parent to copy resumable state from, or
             None to create an empty independent conversation. Defaults to
             ``None``.
+        turn_count: int | None, optional
+            Number of the parent's first turns to keep, from 0 to all of
+            them. None keeps every turn. Requires ``branch_from``. Defaults
+            to ``None``.
         ownership: ConversationFileLock | None, optional
             Borrowed lock for the parent conversation when branching. The
             new destination always acquires its own short-lived lock.
@@ -343,21 +362,26 @@ class ConversationStore:
         Raises
         ------
         ValueError
-            If a requested parent is unknown or its saved JSON/state is
-            invalid.
+            If a requested parent is unknown, its saved JSON/state is
+            invalid, or ``turn_count`` is outside its saved turns.
         OSError
             If the new conversation cannot be written.
 
         Notes
         -----
         A branch copies non-metadata fields from the parent resume state and
-        records parent/checkpoint identity. Old trace operations are not
-        copied. The new filename avoids existing paths at the moment it is
-        chosen; each candidate path is locked and checked before creation.
-        A collision detected after selection raises rather than overwriting.
+        records parent/checkpoint identity and the number of turns kept. A
+        branch that keeps fewer turns omits the parent's checkpoint fields,
+        which describe all of its turns. Old trace operations are not
+        copied. The new filename avoids existing paths and retained lock
+        companions at the moment it is chosen; each candidate is locked and
+        checked before creation. A collision detected after selection raises
+        rather than overwriting.
 
         """
 
+        if turn_count is not None and branch_from is None:
+            raise ValueError("Only a branch can keep a number of turns.")
         parent = (
             self._require(branch_from) if branch_from is not None else None
         )
@@ -392,13 +416,32 @@ class ConversationStore:
                     if isinstance(checkpoint, str) and checkpoint
                     else None
                 )
+                turns = saved.get("turns", [])
+                require_saved_turn_ids(turns)
+                kept = len(turns) if turn_count is None else turn_count
+                if (
+                    isinstance(kept, bool)
+                    or not isinstance(kept, int)
+                    or not 0 <= kept <= len(turns)
+                ):
+                    raise ValueError(
+                        f"turn_count must be from 0 to {len(turns)}."
+                    )
                 metadata = ConversationInfo.__dataclass_fields__
                 copied_state = {
                     key: value
                     for key, value in saved.items()
                     if key not in metadata
                 }
-            item = replace(item, origin_checkpoint_id=checkpoint)
+                if kept < len(turns):
+                    # The parent's checkpoint describes all of its turns,
+                    # not the ones this branch keeps.
+                    copied_state["turns"] = turns[:kept]
+                    copied_state.pop("checkpoint_id", None)
+                    copied_state.pop("checkpoint", None)
+            item = replace(
+                item, origin_checkpoint_id=checkpoint, origin_turn_count=kept
+            )
         with conversation_write_ownership(path):
             if path.exists():
                 raise FileExistsError(
@@ -554,9 +597,10 @@ class ConversationStore:
     ) -> tuple[ConversationInfo, Path]:
         """Remove a conversation from the catalog and retain its JSON.
 
-        The record is moved into ``logs/traces/deleted`` so deletion remains
+        The record is moved into ``logs/traces/.deleted`` so deletion remains
         recoverable; an existing file of the same name there is kept, and
-        the moved file gets a ``_2``, ``_3``, ... suffix. When the last
+        the moved file gets a ``_2``, ``_3``, ... suffix. The hidden lock
+        companion remains at the original source path. When the last
         conversation is archived, a new empty conversation is created
         automatically. When the active conversation is archived, the most
         recently updated remaining one becomes active.
@@ -586,13 +630,16 @@ class ConversationStore:
         Notes
         -----
         The source path remains exclusively owned through the rename; the
-        registry update is not part of a filesystem transaction.
+        registry update is not part of a filesystem transaction. Never move
+        or remove the companion: other owners must continue opening the
+        same lock inode, even while a borrowed writer still holds it. Its
+        presence alone does not mean the conversation is being written.
 
         """
 
         item = self._require(conversation_id)
         source = self.state_path(item)
-        deleted = self.root / "deleted"
+        deleted = self.root / ".deleted"
         deleted.mkdir(parents=True, exist_ok=True)
         if deleted.is_symlink():
             raise ValueError(
@@ -627,6 +674,40 @@ class ConversationStore:
             self._active_id = replacement.conversation_id
 
         return self.active(), destination
+
+    def contains_turn(self, conversation_id: str, turn_uuid: str) -> bool:
+        """Check active conversation ownership of one committed turn UUID.
+
+        Parameters
+        ----------
+        conversation_id: str
+            ID of an active conversation within this project.
+        turn_uuid: str
+            Canonical UUID of a saved completed turn.
+
+        Returns
+        -------
+        bool
+            True only if an active conversation contains this exact turn.
+
+        Raises
+        ------
+        ValueError
+            If the stored turn list is not in the current format.
+
+        Notes
+        -----
+        Discovery and JSON reading are read-only. Archived records are not
+        scanned; another active branch may still own an inherited turn.
+
+        """
+
+        self._scan()
+        if conversation_id not in self._items:
+            return False
+        path = self._paths[conversation_id]
+        saved = conversation_state(_read_json(path))
+        return turn_uuid in require_saved_turn_ids(saved.get("turns", []))
 
     def state_path(self, conversation: ConversationInfo | str) -> Path:
         """Resolve the registered file path of a conversation.
@@ -737,7 +818,7 @@ class ConversationStore:
             self._items[item.conversation_id] = item
 
     def _new_path(self) -> Path:
-        """Choose a timestamped conversation filename not currently present.
+        """Choose a filename not present or reserved by a lock companion.
 
         Returns
         -------
@@ -745,12 +826,21 @@ class ConversationStore:
             Candidate JSON path with a numeric suffix added on collisions. The
             file is not created here.
 
+        Notes
+        -----
+        Retained sidecars reserve deleted filenames. This prevents a new
+        conversation from colliding with the still-owned path of an archived
+        conversation, especially when deletion creates an immediate new chat.
+
         """
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
         candidate = self.root / f"conversation_{timestamp}.json"
         number = 2
-        while candidate.exists():
+        while (
+            candidate.exists()
+            or ConversationFileLock(candidate).lock_path.exists()
+        ):
             candidate = self.root / f"conversation_{timestamp}_{number}.json"
             number += 1
         return candidate
@@ -761,22 +851,26 @@ class ConversationStore:
         Parameters
         ----------
         parent_name: str
-            Display name of the parent used as the prefix for a unique branch
-            name.
+            Display name of the parent conversation.
 
         Returns
         -------
         str
-            Parent name followed by "branch" and the first available positive
-            integer.
+            ``Branch: <name>``, or ``Branch 2: <name>``, ``Branch 3:
+            <name>``, ... when taken. A branch of a branch is named after
+            the original conversation. Names are cut to fit 80 characters.
 
         """
 
+        name = _BRANCH_PREFIX_PATTERN.sub("", parent_name, count=1)
         used = {item.name for item in self._items.values()}
         number = 1
-        while f"{parent_name} branch {number}" in used:
+        while True:
+            label = "Branch" if number == 1 else f"Branch {number}"
+            candidate = f"{label}: {name}"[:80]
+            if candidate not in used:
+                return candidate
             number += 1
-        return f"{parent_name} branch {number}"
 
     def _require(self, conversation_id: str | None) -> ConversationInfo:
         """Find a registered conversation or reject the identifier.
@@ -888,6 +982,7 @@ def _validated_metadata(record: dict[str, object]) -> ConversationInfo:
     Notes
     -----
     Extra fields belong to saved RAG state and are retained in the JSON.
+    Records saved before branch points have no ``origin_turn_count``.
     Validation never rewrites, repairs, or deletes an invalid file. Discovery
     skips invalid records so other conversations remain accessible.
 
@@ -897,6 +992,7 @@ def _validated_metadata(record: dict[str, object]) -> ConversationInfo:
         metadata = {
             field: record[field]
             for field in ConversationInfo.__dataclass_fields__
+            if field != "origin_turn_count"
         }
     except KeyError as error:
         raise ValueError(
@@ -932,9 +1028,17 @@ def _validated_metadata(record: dict[str, object]) -> ConversationInfo:
     if origin is not None and (not isinstance(origin, str) or not origin):
         raise ValueError("The saved conversation checkpoint is invalid.")
 
+    turn_count = record.get("origin_turn_count")
+    if turn_count is not None and (
+        isinstance(turn_count, bool)
+        or not isinstance(turn_count, int)
+        or turn_count < 0
+    ):
+        raise ValueError("The saved conversation branch point is invalid.")
+
     _utc_datetime(metadata["created_at_utc"])
     _utc_datetime(metadata["updated_at_utc"])
-    return ConversationInfo(**metadata)
+    return ConversationInfo(**metadata, origin_turn_count=turn_count)
 
 
 def _read_json(path: Path) -> dict[str, object]:

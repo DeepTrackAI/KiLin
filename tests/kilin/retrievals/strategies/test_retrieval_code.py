@@ -11,8 +11,10 @@ The tests exercise symbols, operator syntax, graph distance, and provenance.
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 import unittest
 
+from kilin.retrievals.code_graph import CodeEntity, CodeGraph
 from kilin.retrievals.strategies import retrieval_code as rc
 from tests.kilin.retrievals._support import chunk, graph
 
@@ -34,6 +36,27 @@ class TestCodeEntityResolution(unittest.TestCase):
         self.assertEqual(
             rc.resolve_code_entities(source_graph, "projects folder"), []
         )
+
+    def test_dotted_r_function_is_one_identifier(self) -> None:
+        path = Path('r/main.R')
+        source_graph = CodeGraph(
+            entities=(
+                CodeEntity('r.main.read.data', 'r_function', path),
+                CodeEntity('r.main.read', 'r_function', path),
+                CodeEntity('r.main.data', 'r_function', path),
+            ),
+            relations=(),
+        )
+        for query, names in (
+            ('Explain read.data', {'r.main.read.data'}),
+            ('Explain r.main.read.data', {'r.main.read.data'}),
+            ('Explain read', {'r.main.read'}),
+            ('Explain data', {'r.main.data'}),
+            ('How to read data', {'r.main.read', 'r.main.data'}),
+        ):
+            with self.subTest(query=query):
+                found = rc.resolve_code_entities(source_graph, query)
+                self.assertEqual({item.name for item in found}, names)
 
     def test_longer_specific_identifier_preferred(self) -> None:
         """Prefer the longest recognized name when multiple names match.
@@ -138,6 +161,31 @@ class TestCodeEntityResolution(unittest.TestCase):
 
 class TestCodeSearch(unittest.TestCase):
     """Verify graph distance and chunk provenance in code search."""
+
+    def test_dotted_r_function_chunk_is_retrieved(self) -> None:
+        """A dotted R symbol is retrieved without separate leaf matches.
+
+        """
+
+        path = Path('r/main.R')
+        source_graph = CodeGraph(
+            entities=(
+                CodeEntity('r.main.read.data', 'r_function', path),
+                CodeEntity('r.main.data', 'r_function', path),
+            ),
+            relations=(),
+        )
+        chunks = [
+            chunk('dotted', path='r/main.R', kind='r_function',
+                  symbol='read.data'),
+            chunk('plain', path='r/main.R', kind='r_function',
+                  symbol='data'),
+        ]
+        found = rc.code_search(
+            source_graph, chunks, 'Explain read.data', max_distance=0
+        )
+        self.assertEqual([result.chunk.identifier for result in found],
+                         ['dotted'])
 
     def setUp(self) -> None:
         """Create a directed chain of named code functions.

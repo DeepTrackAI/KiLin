@@ -192,12 +192,18 @@ class TestWorkspaceInitialization(WorkspaceFixture):
             (project.source / "code.py").read_bytes(),
             original.read_bytes(),
         )
+        # The copy keeps the original's modification time.
+        status = original.stat()
         self.assertEqual(
             self._records(),
             [{
                 "original": str(original.resolve()),
                 "name": "code.py",
+                "kind": "file",
                 "files": ["code.py"],
+                "stamps": {"code.py": {
+                    "size": status.st_size, "mtime_ns": status.st_mtime_ns,
+                }},
             }],
         )
 
@@ -350,18 +356,6 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         with self.assertRaisesRegex(ValueError, "type_id must be one of"):
             self._prepare([self._file("code.py")], type_id="unknown")
         self.assertFalse(self.destination.exists())
-
-    def test_existing_project_type_id_must_match(self) -> None:
-        """Creation cannot reinterpret or reuse an existing profile."""
-
-        self._prepare([self._file("code.py")])
-        path = self.destination / "profile.ini"
-        before = path.read_bytes()
-        with self.assertRaisesRegex(ValueError, "project already exists"):
-            workspace.prepare_sources_workspace(
-                [], "literature", self.destination
-            )
-        self.assertEqual(path.read_bytes(), before)
 
     def test_existing_profile_must_retain_sources_ownership(self) -> None:
         """Do not import into a profile pointing at a different folder."""

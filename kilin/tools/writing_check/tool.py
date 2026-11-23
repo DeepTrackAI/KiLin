@@ -1,0 +1,1257 @@
+"""Tool ``writing_check``: check the grammar and style of a document.
+
+"Check the grammar and style of draft.tex" is about one document of the
+project, or a part of it. The tool:
+
+1. Chooses the document (``choose_document``) and reads its selected
+   source file into sections and paragraphs (``_document``): LaTeX,
+   Markdown and text as written; Word and PDF through their source
+   readers, as text.
+2. Chooses the part the question names (``_scope``): a section, a
+   paragraph, lines, or quoted text; the whole document otherwise. A part
+   the document does not have is offered as a choice of its headings.
+3. Runs the checks that need no model on the whole document
+   (``_checks``): acronyms, terms, spelling, promotional words, repeated
+   words, long sentences; their glossary goes into every model call.
+4. Shows the plan (one model call per paragraph and check) when it is
+   large, then checks each paragraph of the part for grammar and, at
+   level ``all`` or ``style``, style (``_review``), with the document's
+   card or a one-call brief. Every suggested change is checked before it
+   is kept.
+5. Answers with the first findings, by section. A report is saved to
+   ``outputs/`` when there are findings, dropped suggestions or failures.
+
+The tool never changes the document: it suggests changes for the author.
+
+Key Features
+------------
+
+- **Context from the whole document**
+
+    Glossary and card cover the whole document even when one section is
+    checked; only findings in the chosen part are reported.
+
+- **Checked suggestions**
+
+    A model suggestion that changes a number, negation, citation or the
+    authors' terms, or quotes words not in the text, is dropped.
+
+Module Structure
+----------------
+
+- ``WritingCheckSettings`` and ``parse_settings``
+
+    Settings of ``writing_check`` in a project type.
+
+- ``run``
+
+    Check the document or part a question names.
+
+- ``report_markdown`` and ``chat_answer``
+
+    The saved report and the chat answer.
+
+Examples
+--------
+>>> from kilin.tools.writing_check import parse_settings
+>>> parse_settings({"level": "grammar"}, "example").level
+'grammar'
+
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from collections.abc import Sequence
+from dataclasses import dataclass
+import importlib
+from pathlib import Path
+import re
+from typing import Final
+
+from kilin.tools._contract import (
+    ToolContext,
+    ToolRequest,
+    ToolResult,
+    check_choice,
+    check_int,
+    reject_unknown,
+)
+from kilin.tools._shared.choose_document import choose_document
+from kilin.tools._shared.model_results import (
+    incomplete_notice,
+    partial_result,
+)
+from kilin.tools._shared.outputs import save_output_file
+from kilin.tools._shared.planning import (
+    CONFIRMATION_CHOICES,
+    PLAN_CHOICE_CANCEL,
+    PLAN_CHOICE_QUICK,
+    ConfirmationPolicy,
+    ToolPlan,
+    confirm_plan,
+)
+from kilin.tools._shared.source_access import (
+    selected_paths,
+    selected_source_file,
+)
+from kilin.tools.writing_check import _configuration as _config
+from kilin.tools.writing_check._checks import (
+    LEVEL_CONSISTENCY,
+    LEVEL_GRAMMAR,
+    LEVEL_STYLE,
+    Finding,
+    check_document,
+)
+from kilin.tools.writing_check._document import (
+    LATEX_SUFFIXES,
+    MARKDOWN_SUFFIXES,
+    Document,
+    read_document,
+)
+from kilin.tools.writing_check._followup import (
+    ShownFinding,
+    option_rejection,
+    parse_options,
+    rewrite_prompt,
+    rewrite_request,
+    shown_findings,
+    target_text,
+)
+from kilin.tools.writing_check._review import (
+    CONTEXT_QUOTED,
+    Dropped,
+    document_brief,
+    document_context,
+    review_paragraph,
+)
+from kilin.tools.writing_check._scope import (
+    Scope,
+    ScopeProblem,
+    choose_scope,
+    section_scope,
+)
+from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
+
+__all__ = [
+    "WritingCheckSettings",
+    "chat_answer",
+    "parse_settings",
+    "report_markdown",
+    "run",
+]
+
+# Files read through their source reader, and read as Markdown after it.
+_READ_BY_EXTENSION: Final[frozenset[str]] = frozenset(
+    {".docx", ".doc", ".pdf"}
+)
+_MARKDOWN_AFTER_READING: Final[frozenset[str]] = frozenset({".docx"})
+# Order of the levels in counts.
+_LEVEL_ORDER: Final[tuple[str, ...]] = (
+    LEVEL_GRAMMAR, LEVEL_CONSISTENCY, LEVEL_STYLE,
+)
+_WHOLE_DOCUMENT: Final[str] = "The whole document"
+# Words that ask for a style check with level "auto".
+_ASKS_STYLE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:style|stylistic|wording|clarity|clearer|concis\w*|readab\w*|"
+    r"flow|tone)\b",
+    re.IGNORECASE,
+)
+# Drops listed in the report; the others are only counted.
+_UNLISTED_DROPS: Final[frozenset[str]] = frozenset(
+    {"no change", "context quoted"}
+)
+
+
+def _prompt_limit_message(
+    system: str, prompt: str, maximum: int
+) -> str:
+    """Explain why a model prompt exceeds the configured size limit.
+
+    Parameters
+    ----------
+    system: str
+        System instructions.
+    prompt: str
+        User prompt, including source context and requested text.
+    maximum: int
+        Maximum combined characters in both prompts.
+
+    Returns
+    -------
+    str
+        The reason for skipping the call, or an empty string if it fits.
+
+    """
+
+    size = len(system) + len(prompt)
+    if size > maximum:
+        return (
+            f"Prompt has {size} characters (limit {maximum}); "
+            "the model was not called and the text was not truncated."
+        )
+    return ""
+
+
+@dataclass(frozen=True, slots=True)
+class WritingCheckSettings:
+    """Settings of ``writing_check`` in a project type.
+
+    Attributes
+    ----------
+    level: str
+        Model checks to run: ``auto`` (grammar, and style when the
+        question asks about style, wording, clarity or concision),
+        ``grammar``, ``style`` or ``all`` (both). The checks done in code
+        always run.
+    confirmation: ConfirmationPolicy
+        When to show the plan first: always, when_large, or never.
+    large_batches: int
+        With ``when_large``, plans with more model calls than this ask
+        first (0-1000).
+    max_model_calls: int
+        Absolute cap on logical model requests, including the brief,
+        even without a confirmation callback (1-500).
+    max_prompt_characters: int
+        Combined system and user prompt limit for each model request
+        (2000-100000); oversized prompts are skipped, never truncated.
+    quick_paragraphs: int
+        Paragraphs checked for grammar by the quick version (1-1000).
+    chat_findings: int
+        Findings shown in the chat; all are in the saved report (0-200).
+
+    """
+
+    level: str = _config.DEFAULT_LEVEL
+    confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
+    large_batches: int = _config.DEFAULT_LARGE_BATCHES
+    max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
+    max_prompt_characters: int = _config.DEFAULT_MAX_PROMPT_CHARACTERS
+    quick_paragraphs: int = _config.DEFAULT_QUICK_PARAGRAPHS
+    chat_findings: int = _config.DEFAULT_CHAT_FINDINGS
+
+
+def parse_settings(data: dict, where: str) -> WritingCheckSettings:
+    """Validate ``writing_check`` settings from a project type.
+
+    Parameters
+    ----------
+    data: dict
+        Settings from the intent's ``tool`` object, without ``name``.
+    where: str
+        Location for errors.
+
+    Returns
+    -------
+    WritingCheckSettings
+        Validated settings.
+
+    Raises
+    ------
+    ValueError
+        If a setting is unknown or out of range.
+
+    """
+
+    reject_unknown(
+        where, data,
+        ("level", "confirmation", "large_batches", "max_model_calls",
+         "max_prompt_characters", "quick_paragraphs", "chat_findings"),
+    )
+    defaults = WritingCheckSettings()
+    return WritingCheckSettings(
+        level=check_choice(where, data, "level", defaults.level,
+                           _config.LEVELS),
+        confirmation=check_choice(
+            where, data, "confirmation", defaults.confirmation,
+            CONFIRMATION_CHOICES,
+        ),
+        large_batches=check_int(
+            where, data, "large_batches", defaults.large_batches, 0, 1000
+        ),
+        max_model_calls=check_int(
+            where, data, "max_model_calls", defaults.max_model_calls,
+            1, 500,
+        ),
+        max_prompt_characters=check_int(
+            where, data, "max_prompt_characters",
+            defaults.max_prompt_characters, 2000, 100000,
+        ),
+        quick_paragraphs=check_int(
+            where, data, "quick_paragraphs", defaults.quick_paragraphs, 1,
+            1000,
+        ),
+        chat_findings=check_int(
+            where, data, "chat_findings", defaults.chat_findings, 0, 200
+        ),
+    )
+
+
+def run(
+    settings: WritingCheckSettings,
+    request: ToolRequest,
+    context: ToolContext,
+) -> ToolResult:
+    """Check the grammar and style of the document a question names.
+
+    Parameters
+    ----------
+    settings: WritingCheckSettings
+        The intent's settings.
+    request: ToolRequest
+        The question.
+    context: ToolContext
+        Tool services: the project's files, the model, and the user.
+
+    Returns
+    -------
+    ToolResult
+        The answer with the first findings, the paragraphs they are in as
+        evidence (so follow-ups can reuse them), and a summary of the
+        counts; a partial result when some model calls failed.
+
+    """
+
+    summary: dict[str, object] = {"name": "writing_check"}
+    line = rewrite_request(request.question)
+    if line is not None:
+        return _rewrite(settings, request, context, line, summary)
+    context.progress("Finding the document")
+    chosen = choose_document(
+        request, context,
+        question="Which document should I check?",
+        example="check the grammar and style of draft.tex",
+        prefer=(".tex", ".md", ".docx", ".txt"),
+    )
+    if isinstance(chosen, str):
+        context.done("No document chosen", evidence_count=0)
+        return ToolResult(chosen, (), summary)
+    path, reason, guessed = chosen
+    summary.update(
+        {"document": path.as_posix(), "reason": reason, "guessed": guessed}
+    )
+
+    text, read_as = _source_text(path, context)
+    if text is None:
+        context.done("Document not readable", evidence_count=0)
+        return ToolResult(
+            f"I could not read {path.name} from the project's selected "
+            "sources. Select it and refresh the indexes, then ask again.",
+            (), summary,
+        )
+    document = read_document(read_as, text)
+    document = Document(path, document.sections, document.paragraphs)
+
+    scope = _scope(request.question, document, context)
+    if isinstance(scope, str):
+        context.done("No part chosen", evidence_count=0)
+        return ToolResult(scope, (), summary)
+    # A sentence supplied by the user is not part of the selected file.
+    # Keep that provenance after replacing the parsed paragraphs.
+    from_question = bool(scope.text)
+    if from_question:
+        provided = read_document(Path("question.txt"), scope.text)
+        document = Document(path, (), provided.paragraphs)
+        scope = Scope(tuple(range(len(document.paragraphs))), scope.label)
+    summary["scope"] = scope.label
+    summary["text_origin"] = "question" if from_question else "source"
+    if not scope.paragraphs:
+        context.done("No prose in the part", evidence_count=0)
+        if path.suffix.lower() == ".tex" and re.search(
+            r"\\(?:input|include)\s*\{", text
+        ):
+            return ToolResult(
+                f"{path.name} contains LaTeX child-file directives but "
+                "no prose in this selected file. KíLín does not assemble "
+                "multi-file manuscripts: select and check the indexed "
+                "child .tex files individually.", (), summary,
+            )
+        return ToolResult(
+            f"There is no prose to check in {scope.label} of {path.name}.",
+            (), summary,
+        )
+
+    context.progress("Checking acronyms, terms and spelling")
+    code_findings, glossary = check_document(document)
+    in_scope = set(scope.paragraphs)
+    findings = [f for f in code_findings if f.paragraph in in_scope]
+
+    card_reader = getattr(context, "card", None)
+    card = card_reader(path) if card_reader is not None else None
+    levels = _levels(settings.level, request.question)
+    paragraphs = scope.paragraphs
+    # Reserve a scarce request for an actual paragraph, not a brief.
+    use_brief = not card and settings.max_model_calls > 1
+    calls = len(paragraphs) * len(levels) + int(use_brief)
+    allowed_calls = min(calls, settings.max_model_calls)
+    quick = min(len(paragraphs), settings.quick_paragraphs)
+    plan = ToolPlan(
+        tool="writing_check",
+        summary=(
+            f"Check {len(paragraphs)} paragraphs of {scope.label} of "
+            f"{path.name} for {' and '.join(levels)}, one model call per "
+            "paragraph and check"
+            + (", plus one to describe the document" if use_brief else "")
+            + f"; at most {settings.max_model_calls} model calls"
+            + "."
+        ),
+        scope=f"{scope.label}; acronyms, terms and spelling checked "
+        "without the model.",
+        items=len(paragraphs),
+        batches=calls,
+        batches_to_run=allowed_calls,
+        estimated_seconds=allowed_calls * _call_seconds(),
+        quick_items=quick,
+        quick_seconds=min(
+            quick + int(use_brief), settings.max_model_calls
+        ) * _call_seconds(),
+        quick_label=f"Grammar of the first {quick} paragraphs",
+    )
+    choice, _asked = confirm_plan(
+        plan, settings.confirmation, settings.large_batches, context
+    )
+    notes = []
+    if path.suffix.lower() in _READ_BY_EXTENSION and not from_question:
+        notes.append(
+            "Line numbers refer to extracted text, not native "
+            "PDF or Word document line numbers."
+        )
+    if path.suffix.lower() == ".tex" and (
+        re.search(r"\\(?:input|include)\s*\{", text)
+    ):
+        notes.append(
+            "Referenced LaTeX child files were not assembled; only this "
+            "selected file was checked."
+        )
+    failures: list[dict[str, object]] = []
+    dropped: list[tuple[int, str, Dropped]] = []
+    checked = 0
+    attempted_checks = 0
+    prompt_skipped_checks = 0
+    prompt_rejections = 0
+    model_calls = 0
+    omitted = 0
+    budget_omitted = 0
+    requested = 0
+    brief_skipped = False
+
+    def ask_limited(system: str, prompt: str, tokens: int | None) -> str:
+        """Apply the hard limit to every model request, even failed ones.
+
+        Parameters
+        ----------
+        system: str
+            System instructions for this logical model request.
+        prompt: str
+            User prompt for this request.
+        tokens: int | None
+            Requested reply-token limit, if specified.
+
+        Returns
+        -------
+        str
+            The model's reply.
+
+        Raises
+        ------
+        RuntimeError
+            If no more model calls are permitted.
+
+        """
+
+        nonlocal model_calls, prompt_rejections
+        message = _prompt_limit_message(
+            system, prompt, settings.max_prompt_characters
+        )
+        if message:
+            prompt_rejections += 1
+            raise ValueError(message)
+        if model_calls >= settings.max_model_calls:
+            raise RuntimeError("writing_check model-call budget exhausted")
+        model_calls += 1
+        return context.ask_model(system, prompt, tokens)
+
+    if choice == PLAN_CHOICE_CANCEL:
+        notes.append("The model checks were cancelled; only the checks "
+                     "done without the model are shown.")
+    else:
+        if choice == PLAN_CHOICE_QUICK:
+            paragraphs, levels = paragraphs[:quick], (LEVEL_GRAMMAR,)
+            first = "paragraph" if quick == 1 else f"{quick} paragraphs"
+            notes.append(
+                f"Quick version: grammar of the first {first} of "
+                f"{len(scope.paragraphs)}."
+            )
+        brief = ""
+        if use_brief:
+            context.progress("Describing the document")
+            before = prompt_rejections
+            brief = document_brief(document, ask_limited)
+            brief_skipped = prompt_rejections > before
+            if brief_skipped:
+                notes.append(
+                    "The optional document description was skipped: "
+                    "its prompt exceeded the size limit."
+                )
+        about = document_context(card, brief, glossary)
+        requested = len(paragraphs) * len(levels)
+        for position, index in enumerate(paragraphs, start=1):
+            for level in levels:
+                if model_calls >= settings.max_model_calls:
+                    break
+                context.progress(
+                    f"Checking {level} of paragraph {position} of "
+                    f"{len(paragraphs)}"
+                )
+                previous_calls = model_calls
+                previous_rejections = prompt_rejections
+                kept, rejected, failure = review_paragraph(
+                    level, document, index, about, glossary,
+                    ask_limited,
+                )
+                if model_calls > previous_calls:
+                    attempted_checks += 1
+                    if not failure:
+                        checked += 1
+                elif prompt_rejections > previous_rejections:
+                    prompt_skipped_checks += 1
+                findings += kept
+                line = document.paragraphs[index].start_line
+                dropped += [(line, level, item) for item in rejected]
+                if failure:
+                    failures.append({
+                        "item": (
+                            f"Paragraph at line "
+                            f"{document.paragraphs[index].start_line} "
+                            f"({level})"
+                        ),
+                        "message": failure,
+                        "reason": (
+                            "prompt_limit" if prompt_rejections >
+                            previous_rejections else "model_result"
+                        ),
+                    })
+        omitted = requested - attempted_checks
+        budget_omitted = max(
+            0, omitted - prompt_skipped_checks
+        )
+        if prompt_skipped_checks:
+            notes.append(
+                f"{prompt_skipped_checks} model checks were skipped "
+                "because their prompts exceeded the configured size "
+                "limit. No source text was truncated."
+            )
+        if budget_omitted:
+            message = (
+                f"{budget_omitted} model checks were not run because the "
+                f"limit of {settings.max_model_calls} calls was reached."
+            )
+            notes.append(message)
+            failures.append({
+                "item": "Unreviewed paragraphs or levels",
+                "message": message,
+                "reason": "model_budget",
+            })
+    findings = _unique(findings)
+    if dropped:
+        notes.append(_dropped_note(dropped))
+
+    counts = Counter(finding.level for finding in findings)
+    saved = save_output_file(
+        context.project_root,
+        ("question_writing_check.md" if from_question else
+         f"{path.stem}_writing_check.md"),
+        report_markdown(
+            document, scope, findings, notes, dropped,
+            from_question=from_question,
+        )
+        + incomplete_notice(failures),
+    ) if findings or failures or dropped else None
+    summary.update({
+        "paragraphs": len(scope.paragraphs),
+        "levels": list(levels),
+        "card": bool(card),
+        "findings": {level: counts[level] for level in _LEVEL_ORDER},
+        "dropped": len(dropped),
+        "dropped_reasons": dict(Counter(
+            _why_kind(item.why) for _, _, item in dropped
+        )),
+        "model_calls": model_calls,
+        "model_checks": checked,
+        "model_attempted_checks": attempted_checks,
+        "prompt_skipped_checks": prompt_skipped_checks,
+        "brief_skipped_for_prompt_size": brief_skipped,
+        "max_model_calls": settings.max_model_calls,
+        "max_prompt_characters": settings.max_prompt_characters,
+        "omitted_model_checks": omitted,
+        "budget_omitted_checks": budget_omitted,
+        "report": saved.as_posix() if saved else None,
+    })
+    answer, cited = chat_answer(
+        document, scope, findings, settings.chat_findings, notes, saved,
+        from_question=from_question,
+    )
+    # The paragraphs behind the findings shown are the answer's evidence,
+    # so a follow-up ("suggest a better phrasing for line 75") can reuse
+    # them. Text from the question is not in the file: no evidence.
+    evidence = () if from_question else tuple(
+        {
+            "citation": number,
+            "path": document.path,
+            "start_line": document.paragraphs[index].start_line,
+            "end_line": document.paragraphs[index].end_line,
+            "symbol": None,
+            "text": document.paragraphs[index].source,
+            "cell": None,
+        }
+        for number, index in enumerate(cited, start=1)
+    )
+    if choice == PLAN_CHOICE_CANCEL:
+        completion = "Completed deterministic checks; model work cancelled"
+    elif checked == requested:
+        amount = len(paragraphs)
+        unit = "paragraph" if amount == 1 else "paragraphs"
+        completion = f"Checked {amount} {unit}"
+    else:
+        completion = f"Completed {checked} of {requested} model checks"
+    context.done(completion, evidence_count=len(evidence))
+    return partial_result(
+        ToolResult(answer, evidence, summary), failures,
+        completed=checked > 0,
+    )
+
+
+def _rewrite(
+    settings: WritingCheckSettings,
+    request: ToolRequest,
+    context: ToolContext,
+    line: int,
+    summary: dict[str, object],
+) -> ToolResult:
+    """Rewrite the sentence or paragraph at a line, as a follow-up.
+
+    Parameters
+    ----------
+    settings: WritingCheckSettings
+        Resource limits for the rewrite model request.
+    request: ToolRequest
+        The question, naming the line, and the earlier turns.
+    context: ToolContext
+        Tool services.
+    line: int
+        The line the question names.
+    summary: dict[str, object]
+        The result summary, filled in here.
+
+    Returns
+    -------
+    ToolResult
+        Two or three checked rewrites of the finding's whole sentence (or
+        of the paragraph at the line), with the paragraph as evidence; or
+        why there is none.
+
+    """
+
+    findings: list[ShownFinding] = []
+    path = None
+    for turn in request.earlier:  # Latest first.
+        shown = shown_findings(turn.answer)
+        if shown or "**Writing check of" in turn.answer:
+            findings = shown
+            path = turn.paths[0] if turn.paths else None
+            break
+    if path is None:
+        chosen = choose_document(
+            request, context,
+            question="Which document is that line in?",
+            example="rephrase line 75 of draft.tex",
+            prefer=(".tex", ".md", ".docx", ".txt"),
+        )
+        if isinstance(chosen, str):
+            context.done("No document chosen", evidence_count=0)
+            return ToolResult(chosen, (), summary)
+        path = chosen[0]
+    summary.update({"document": path.as_posix(), "rewrite_line": line})
+    text, read_as = _source_text(path, context)
+    if text is None:
+        context.done("Document not readable", evidence_count=0)
+        return ToolResult(
+            f"I could not read {path.name} from the project's selected "
+            "sources.", (), summary,
+        )
+    document = read_document(read_as, text)
+    document = Document(path, document.sections, document.paragraphs)
+    target = target_text(document, line, findings, request.question)
+    if target is None:
+        context.done("No prose at the line", evidence_count=0)
+        return ToolResult(
+            f"Line {line} of {path.name} holds no prose to rewrite.",
+            (), summary,
+        )
+    index, original, finding = target
+    paragraph = document.paragraphs[index]
+    _, glossary = check_document(document)
+    card_reader = getattr(context, "card", None)
+    card = card_reader(path) if card_reader is not None else None
+    about = document_context(card, "", glossary)
+    context.progress(f"Rewriting line {line}")
+    system, prompt = rewrite_prompt(original, paragraph.text, about, finding)
+    message = _prompt_limit_message(
+        system, prompt, settings.max_prompt_characters
+    )
+    summary["max_prompt_characters"] = settings.max_prompt_characters
+    if message:
+        summary.update({
+            "model_calls": 0,
+            "status": "incomplete",
+            "reason": "prompt_limit",
+        })
+        context.done("Rewrite skipped: prompt too long", evidence_count=0)
+        return ToolResult(f"Cannot rewrite line {line}: {message}",
+                          (), summary)
+    summary["model_calls"] = 1
+    try:
+        reply = context.ask_model(system, prompt, None)
+    except Exception as error:  # Reported in the answer, not fatal.
+        reply = ""
+        summary["failure"] = str(error)
+        summary["status"] = "incomplete"
+    kept, dropped = [], []
+    for option in parse_options(reply):
+        why = option_rejection(original, option, paragraph.text, glossary)
+        (dropped if why else kept).append((option, why))
+    summary.update({"rewrites": len(kept), "dropped": len(dropped)})
+    line_kind = ("extracted-text line" if path.suffix.lower() in
+                 _READ_BY_EXTENSION else "line")
+    lines = [
+        f"**Rewriting {line_kind} {line} of {path.name}**", "",
+        f"Text: “{original}” [1]", "",
+    ]
+    if kept:
+        lines += [f"{number}. “{option}”"
+                  for number, (option, _) in enumerate(kept, start=1)]
+    elif summary.get("failure"):
+        lines.append("The model call failed; no rewrite was produced.")
+    else:
+        lines.append(
+            "No rewrite passed the automated safeguards."
+            if dropped else "The model gave no rewrite."
+        )
+    for option, why in dropped:
+        lines += ["", f"*Dropped: “{option}” ({why}).*"]
+    if kept:
+        lines += ["", "*Verify that each rewrite preserves the scientific "
+                  "meaning before using it.*"]
+    if summary.get("failure"):
+        completion = f"Rewrite failed at line {line}"
+    elif kept:
+        noun = "rewrite" if len(kept) == 1 else "rewrites"
+        completion = f"Proposed {len(kept)} {noun} for line {line}"
+    else:
+        completion = f"No acceptable rewrite for line {line}"
+    context.done(completion, evidence_count=1)
+    evidence = ({
+        "citation": 1,
+        "path": path,
+        "start_line": paragraph.start_line,
+        "end_line": paragraph.end_line,
+        "symbol": None,
+        "text": paragraph.source,
+        "cell": None,
+    },)
+    return ToolResult("\n".join(lines), evidence, summary)
+
+
+def _source_text(
+    path: Path, context: ToolContext
+) -> tuple[str | None, Path]:
+    """Return a selected document's text, and the path to read it as.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        The document's indexed path.
+    context: ToolContext
+        Tool services, for the project and its selected sources.
+
+    Returns
+    -------
+    tuple[str | None, pathlib.Path]
+        The text, or None when the file is not a selected, readable
+        source; and the path whose suffix says how to read the text (a
+        Word file is read as Markdown after its source reader, a PDF as
+        plain text).
+
+    """
+
+    root = Path(context.project_root)
+    source = getattr(context, "source_root", None)
+    if source is None:
+        source = root / PROJECT_SOURCES_DIRECTORY
+    file = selected_source_file(
+        root, Path(source), path, selected_paths(context)
+    )
+    if file is None:
+        return None, path
+    suffix = path.suffix.lower()
+    if suffix not in _READ_BY_EXTENSION:
+        try:
+            return file.read_text(encoding="utf-8", errors="replace"), path
+        except OSError:
+            return None, path
+    try:
+        reader = importlib.import_module(
+            f"kilin.sources.extensions.sources_{suffix[1:]}"
+        )
+        text = reader.read_source_file(file, path).text
+    except (OSError, ValueError, ImportError):
+        return None, path
+    kind = ".md" if suffix in _MARKDOWN_AFTER_READING else ".txt"
+    return text, path.with_suffix(kind)
+
+
+def _scope(
+    question: str, document: Document, context: ToolContext
+) -> Scope | str:
+    """Return the part to check, asking the user when it is unclear.
+
+    Parameters
+    ----------
+    question: str
+        The question.
+    document: Document
+        The document.
+    context: ToolContext
+        Tool services, for asking the user.
+
+    Returns
+    -------
+    Scope | str
+        The part to check; or, when the question names a part the
+        document does not have and nobody can be asked or the user
+        cancels, a message listing the headings.
+
+    """
+
+    found = choose_scope(question, document)
+    if isinstance(found, Scope):
+        return found
+    choose = getattr(context, "choose", None)
+    options = (*found.headings, _WHOLE_DOCUMENT)
+    if choose is not None and found.headings:
+        picked = choose(f"{found.message} Which part should I check?",
+                        options)
+        if picked is not None and 0 <= picked < len(options):
+            if options[picked] == _WHOLE_DOCUMENT:
+                return Scope(tuple(range(len(document.paragraphs))),
+                             "the whole document")
+            names = [f"{s.number} {s.title}".strip()
+                     for s in document.sections]
+            return section_scope(names.index(options[picked]), document)
+    listed = "; ".join(found.headings) or "none"
+    return (
+        f"{found.message} The headings of {document.path.name} are: "
+        f"{listed}. Name one, for example: check the grammar of section "
+        f"{_example(found.headings)}."
+    )
+
+
+def _example(headings: Sequence[str]) -> str:
+    """Return a heading to show in an example question.
+
+    Parameters
+    ----------
+    headings: Sequence[str]
+        The document's headings.
+
+    Returns
+    -------
+    str
+        The first heading's number, else its title, else "2".
+
+    """
+
+    if not headings:
+        return "2"
+    first = headings[0]
+    number = first.split(" ", 1)[0]
+    return number if number[:1].isdigit() else f"“{first}”"
+
+
+def _levels(level: str, question: str) -> tuple[str, ...]:
+    """Return the model checks to run.
+
+    Parameters
+    ----------
+    level: str
+        The ``level`` setting.
+    question: str
+        The question.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Grammar and style for ``all``; grammar, and style when the
+        question asks about style, wording, clarity or concision, for
+        ``auto``; otherwise the one level.
+
+    """
+
+    if level == "all" or (level == "auto" and _ASKS_STYLE.search(question)):
+        return LEVEL_GRAMMAR, LEVEL_STYLE
+    if level == "auto":
+        return (LEVEL_GRAMMAR,)
+    return (level,)
+
+
+def _why_kind(why: str) -> str:
+    """Return the kind of reason a suggestion was dropped.
+
+    Parameters
+    ----------
+    why: str
+        The reason (``rejection``).
+
+    Returns
+    -------
+    str
+        A short name for counting: "context quoted", "words not found",
+        "no change", "numbers changed", "citations changed", "negations
+        changed", "hedges changed" or "terms changed".
+
+    """
+
+    for start, kind in (
+        (CONTEXT_QUOTED, "context quoted"),
+        ("the words are not", "words not found"),
+        ("nothing changes", "no change"),
+        ("it changes numbers", "numbers changed"),
+        ("it changes citations", "citations changed"),
+        ("it changes a negation", "negations changed"),
+        ("it changes a hedge", "hedges changed"),
+        ("it changes a claim-sensitive", "claim terms changed"),
+    ):
+        if why.startswith(start):
+            return kind
+    return "terms changed"
+
+
+def _dropped_note(dropped: Sequence[tuple[int, str, Dropped]]) -> str:
+    """Return the note on dropped suggestions, with counts per reason.
+
+    Parameters
+    ----------
+    dropped: Sequence[tuple[int, str, Dropped]]
+        Each dropped suggestion with its paragraph's line and its level.
+
+    Returns
+    -------
+    str
+        "15 suggested changes were dropped (8 context quoted, 5 no change,
+        2 numbers changed); the others are listed in the report." Drops
+        that only quote the context or change nothing are counted, not
+        listed.
+
+    """
+
+    kinds = Counter(_why_kind(item.why) for _, _, item in dropped)
+    reasons = ", ".join(
+        f"{count} {kind}" for kind, count in kinds.most_common()
+    )
+    changes = (
+        "1 suggested change was" if len(dropped) == 1
+        else f"{len(dropped)} suggested changes were"
+    )
+    listed = any(
+        _why_kind(item.why) not in _UNLISTED_DROPS for _, _, item in dropped
+    )
+    where = "; the others are listed in the report" if listed and any(
+        _why_kind(item.why) in _UNLISTED_DROPS for _, _, item in dropped
+    ) else ("; they are listed in the report" if listed else "")
+    return f"{changes} dropped ({reasons}){where}."
+
+
+def _call_seconds() -> float:
+    """Return the estimated time of one paragraph call, in seconds.
+
+    Returns
+    -------
+    float
+        A planning estimate, not a limit.
+
+    """
+
+    return (
+        _config.CALL_SECONDS
+        + _config.PROMPT_OVERHEAD_TOKENS / _config.PROMPT_TOKENS_PER_SECOND
+        + _config.REPLY_TOKENS / _config.REPLY_TOKENS_PER_SECOND
+    )
+
+
+def _unique(findings: Sequence[Finding]) -> list[Finding]:
+    """Return findings in reading order, without repeats.
+
+    Parameters
+    ----------
+    findings: Sequence[Finding]
+        Findings from the code checks and the model.
+
+    Returns
+    -------
+    list[Finding]
+        One finding per paragraph, words and suggestion (case ignored),
+        the first kept, sorted by paragraph, line and position.
+
+    """
+
+    seen = set()
+    kept = []
+    for finding in findings:
+        key = (finding.paragraph, finding.original.casefold(),
+               finding.suggestion.casefold())
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(finding)
+    kept.sort(key=lambda f: (f.paragraph, f.line, f.offset))
+    return kept
+
+
+def _section_name(document: Document, finding: Finding) -> str:
+    """Return the heading a finding falls under.
+
+    Parameters
+    ----------
+    document: Document
+        The document.
+    finding: Finding
+        A finding.
+
+    Returns
+    -------
+    str
+        "2.1 Data" or the title alone; "Before the first heading" when
+        the paragraph has no section.
+
+    """
+
+    index = document.paragraphs[finding.paragraph].section
+    if index is None:
+        return "Before the first heading" if document.sections else ""
+    section = document.sections[index]
+    return f"{section.number} {section.title}".strip()
+
+
+def _counts(findings: Sequence[Finding]) -> str:
+    """Return the number of findings per level, as words.
+
+    Parameters
+    ----------
+    findings: Sequence[Finding]
+        The findings.
+
+    Returns
+    -------
+    str
+        "3 grammar, 2 consistency, 5 style findings", or "No findings".
+
+    """
+
+    counts = Counter(finding.level for finding in findings)
+    parts = [f"{counts[level]} {level}" for level in _LEVEL_ORDER
+             if counts[level]]
+    if not parts:
+        return "No findings"
+    return ", ".join(parts) + (" finding" if len(findings) == 1
+                               else " findings")
+
+
+def _cell(text: str) -> str:
+    """Return text safe in a Markdown table cell.
+
+    Parameters
+    ----------
+    text: str
+        Any text.
+
+    Returns
+    -------
+    str
+        The text on one line, with ``|`` escaped.
+
+    """
+
+    return " ".join(text.split()).replace("|", "\\|")
+
+
+def report_markdown(
+    document: Document,
+    scope: Scope,
+    findings: Sequence[Finding],
+    notes: Sequence[str],
+    dropped: Sequence[tuple[int, str, Dropped]] = (),
+    *,
+    from_question: bool = False,
+) -> str:
+    """Return the full report, to save as Markdown.
+
+    Parameters
+    ----------
+    document: Document
+        The document.
+    scope: Scope
+        The part checked.
+    findings: Sequence[Finding]
+        Every finding, in reading order.
+    notes: Sequence[str]
+        Notes on how the check ran.
+    dropped: Sequence[tuple[int, str, Dropped]], optional
+        Suggestions the model made that were not kept, each with its
+        paragraph's first line and its level; those quoting the context
+        or changing nothing are not listed. Defaults to ``()``.
+    from_question: bool, optional
+        Whether this text was provided in the question, rather than read
+        from the document. Defaults to False.
+
+    Returns
+    -------
+    str
+        A title, the part and the counts, the notes, one table per
+        section (line, level, original, suggestion, reason), and a table
+        of the dropped suggestions with why each was dropped.
+
+    """
+
+    lines = [
+        ("# Writing check: text supplied in the question" if from_question
+         else f"# Writing check: {document.path.name}"), "",
+        f"Checked: {scope.label}. {_counts(findings)}.", "",
+    ]
+    lines += [f"*{note}*" for note in notes]
+    extracted = document.path.suffix.lower() in _READ_BY_EXTENSION
+    current = None
+    for finding in findings:
+        name = _section_name(document, finding)
+        if name != current:
+            current = name
+            lines += [
+                "", f"## {name or 'Findings'}", "",
+                ("| Question line | Level | Original | Suggestion | Reason |"
+                 if from_question else
+                 ("| Extracted-text line | Level | Original | "
+                  "Suggestion | Reason |" if extracted else
+                  "| Line | Level | Original | Suggestion | Reason |")),
+                "| ---: | --- | --- | --- | --- |",
+            ]
+        lines.append(
+            f"| {finding.line} | {finding.level} | {_cell(finding.original)}"
+            f" | {_cell(finding.suggestion) or '—'} | "
+            f"{_cell(finding.reason)} |"
+        )
+    dropped = [
+        entry for entry in dropped
+        if _why_kind(entry[2].why) not in _UNLISTED_DROPS
+    ]
+    if dropped:
+        lines += [
+            "", "## Dropped suggestions", "",
+            "Suggestions the model made that were not kept. The line is "
+            "the paragraph's first line.", "",
+            ("| Question line | Level | Original | Suggestion | Why dropped |"
+         if from_question else
+         ("| Extracted-text line | Level | Original | Suggestion | "
+          "Why dropped |" if extracted else
+          "| Line | Level | Original | Suggestion | Why dropped |")),
+            "| ---: | --- | --- | --- | --- |",
+        ]
+        lines += [
+            f"| {line} | {level} | {_cell(item.original)} | "
+            f"{_cell(item.suggestion) or '—'} | {_cell(item.why)} |"
+            for line, level, item in dropped
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def chat_answer(
+    document: Document,
+    scope: Scope,
+    findings: Sequence[Finding],
+    limit: int,
+    notes: Sequence[str],
+    saved: Path | None,
+    *,
+    from_question: bool = False,
+) -> tuple[str, tuple[int, ...]]:
+    """Return the chat answer and the paragraphs it cites.
+
+    Parameters
+    ----------
+    document: Document
+        The document.
+    scope: Scope
+        The part checked.
+    findings: Sequence[Finding]
+        Every finding, in reading order.
+    limit: int
+        Findings to show; the rest are counted.
+    notes: Sequence[str]
+        Notes on how the check ran.
+    saved: pathlib.Path | None
+        The saved report, if any.
+    from_question: bool, optional
+        True when the text came from the user question, not the source.
+        Defaults to False.
+
+    Returns
+    -------
+    tuple[str, tuple[int, ...]]
+        Markdown: the part and counts, then up to ``limit`` findings under
+        their section headings ("line 12 · grammar: “a” → “b” (reason)
+        [1]", the number citing the finding's paragraph), the notes, and
+        where the full report is; and the cited paragraphs' indices, in
+        citation order.
+
+    """
+
+    lines = [
+        ("**Writing check of text supplied in the question**" if
+         from_question else f"**Writing check of {document.path.name}**")
+        + f" ({scope.label})", "",
+        f"{_counts(findings)}.",
+    ]
+    current = None
+    cited: list[int] = []
+    for finding in findings[:limit]:
+        name = _section_name(document, finding)
+        if name != current:
+            current = name
+            lines += ["", f"**{name}**" if name else ""]
+        change = f"“{finding.original}”"
+        if finding.suggestion:
+            change += f" → “{finding.suggestion}”"
+        if not from_question and finding.paragraph not in cited:
+            cited.append(finding.paragraph)
+        line_prefix = (
+            "extracted-text line" if document.path.suffix.lower()
+            in _READ_BY_EXTENSION else "line"
+        )
+        location = ("question text" if from_question else
+                    f"{line_prefix} {finding.line}")
+        citation = ("" if from_question else
+                    f" [{cited.index(finding.paragraph) + 1}]")
+        lines.append(
+            f"- {location} · {finding.level}: {change} "
+            f"({finding.reason.rstrip('.')}){citation}"
+        )
+    hidden = len(findings) - min(len(findings), limit)
+    if hidden:
+        lines += ["", f"*… and {hidden} more in the report.*"]
+    for note in notes:
+        lines += ["", f"*{note}*"]
+    if findings:
+        lines += ["", "*Suggested edits require author verification for "
+                  "scientific meaning.*"]
+    if saved is not None:
+        lines += ["", f"The full report is saved as `{saved.name}` in "
+                  "outputs/."]
+    return "\n".join(lines), tuple(cited)

@@ -33,8 +33,8 @@ not export every public object from every submodule.
 Examples
 --------
 >>> import kilin
->>> kilin.PROJECT_TYPE_ID_CODE
-'code'
+>>> isinstance(kilin.PROJECT_TYPE_IDS, tuple)
+True
 
 """
 
@@ -54,6 +54,7 @@ except _PackageNotFoundError:
         __version__ = _tomllib.load(_stream)["project"]["version"]
 
 from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession
+from .answer_timeline import AnswerTimeline, AnswerTimelineStep
 from .chunking import Chunk, chunk_source_units
 from .embeddings import EmbeddingSession
 from .model_defaults import (
@@ -61,10 +62,22 @@ from .model_defaults import (
     DEFAULT_CHAT_MODEL_TORCH,
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
+    DEFAULT_ROUTER_MODEL_MLX,
+    DEFAULT_ROUTER_MODEL_TORCH,
+    DEFAULT_SOURCE_CARD_MODEL_MLX,
+    DEFAULT_SOURCE_CARD_MODEL_TORCH,
     MODEL_ROLE_CHAT,
     MODEL_ROLE_CHOICES,
     MODEL_ROLE_EMBEDDING,
     ModelRole,
+)
+from .model_settings import (
+    SourceCardGenerationSettings,
+    default_source_card_generation_settings,
+    read_router_model,
+    read_source_card_generation_settings,
+    write_router_model,
+    write_source_card_generation_settings,
 )
 from .huggingface import (
     available_models,
@@ -81,8 +94,6 @@ from .query_formats import (
 )
 from .project import (
     PROJECT_TYPE_IDS,
-    PROJECT_TYPE_ID_CODE,
-    PROJECT_TYPE_ID_LITERATURE,
     ProjectTypeId,
     ProjectProfile,
     QAProject,
@@ -93,12 +104,26 @@ from .project import (
     open_project,
     prepare_project_workspace,
 )
+from .settings_info import (
+    get_setting_info,
+    get_settings_info,
+    get_tool_settings_info,
+)
+from .project_behavior import (
+    PROJECT_BEHAVIOR_FILE,
+    effective_project_type,
+    project_behavior_settings,
+    save_project_behavior,
+)
 from .answering import (
     MACHINE_STATE_ANSWERING,
     MACHINE_STATE_CHOICES,
     MachineState,
 )
 from .project_type import (
+    MEMORY_ANSWER_CHOICES,
+    MEMORY_INDEXING_CHOICES,
+    MEMORY_QUESTION_CHOICES,
     HISTORY_POLICY_CHOICES,
     HISTORY_POLICY_NONE,
     HISTORY_POLICY_RECENT,
@@ -111,8 +136,12 @@ from .project_type import (
     RETRIEVAL_MODE_SEARCH,
     RETRIEVAL_STRATEGY_CHOICES,
     RETRIEVAL_STRATEGY_HYBRID,
+    ConversationMemorySettings,
     HistoryPolicy,
     Intent,
+    MemoryAnswerPolicy,
+    MemoryIndexingPolicy,
+    MemoryQuestionPolicy,
     ProjectType,
     RetrievalMode,
     RetrievalStrategy,
@@ -145,6 +174,8 @@ from .rag import (
     ANSWER_PHASE_COMPLETED,
     ANSWER_PHASE_EVIDENCE_READY,
     ANSWER_PHASE_GENERATING,
+    ANSWER_PHASE_MEMORY_READY,
+    ANSWER_PHASE_MEMORY_RETRIEVING,
     ANSWER_PHASE_PROCESSING,
     ANSWER_PHASE_RETRIEVING,
     ANSWER_PHASE_ROUTED,
@@ -220,6 +251,7 @@ from .trace_logging import (
     FAILURE_POLICY_CHOICES,
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
+    TRACE_EVENT_ANSWER_ACTIVITY,
     TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
     TRACE_EVENT_LLM_CALL_INPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT,
@@ -238,23 +270,37 @@ from .project_files import (
     replace_project_file,
 )
 from .workspace import (
+    SourceAction,
+    SourceChanges,
+    SourceVersion,
     add_project_sources,
     default_workspace_path,
+    find_source_changes,
+    list_source_versions,
     prepare_sources_workspace,
+    preview_project_sources,
     remove_workspace_sources,
+    sync_project_sources,
 )
 
 __all__ = [
+    "get_setting_info",
+    "get_settings_info",
+    "get_tool_settings_info",
     "__version__",
     "ANSWER_PHASE_CHOICES",
     "ANSWER_PHASE_COMPLETED",
     "ANSWER_PHASE_EVIDENCE_READY",
     "ANSWER_PHASE_GENERATING",
+    "ANSWER_PHASE_MEMORY_READY",
+    "ANSWER_PHASE_MEMORY_RETRIEVING",
     "ANSWER_PHASE_PROCESSING",
     "ANSWER_PHASE_RETRIEVING",
     "ANSWER_PHASE_SAVING",
     "ASSISTANT_ROLE",
     "AnswerPhase",
+    "AnswerTimeline",
+    "AnswerTimelineStep",
     "BACKEND_AUTO",
     "BACKEND_CHOICES",
     "BACKEND_MLX",
@@ -271,6 +317,10 @@ __all__ = [
     "DEFAULT_CHAT_MODEL_TORCH",
     "DEFAULT_EMBEDDING_MODEL_MLX",
     "DEFAULT_EMBEDDING_MODEL_TORCH",
+    "DEFAULT_ROUTER_MODEL_MLX",
+    "DEFAULT_ROUTER_MODEL_TORCH",
+    "DEFAULT_SOURCE_CARD_MODEL_MLX",
+    "DEFAULT_SOURCE_CARD_MODEL_TORCH",
     "EmbeddingSession",
     "Evidence",
     "FAILURE_POLICY_CHOICES",
@@ -285,9 +335,8 @@ __all__ = [
     "LexicalIndex",
     "LexicalResult",
     "PersistentIndexes",
+    "PROJECT_BEHAVIOR_FILE",
     "PROJECT_TYPE_IDS",
-    "PROJECT_TYPE_ID_CODE",
-    "PROJECT_TYPE_ID_LITERATURE",
     "ProjectTypeId",
     "QUERY_FORMAT_CHOICES",
     "QUERY_FORMAT_PLAIN",
@@ -305,6 +354,7 @@ __all__ = [
     "SemanticResult",
     "SourceFile",
     "SourceUnit",
+    "TRACE_EVENT_ANSWER_ACTIVITY",
     "TRACE_EVENT_EMBEDDING_TOKENS_PREPARED",
     "TRACE_EVENT_LLM_CALL_INPUT",
     "TRACE_EVENT_LLM_CALL_OUTPUT",
@@ -331,12 +381,15 @@ __all__ = [
     "extract_source_units",
     "format_qwen3_query",
     "hybrid_search",
+    "effective_project_type",
     "initialize_project",
     "ProjectAlreadyExistsError",
     "WorkspaceOccupiedError",
     "synchronize_project_workspace",
     "add_project_sources",
     "default_workspace_path",
+    "find_source_changes",
+    "list_source_versions",
     "indexes_are_current",
     "lexical_search",
     "lexical_terms",
@@ -345,6 +398,10 @@ __all__ = [
     "open_project",
     "plan_context_expansion",
     "read_document",
+    "SourceCardGenerationSettings",
+    "default_source_card_generation_settings",
+    "read_router_model",
+    "read_source_card_generation_settings",
     "DocumentSelection",
     "DocumentReason",
     "DOCUMENT_REASON_CHOICES",
@@ -354,7 +411,14 @@ __all__ = [
     "prepare_persistent_indexes",
     "prepare_project_workspace",
     "prepare_sources_workspace",
+    "preview_project_sources",
     "remove_workspace_sources",
+    "sync_project_sources",
+    "write_router_model",
+    "write_source_card_generation_settings",
+    "SourceAction",
+    "SourceChanges",
+    "SourceVersion",
     "add_project_files",
     "replace_project_file",
     "remove_project_files",
@@ -396,6 +460,9 @@ __all__ = [
     "HISTORY_POLICY_NONE",
     "HISTORY_POLICY_RECENT",
     "HISTORY_POLICY_RELEVANT",
+    "MEMORY_ANSWER_CHOICES",
+    "MEMORY_INDEXING_CHOICES",
+    "MEMORY_QUESTION_CHOICES",
     "RETRIEVAL_MODE_CHOICES",
     "RETRIEVAL_MODE_DOCUMENT",
     "RETRIEVAL_MODE_NONE",
@@ -404,10 +471,16 @@ __all__ = [
     "RETRIEVAL_STRATEGY_CHOICES",
     "RETRIEVAL_STRATEGY_HYBRID",
     "HistoryPolicy",
+    "ConversationMemorySettings",
     "Intent",
+    "MemoryAnswerPolicy",
+    "MemoryIndexingPolicy",
+    "MemoryQuestionPolicy",
     "ProjectType",
     "RetrievalMode",
     "RetrievalStrategy",
     "load_project_types",
+    "project_behavior_settings",
+    "save_project_behavior",
     "project_type",
 ]

@@ -52,6 +52,9 @@ Module Structure
 
 Examples
 --------
+This is an illustrative integration call, not a standalone doctest.
+KíLín supplies the required tool context and conversation state.
+
 ``context`` is the ``ToolContext`` that KíLín passes to a tool:
 
 >>> from kilin.tools import ToolRequest
@@ -70,6 +73,7 @@ from typing import Final
 
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools._shared.citations import inspect_citations
 from kilin.tools._shared.document_notes import answer_citations
 from kilin.tools._shared.choose_document import choose_document
 from kilin.tools.paper_overview import _configuration as _config
@@ -101,13 +105,10 @@ class OverviewSettings:
     ----------
     max_tokens: int
         Most estimated tokens of the paper given to the model (1000-20000).
-    answer_tokens: int
-        Longest answer, in tokens (100-2000).
 
     """
 
     max_tokens: int = _config.DEFAULT_MAX_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
 
 
 def parse_settings(data: dict, where: str) -> OverviewSettings:
@@ -132,15 +133,12 @@ def parse_settings(data: dict, where: str) -> OverviewSettings:
 
     """
 
-    reject_unknown(where, data, ("max_tokens", "answer_tokens"))
+    reject_unknown(where, data, ("max_tokens",))
 
     defaults = OverviewSettings()
     return OverviewSettings(
         max_tokens=check_int(
             where, data, "max_tokens", defaults.max_tokens, 1000, 20000
-        ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 100, 2000
         ),
     )
 
@@ -262,8 +260,13 @@ def run(
         list(enumerate(chunks, start=1)),
         request.guidance,
     )
-    answer = context.write(system, prompt, settings.answer_tokens)
-    summary["invalid_citations"] = answer_citations(answer, len(chunks))
+    answer = context.write(system, prompt, None)
+    citation_report = inspect_citations(answer, len(chunks))
+    summary["invalid_citations"] = list(citation_report.invalid_numbers)
+    if citation_report.invalid_groups:
+        summary["invalid_citation_groups"] = list(
+            citation_report.invalid_groups
+        )
     if guessed:
         answer += (
             f"\n\n*This is about {path.name}; name the paper if you "

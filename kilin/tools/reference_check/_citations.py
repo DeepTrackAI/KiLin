@@ -1,9 +1,9 @@
-"""Find a paper's numbered in-text citations and their citing sentences.
+"""Find a paper's in-text citations and their citing sentences.
 
 Private to ``reference_check``. The checker needs, for each cited
 reference, the sentence that cites it. This module finds numbered
 citation markers in the paper's body (the passages before its reference
-list) and maps each to reference numbers. Two styles are supported:
+list) and maps each to reference numbers. These styles are supported:
 
 1. **Brackets**: ``[3]``, ``[3,4]``, ``[1–4]``, ``[2, 5–7]``. Brackets are
    unambiguous, so only numbers outside 1–``max_range`` are rejected.
@@ -22,10 +22,17 @@ list) and maps each to reference numbers. Two styles are supported:
 3. **Written out** in any style: ``Ref. 50``, ``refs. 12,13``, ``refs 8,19``.
    These need no confirmation.
 
-Author-year citations ("Smith et al., 2020") are not recognised; a paper
-using them has style ``none``. Numbering is not assumed to follow first
-appearance: journals print figure legends that cite Methods references
-early.
+4. **Author-year** (``(Smith et al., 2020; Lee 2019a)``, ``Smith and Lee
+   (2020)``), for a list that prints no numbers: each cited work is
+   resolved to the entry with its first author and year
+   (``kilin.tools._shared.author_year``), whose inferred number it cites.
+   The style is used when more of these markers resolve than numbered
+   markers are found. Works matching several entries are ambiguous and
+   cite none; works matching none are reported when the form leaves no
+   doubt ("et al.", two authors, or beside a resolved work).
+
+Numbering is not assumed to follow first appearance: journals print
+figure legends that cite Methods references early.
 
 Each reference number is the entry's position in the reference list, so
 the caller must check that the list was split correctly: numbers cited
@@ -49,7 +56,8 @@ Key Features
 
 - **Diagnostics**
 
-    Reference numbers never cited, and numbers cited beyond the list.
+    Reference numbers never cited, numbers cited beyond the list, and
+    author-year citations that are ambiguous or not in the list.
 
 Module Structure
 ----------------
@@ -89,9 +97,12 @@ import statistics
 from typing import Final
 
 from kilin.chunking import Chunk
+from kilin.tools._shared.author_year import entry_keys, find_markers, resolve
 from kilin.tools._shared.sentences import Sentence, split_sentences
 
 __all__ = [
+    "LINE_START",
+    "STYLE_AUTHOR_YEAR",
     "STYLE_BRACKETS",
     "STYLE_NONE",
     "STYLE_PARENTHESES",
@@ -110,6 +121,7 @@ STYLE_BRACKETS: Final[str] = "brackets"
 STYLE_PARENTHESES: Final[str] = "parentheses"
 STYLE_SUPERSCRIPT: Final[str] = "superscript"
 STYLE_WRITTEN: Final[str] = "written"
+STYLE_AUTHOR_YEAR: Final[str] = "author_year"
 STYLE_NONE: Final[str] = "none"
 
 # A list of numbers and ranges: "3", "3,4", "1–4", "2, 5–7".
@@ -131,7 +143,8 @@ _AFTER: Final[str] = r"[\s.,;:)\]!?—–”’\"']"
 # after punctuation: "polygenic15", "MDD93", "regions)70", "stress.12",
 # "UNet3+86". The PDF's glyph sizes, not this pattern, rule out "COVID19".
 _GLUED: Final[re.Pattern[str]] = re.compile(
-    r"(?:[^\W\d_]|[)\]+*′″’”%])[.,;:]?(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)"
+    r"(?:[^\W\d_]|[)\]+*′″’”%])[.,;:]?"
+    r"(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)"
     rf"(?={_AFTER}|$)"
 )
 # A superscript after a space: "practices 1,8–14.", "petioles 5,14,15 by",
@@ -140,6 +153,21 @@ _SPACED: Final[re.Pattern[str]] = re.compile(
     r"\S[.,;:]? (?P<n>\d{1,3}(?:,\d{1,3}|[–-]\d{1,3})*)"
     r"(?=[.,;:]?(?:[\s—]|$))"
 )
+# A superscript marker broken over two lines after a separator: the line
+# ends "accumulation59–" and the next starts "61", so the text has
+# "accumulation59– 61". The first part is confirmed like any superscript;
+# the rest must be printed small at the start of a PDF line.
+_SPLIT: Final[re.Pattern[str]] = re.compile(
+    r"(?:[^\W\d_]|[)\]+*′″’”%])[.,;:]?"
+    r"(?P<n>(?P<head>\d{1,3}(?:[,–-]\d{1,3})*)[,–-]\s+"
+    r"(?P<tail>\d{1,3}(?:[,–-]\d{1,3})*))"
+    rf"(?={_AFTER}|$)"
+)
+# The first part of a broken marker, matched where it starts.
+_HEAD: Final[re.Pattern[str]] = re.compile(r"(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)")
+# A word of letters right before a superscript printed first on its PDF
+# line ("accumulation 45,46" with the line break before "45").
+_WORD_END: Final[re.Pattern[str]] = re.compile(r"[^\W\d_]{3,}[.,;:]?\s*$")
 # A citation written out: "with Ref. 50", "see refs. 12,13", "Refs. 4–6",
 # or Nature's "refs 8,19,20" without a full stop. Unambiguous in any style,
 # so it needs no confirmation from the PDF.
@@ -152,11 +180,12 @@ _UNMAPPED: Final[re.Pattern[str]] = re.compile(r"\(cid:\d+\)")
 # A single Latin letter: a variable ("t2", "H1"), or a stamp ("v 2").
 _LATIN_LETTER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z]")
 # The word before a superscript inside an open parenthesis ("log(σ2)"), or
-# ending with a short parenthesized argument ("f(0)2", "ð0Þ2" in PDFs that
+# ending with a function's short argument ("f(0)2", "ð0Þ2" in PDFs that
 # encode parentheses as ð and Þ): the digits are an exponent. "(VAE)30" is
-# a citation.
+# a citation, and so is a count in parentheses standing alone ("high
+# (3)45,46"), which no function name precedes.
 _MATH_WORD: Final[re.Pattern[str]] = re.compile(
-    r"[(ð][^)Þ]*$|[(ð][^)Þ\s]{1,2}[)Þ]$"
+    r"[(ð][^)Þ]*$|\S\([^)\s]{1,2}\)$|ð[^Þ\s]{1,2}Þ$"
 )
 # A Greek letter variable after a math sign ("N(µ, σ2)", "− µ2"): the
 # digits are an exponent; "exponent α64" is a citation.
@@ -171,7 +200,9 @@ _NOT_CITED: Final[re.Pattern[str]] = re.compile(
 )
 # Glyphs of equations, including those some PDFs use for "(", ")" and "="
 # (ð, Þ, ¼).
-_MATH_GLYPH: Final[re.Pattern[str]] = re.compile(r"[=¼ðÞ∑∫δΨ|∣±×∝≈<>]")
+_MATH_GLYPH: Final[re.Pattern[str]] = re.compile(
+    r"[=¼ðÞ∑∫δΨ|∣±×∝≈<>]"
+)
 # Share of a sentence's tokens that are single characters or hold an
 # equation glyph above which the "sentence" is an equation ("ðsÞ = 1 2",
 # "j2H2 t2 j2H1"), whose superscripts are exponents. Prose, even with a
@@ -203,8 +234,13 @@ _CAPITALIZED: Final[re.Pattern[str]] = re.compile(r"[A-Z][^\sA-Z]*[a-z]")
 _RUN_CHARACTER: Final[re.Pattern[str]] = re.compile(r"[\d,–-]")
 
 #: Superscript digits (without separators) mapped to the letters and digits
-#: printed just before them on the same line, lowercase.
+#: printed just before them on the same line, lowercase; for digits printed
+#: first on their line, ``LINE_START`` and the characters printed after
+#: them instead.
 Superscripts = Mapping[str, tuple[str, ...]]
+#: Marks a context of digits printed first on a PDF line: what follows is
+#: the text printed after them.
+LINE_START: Final[str] = "^"
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,7 +290,8 @@ class Citation:
     numbers: tuple[int, ...]
         The cited reference numbers, in the marker's order.
     marker: str
-        The marker's numbers as printed ("2, 5–7").
+        The marker's numbers as printed ("2, 5–7"), or an author-year
+        marker as printed ("(Smith et al., 2020)").
     sentence: Sentence
         The sentence it appears in.
     start: int
@@ -271,6 +308,19 @@ class Citation:
     start: int = 0
     end: int = 0
 
+    @property
+    def author_year(self) -> bool:
+        """Whether the marker cites by author and year.
+
+        Returns
+        -------
+        bool
+            True for "(Smith et al., 2020)", False for numbered markers.
+
+        """
+
+        return bool(self.marker) and not self.marker[0].isdigit()
+
 
 @dataclass(frozen=True, slots=True)
 class CitationScan:
@@ -280,7 +330,7 @@ class CitationScan:
     ----------
     style: str
         ``brackets``, ``parentheses``, ``superscript``, ``written``,
-        or ``none``.
+        ``author_year`` or ``none``.
     citations: tuple[Citation, ...]
         In reading order.
     uncited: tuple[int, ...]
@@ -289,6 +339,12 @@ class CitationScan:
         Cited numbers larger than the entry count: usually entries merged
         when the list was split, so later numbers may point to the wrong
         entry.
+    ambiguous: tuple[tuple[str, tuple[int, ...]], ...]
+        Author-year works matching several entries ("Smith, 2020" with two
+        Smith 2020 entries and no suffix), with those entries' numbers,
+        each once.
+    unresolved: tuple[str, ...]
+        Author-year works matching no entry, each once.
 
     """
 
@@ -296,6 +352,8 @@ class CitationScan:
     citations: tuple[Citation, ...]
     uncited: tuple[int, ...]
     beyond_list: tuple[int, ...]
+    ambiguous: tuple[tuple[str, tuple[int, ...]], ...] = ()
+    unresolved: tuple[str, ...] = ()
 
 
 def cited_numbers(marker: str, max_range: int) -> tuple[int, ...] | None:
@@ -350,7 +408,8 @@ def superscript_runs(file: Path, rules: CitationRules) -> Superscripts:
         (separators dropped; lowered subscripts are not runs), the text
         printed before it on its line without spaces (at most
         ``signature_characters``, lowercase, earlier superscript digits
-        included). Lines without
+        included); for a run printed first on its line, ``LINE_START``
+        followed by the text printed after it, likewise. Lines without
         letters are skipped. Empty when ``pdfminer.six`` cannot read the
         file.
 
@@ -390,6 +449,7 @@ def superscript_runs(file: Path, rules: CitationRules) -> Superscripts:
                     glyph.y0 for glyph in letters if glyph.size >= small
                 ) if any(glyph.size >= small for glyph in letters) else None
                 raised = None if base is None else base + _RAISE * size
+                text_of_line = "".join(glyph.get_text() for glyph in line)
                 before, run = "", ""
                 for glyph in [*line, None]:
                     text = glyph.get_text() if glyph is not None else ""
@@ -403,9 +463,15 @@ def superscript_runs(file: Path, rules: CitationRules) -> Superscripts:
                         continue
 
                     digits = re.sub(r"\D", "", run)
-                    if digits:
+                    if digits and _flat(before):
                         runs[digits].append(
                             _flat(before)[-rules.signature_characters:]
+                        )
+                    elif digits:
+                        after = text_of_line[len(before) + len(run):]
+                        runs[digits].append(
+                            LINE_START
+                            + _flat(after)[:rules.signature_characters]
                         )
                     # Extracted text keeps superscript digits, so the
                     # context of the next run does too.
@@ -420,8 +486,9 @@ def find_citations(
     entry_count: int,
     superscripts: Superscripts | None,
     rules: CitationRules,
+    entries: Sequence[tuple[int, str]] = (),
 ) -> CitationScan:
-    """Find every numbered citation in a paper's body.
+    """Find every citation in a paper's body.
 
     Parameters
     ----------
@@ -434,12 +501,19 @@ def find_citations(
         is not a PDF, so superscripts cannot be confirmed.
     rules: CitationRules
         The caller's thresholds.
+    entries: Sequence[tuple[int, str]], optional
+        The reference list's numbers and texts, given when the list prints
+        no numbers, so author-year citations can be resolved. Defaults to
+        none.
 
     Returns
     -------
     CitationScan
-        Bracketed (or, when they are more, parenthesized) markers when
-        there are at least ``rules.bracket_markers_min`` of them, or any
+        Author-year citations (style ``author_year``) when ``entries`` are
+        given and more author-year markers resolve than bracketed or
+        parenthesized markers are found; otherwise bracketed (or, when
+        they are more, parenthesized) markers when there are at least
+        ``rules.bracket_markers_min`` of them, or any
         when there are no superscripts to look for; otherwise
         font-confirmed superscripts; otherwise written-out citations
         ("Ref. 50") with style ``written``; otherwise style ``none``.
@@ -454,6 +528,10 @@ def find_citations(
         for s in sentences
         for match in _PARENTHESIS.finditer(s.text)
     )
+    if entries:
+        scan = _author_year(sentences, entries)
+        if len(scan.citations) > max(brackets, parentheses):
+            return scan
     superscript_found = (
         _superscripts(sentences, superscripts, rules) if superscripts else []
     )
@@ -556,6 +634,69 @@ def find_citations(
     )
 
 
+def _author_year(
+    sentences: Sequence[Sentence], entries: Sequence[tuple[int, str]]
+) -> CitationScan:
+    """Find the author-year citations of a paper with an unnumbered list.
+
+    Parameters
+    ----------
+    sentences: Sequence[Sentence]
+        The paper's body, in sentences.
+    entries: Sequence[tuple[int, str]]
+        The reference list's numbers and texts.
+
+    Returns
+    -------
+    CitationScan
+        Style ``author_year``: one citation per marker with at least one
+        work resolved to a single entry, citing those entries. Ambiguous
+        works, and works resolved to no entry that are surely citations
+        ("et al.", two authors, or in a marker with a resolved work), are
+        listed; entries only an ambiguous work may cite are not counted
+        as uncited.
+
+    """
+
+    keys = entry_keys(entries)
+    citations: list[Citation] = []
+    ambiguous: dict[str, tuple[int, ...]] = {}
+    unresolved: dict[str, None] = {}
+    for sentence in sentences:
+        for marker in find_markers(sentence.text):
+            numbers: list[int] = []
+            missing: list[str] = []
+            for work in marker.works:
+                found = resolve(work, keys)
+                if len(found) == 1:
+                    numbers.append(found[0])
+                elif found:
+                    ambiguous.setdefault(work.cited_as, found)
+                elif work.authors > 1:
+                    unresolved[work.cited_as] = None
+                else:
+                    missing.append(work.cited_as)
+            if numbers:
+                unresolved.update(dict.fromkeys(missing))
+                citations.append(Citation(
+                    tuple(dict.fromkeys(numbers)), marker.text, sentence,
+                    marker.start, marker.end,
+                ))
+    cited = {number for citation in citations for number in citation.numbers}
+    maybe = {number for found in ambiguous.values() for number in found}
+    return CitationScan(
+        style=STYLE_AUTHOR_YEAR,
+        citations=tuple(citations),
+        uncited=tuple(
+            number for number, _ in entries
+            if number not in cited and number not in maybe
+        ),
+        beyond_list=(),
+        ambiguous=tuple(ambiguous.items()),
+        unresolved=tuple(unresolved),
+    )
+
+
 def _superscripts(
     sentences: Sequence[Sentence],
     superscripts: Superscripts,
@@ -590,14 +731,29 @@ def _superscripts(
             previous = sentence.text
             continue
         taken = {match.start("n") for match in written}
+        # A marker broken over two lines comes first, so its parts are not
+        # also taken as markers of their own.
+        split = [
+            match for match in _SPLIT.finditer(sentence.text)
+            if match.start("n") not in taken
+            and _confirmed_split(
+                sentence.text, match, superscripts, rules, previous
+            )
+        ]
+        spans = [(match.start("n"), match.end("n")) for match in split]
         matches = sorted(
             (
                 *written,
+                *split,
                 *(
                     match
                     for pattern in (_GLUED, _SPACED, _AFTER_DIGIT)
                     for match in pattern.finditer(sentence.text)
                     if match.start("n") not in taken
+                    and not any(
+                        first <= match.start("n") < last
+                        for first, last in spans
+                    )
                     and _confirmed(
                         sentence.text, match, superscripts, rules, previous
                     )
@@ -645,7 +801,9 @@ def _confirmed(
         whether the PDF prints these digits as a superscript after the
         same characters. A PDF line can start just before a superscript,
         so the shorter of the two contexts must end the longer one, and
-        both must have at least ``_CONTEXT_MIN`` characters.
+        both must have at least ``_CONTEXT_MIN`` characters; digits the PDF
+        prints small first on a line count after a word of letters
+        ("accumulation 45,46").
 
     """
 
@@ -669,10 +827,96 @@ def _confirmed(
 
     context = _flat(f"{previous} {before}")[-rules.signature_characters:]
     digits = re.sub(r"\D", "", match.group("n"))
-    return len(context) >= _CONTEXT_MIN and any(
-        len(printed) >= _CONTEXT_MIN
-        and (context.endswith(printed) or printed.endswith(context))
-        for printed in superscripts.get(digits, ())
+    printed = superscripts.get(digits, ())
+    if len(context) >= _CONTEXT_MIN and any(
+        len(found) >= _CONTEXT_MIN
+        and (context.endswith(found) or found.endswith(context))
+        for found in printed
+    ):
+        return True
+    # Printed first on a PDF line (after a page number or a line break),
+    # the digits have no context before them there: the text after them
+    # must agree, and a word must come before them in the sentence.
+    return bool(_WORD_END.search(before)) and _at_line_start(
+        text, match.end("n"), printed, rules
+    )
+
+
+def _confirmed_split(
+    text: str,
+    match: re.Match[str],
+    superscripts: Superscripts,
+    rules: CitationRules,
+    previous: str = "",
+) -> bool:
+    """Return whether a marker broken over two lines is a citation.
+
+    Parameters
+    ----------
+    text: str
+        The sentence.
+    match: re.Match[str]
+        A ``_SPLIT`` candidate in it ("accumulation59– 61").
+    superscripts: Superscripts
+        The PDF's superscripts.
+    rules: CitationRules
+        As for ``_confirmed``.
+    previous: str, optional
+        The sentence before. Defaults to ``""``.
+
+    Returns
+    -------
+    bool
+        True when the part before the line break is a confirmed
+        superscript (``_confirmed``), and the PDF prints the rest small at
+        the start of a line.
+
+    """
+
+    head = _HEAD.match(text, match.start("n"))
+    if head is None or not _confirmed(
+        text, head, superscripts, rules, previous
+    ):
+        return False
+    tail = re.sub(r"\D", "", match.group("tail"))
+    return _at_line_start(
+        text, match.end("n"), superscripts.get(tail, ()), rules
+    )
+
+
+def _at_line_start(
+    text: str, end: int, printed: Sequence[str], rules: CitationRules
+) -> bool:
+    """Return whether digits are printed first on a PDF line, as here.
+
+    Parameters
+    ----------
+    text: str
+        The sentence.
+    end: int
+        Where the digits end in it.
+    printed: Sequence[str]
+        The PDF's contexts for these digits (``superscript_runs``).
+    rules: CitationRules
+        For ``signature_characters``.
+
+    Returns
+    -------
+    bool
+        True when one context is ``LINE_START`` followed by at least
+        ``_CONTEXT_MIN`` characters that the text after the digits starts
+        with (or that start it, at the end of the sentence).
+
+    """
+
+    after = _flat(text[end:])[:rules.signature_characters]
+    return any(
+        found.startswith(LINE_START)
+        and len(following := found[len(LINE_START):]) >= _CONTEXT_MIN
+        and (after.startswith(following) or (
+            len(after) >= _CONTEXT_MIN and following.startswith(after)
+        ))
+        for found in printed
     )
 
 

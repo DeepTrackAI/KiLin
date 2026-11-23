@@ -49,6 +49,9 @@ Module Structure
 
 Examples
 --------
+This is an illustrative integration call, not a standalone doctest.
+KíLín supplies the required tool context and conversation state.
+
 ``context`` is the ``ToolContext`` that KíLín passes to a tool, and
 ``earlier`` holds the turns the follow-up points back to:
 
@@ -64,9 +67,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-import re
 from typing import Final
 
+from kilin.tools._shared.model_results import partial_result
+from kilin._model_completion import IncompleteModelResponse
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools.filter_results import _configuration as _config
 from kilin.tools._contract import (
@@ -77,6 +81,7 @@ from kilin.tools._contract import (
     reject_unknown,
 )
 from kilin.tools._shared.earlier_turns import newest_listed
+from kilin.tools._shared.model_results import selected_numbers
 
 __all__ = [
     "FilterSettings",
@@ -88,7 +93,6 @@ __all__ = [
 # Estimated tokens that an item's number and blank line add to a batch.
 _ITEM_NUMBER_TOKENS: Final[int] = _config.ITEM_NUMBER_TOKENS
 # Longest reply of one batch: its matching item numbers.
-_REPLY_TOKENS: Final[int] = _config.REPLY_TOKENS
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,17 +225,22 @@ def run(
     ]
     batches = _batches(items, settings.batch_tokens)
     picked: list[int] = []
+    failures: list[dict[str, object]] = []
     for index, batch in enumerate(batches, start=1):
         context.progress(
             f"Judging the {len(items)} items of turn {turn.number} "
             f"(batch {index} of {len(batches)})"
         )
         system, prompt = filter_prompt(request.question, batch)
-        reply = context.ask_model(system, prompt, _REPLY_TOKENS)
-        numbers = {number for number, _ in batch}
-        picked += sorted(
-            {int(n) for n in re.findall(r"\d+", reply) if int(n) in numbers}
-        )
+        try:
+            reply = context.ask_model(system, prompt, None)
+            numbers = {number for number, _ in batch}
+            picked += selected_numbers(reply, numbers)
+        except IncompleteModelResponse as error:
+            failures.append({
+                "item": f"Filter batch {index}",
+                "items": [number for number, _ in batch], **error.to_dict(),
+            })
     summary.update(
         {"turn": turn.number, "items": len(items), "matched": len(picked)}
     )
@@ -249,7 +258,8 @@ def run(
         path = turn.paths[number - 1]
         line = turn.lines[number - 1] if turn.lines else 0
         lines.append(
-            f"{citation}. {path.name}, line {line}: “{items[number - 1][1]}” "
+            f"{citation}. {path.name}, line {line}: "
+            f"“{items[number - 1][1]}” "
             f"[{citation}]"
         )
         evidence.append(
@@ -264,8 +274,14 @@ def run(
             }
         )
     if not picked:
-        lines.append("None of the items matches.")
-    return ToolResult("\n".join(lines), tuple(evidence), summary)
+        lines.append(
+            "No match established; failed batches remain unassessed."
+            if failures else "None of the items matches."
+        )
+    return partial_result(
+        ToolResult("\n".join(lines), tuple(evidence), summary), failures,
+        completed=len(batches) > len(failures),
+    )
 
 
 def _batches(

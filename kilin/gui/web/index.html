@@ -6,23 +6,35 @@
     <title>KíLín</title>
     <link rel="stylesheet" href="styles.css">
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <script src="katex/katex.min.js" defer></script>
     <script src="app.js" defer></script>
   </head>
   <body>
     <div class="app-shell">
       <aside id="conversations-panel" class="conversations-panel hidden" aria-label="Conversations">
-        <button id="new-chat" type="button" class="new-chat-button">＋ New chat</button>
-        <p class="conversation-list-heading">Conversations</p>
-        <nav id="conversation-list" class="conversation-list" aria-label="Saved conversations"></nav>
-        <div class="conversation-panel-actions">
-          <button id="change-project" type="button" class="sidebar-toggle">New project</button>
-        </div>
+        <button id="home-logo" type="button" class="sidebar-logo" aria-label="Back to the start screen" title="Back to the start screen"><span class="sidebar-logo-mark" aria-hidden="true"></span><span class="sidebar-logo-wordmark" aria-hidden="true"></span></button>
+        <section class="sidebar-section" data-section="projects">
+          <div class="sidebar-section-head">
+            <button type="button" class="sidebar-section-toggle" aria-expanded="true" aria-controls="project-list">Projects<svg class="sidebar-chevron" aria-hidden="true" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></button>
+            <button id="sort-projects" type="button" class="sidebar-section-action" aria-label="Sort projects" title="Sort projects"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/></svg></button>
+            <button id="new-project" type="button" class="sidebar-section-action" aria-label="New project" title="New project"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+          </div>
+          <nav id="project-list" class="project-list" aria-label="Saved projects"></nav>
+        </section>
+        <section class="sidebar-section" data-section="conversations">
+          <div class="sidebar-section-head">
+            <button type="button" class="sidebar-section-toggle" aria-expanded="true" aria-controls="conversation-list">Conversations<svg class="sidebar-chevron" aria-hidden="true" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></button>
+            <button id="sort-conversations" type="button" class="sidebar-section-action" aria-label="Sort conversations" title="Sort conversations"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/></svg></button>
+            <button id="new-chat" type="button" class="sidebar-section-action" aria-label="New chat" title="New chat"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+          </div>
+          <nav id="conversation-list" class="conversation-list" aria-label="Saved conversations"></nav>
+        </section>
       </aside>
       <main class="workspace">
       <header class="topbar">
         <button id="toggle-conversations" class="panel-toggle left-panel-toggle hidden" type="button" aria-label="Hide conversations" title="Hide conversations"><span></span></button>
-        <div id="topbar-project" class="topbar-project hidden" aria-live="polite">
-          <strong id="topbar-project-name" contenteditable="true" role="textbox" aria-label="Project name" spellcheck="false"></strong>
+        <div id="topbar-chat" class="topbar-project hidden" aria-live="polite">
+          <strong id="topbar-chat-name"></strong>
           <span id="topbar-turn-count">0 turns</span>
         </div>
         <button id="open-models" class="sidebar-toggle" type="button">Settings</button>
@@ -31,8 +43,13 @@
       </header>
 
       <section id="setup" class="setup">
-        <h1>KíLín</h1>
-        <p class="intro">Your AI. Your Knowledge. Your Control.</p>
+        <div class="setup-brand">
+          <span class="setup-brand-figure" aria-hidden="true"></span>
+          <div class="setup-brand-copy">
+            <h1 class="setup-brand-name"><span class="setup-brand-wordmark" aria-hidden="true"></span><span class="visually-hidden">KíLín</span></h1>
+            <p class="intro">Your AI. Your Knowledge. Your Control.</p>
+          </div>
+        </div>
         <section id="saved-projects" class="saved-projects hidden" aria-label="Saved projects"></section>
         <p id="models-hint" class="models-hint hidden">No suggested local chat-and-embedding pair found. <button id="models-hint-button" type="button">Set up models</button></p>
         <form id="project-form" class="setup-card">
@@ -53,14 +70,13 @@
         <div id="conversation-scroll" class="conversation-scroll">
           <div class="chat-heading">
             <div>
-              <p class="eyebrow">OPEN PROJECT</p>
-              <h1 id="project-name" contenteditable="true" role="textbox" aria-label="Project name" spellcheck="false">Project chat</h1>
-              <p id="project-detail" class="hint"></p>
+              <h1 id="conversation-name" class="conversation-name" contenteditable="true" role="textbox" aria-label="Conversation name" spellcheck="false"></h1>
+              <p id="conversation-detail" class="hint"></p>
             </div>
           </div>
-          <h2 id="conversation-name" class="conversation-name" contenteditable="true" role="textbox" aria-label="Conversation name" spellcheck="false"></h2>
           <div id="conversation" class="conversation" aria-live="polite"></div>
         </div>
+        <p class="ai-disclaimer">AI-generated answers can be wrong. Always verify them.</p>
         <form id="question-form" class="composer">
           <textarea id="question" rows="2" placeholder="Write a message…"></textarea>
           <div id="attachment-list" class="attachment-list hidden"></div>
@@ -76,7 +92,11 @@
               <div class="effort-picker">
                 <button id="effort-button" class="effort-button" type="button" aria-expanded="false">Lagom · 20</button>
                 <div id="effort-menu" class="effort-menu hidden">
-                  <strong id="effort-name" class="effort-title">Lagom</strong>
+                  <button id="effort-name" class="effort-title" type="button" aria-expanded="false" aria-controls="effort-thinking"><span id="effort-level-name">Lagom</span><span class="effort-chevron" aria-hidden="true">›</span></button>
+                  <div id="effort-thinking" class="effort-section effort-thinking hidden">
+                    <div class="effort-heading"><span>Thinking</span><div class="segmented" role="radiogroup" aria-label="Thinking"><label><input type="radio" name="effort-thinking" value="on"><span>On</span></label><label><input type="radio" name="effort-thinking" value="off"><span>Off</span></label></div></div>
+                    <div class="effort-heading effort-temperature-row"><label for="effort-temperature"><span>Temperature</span></label><input id="effort-temperature" type="number" min="0" step="0.1" form="effort-settings" aria-label="Answer temperature"></div>
+                  </div>
                   <div class="effort-section">
                     <div class="effort-heading"><span>Model</span></div>
                     <span id="effort-model-detail" class="effort-detail">Qwen3-8B-MLX-4bit</span>
@@ -113,7 +133,6 @@
                   </div>
                 </div>
               </div>
-              <button id="branch-chat" type="button" class="composer-icon branch-button" aria-label="Branch conversation" title="Branch conversation"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M14 20V5M9.5 9.5 14 5l4.5 4.5M14 15h-3a4 4 0 0 1-4-4V7M4 10l3-3 3 3"/></svg></button>
               <button id="send" class="send-button" type="submit" aria-label="Send message" title="Send message"><span aria-hidden="true">↑</span></button>
             </div>
           </div>
@@ -137,6 +156,7 @@
           <div id="workspace-tree" class="file-tree"></div>
         </details>
       </aside>
+      <div id="side-divider" class="side-divider" role="separator" aria-orientation="horizontal" title="Drag to resize; double-click to reset"></div>
       <aside class="references-panel" aria-label="References for the selected answer">
         <details id="references-section" open>
           <summary>References</summary>
@@ -148,58 +168,258 @@
     <section id="models-panel" class="models-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="models-title">
       <div class="models-card">
         <div class="models-heading"><h2 id="models-title">Settings</h2><button id="close-models" class="sidebar-toggle" type="button">Close</button></div>
-        <details id="first-run-setup" class="settings-section readiness-card hidden" aria-live="polite">
-          <summary class="readiness-heading"><h3>KíLín setup</h3><span id="readiness-status" class="readiness-status"></span></summary>
-          <p id="readiness-summary">Checking the local environment…</p>
-          <ol id="readiness-steps" class="readiness-steps"></ol>
-          <div id="readiness-meter" class="download-meter hidden" role="progressbar" aria-label="Model download progress" aria-valuemin="0" aria-valuemax="100"><span></span></div>
-          <p id="readiness-time" class="hint"></p>
-          <div class="readiness-actions">
-            <button id="install-required" class="primary" type="button">Install required models</button>
-            <button id="use-installed" class="secondary hidden" type="button">Use installed models</button>
-          </div>
-        </details>
-        <section class="settings-section">
-          <h3>Appearance</h3>
-          <select id="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-        </section>
-        <section class="settings-section models-section">
-            <!-- Kept hidden: the rows below edit these values. -->
-            <div class="hidden" aria-hidden="true">
-              <label for="chat-model">Default language model</label>
-              <div class="model-picker"><input id="chat-model" type="text" autocomplete="off"><button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button><div id="chat-model-menu" class="model-menu hidden" role="listbox"></div></div>
-              <label for="embedding-model">Embedding model</label>
-              <div class="model-picker"><input id="embedding-model" type="text" autocomplete="off"><button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button><div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div></div>
-              <label for="query-format">Embedding query format</label>
-              <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
+        <!-- App-wide, not per project, so above the tabs; folds into one row. -->
+        <section id="settings-app" class="settings-section">
+          <details id="first-run-setup" class="readiness-card hidden" aria-live="polite">
+            <summary class="readiness-heading"><h3>KíLín setup</h3><span id="readiness-status" class="readiness-status"></span></summary>
+            <p id="readiness-summary">Checking the local environment…</p>
+            <ol id="readiness-steps" class="readiness-steps"></ol>
+            <div id="readiness-meter" class="download-meter hidden" role="progressbar" aria-label="Model download progress" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+            <p id="readiness-time" class="hint"></p>
+            <div class="readiness-actions">
+              <button id="install-required" class="primary" type="button">Install required models</button>
+              <button id="use-installed" class="secondary hidden" type="button">Use installed models</button>
             </div>
+            <div class="setup-app">
+              <!-- For new projects; an open project keeps the one it was made with. -->
+              <label for="backend" data-settings-key="interface.backend">Computation backend</label>
+              <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
+              <label for="appearance" data-settings-key="interface.appearance">Appearance</label>
+              <select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+              <label for="workspace-path" data-settings-key="interface.workspace_folder">Projects folder</label>
+              <div class="folder-row"><input id="workspace-path" type="text" readonly><button id="browse-workspace" type="button" class="secondary">Browse</button><button id="default-workspace" type="button" class="secondary">Use default</button></div>
+              <p id="workspace-note" class="hint hidden"></p>
+              <div id="legacy-workspace-choice" class="hidden">
+                <p id="legacy-workspace-note" class="hint"></p>
+                <button id="use-legacy-workspace" type="button" class="secondary">Use existing projects</button>
+              </div>
+              <p class="hint">Projects remain in the folder you choose. iCloud, OneDrive, or another service may synchronize that folder; choose a non-synchronized location for sensitive data.</p>
+              <button id="confirm-workspace" type="button" class="primary hidden">Confirm projects folder</button>
+              <p id="confirm-workspace-note" class="hint hidden">This is where KíLín keeps your projects. Confirm it, or choose another folder with Browse.</p>
+              <!-- Who made KíLín, from the package authors (pyproject.toml). -->
+              <div class="setup-about">
+                <button id="view-terms" type="button" class="link-button">Terms of use</button>
+                <p id="copyright" class="hint"></p>
+              </div>
+            </div>
+          </details>
+        </section>
+        <!-- The open project's settings, or the next new project's. -->
+        <div id="settings-project-region" class="project-region">
+          <h3>Project</h3>
+          <div class="settings-tabs" role="tablist" aria-label="Settings categories">
+            <button class="settings-tab" type="button" role="tab" data-tab="general">General</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="indexing">Indexing</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="memory">Memory</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="models">Models</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="answers">Answers</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="intents">Intents</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="tools">Tools</button>
+          </div>
+          <section class="settings-section models-section" data-settings-tab="models">
+              <!-- Kept hidden: the rows below edit these values. -->
+              <div class="hidden" aria-hidden="true">
+                <label for="chat-model" data-settings-key="project.profile.chat_mlx">Default language model</label>
+                <div class="model-picker"><input id="chat-model" type="text" autocomplete="off"><button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button><div id="chat-model-menu" class="model-menu hidden" role="listbox"></div></div>
+                <label for="embedding-model" data-settings-key="model_settings.embedding_models">Embedding model</label>
+                <div class="model-picker"><input id="embedding-model" type="text" autocomplete="off"><button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button><div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div></div>
+                <label for="query-format" data-settings-key="model_settings.query_format">Embedding query format</label>
+                <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
+              </div>
 
-        <p id="models-backend" class="hint hidden"></p>
-        <div id="model-list"></div>
+          <section class="source-card-settings" aria-labelledby="card-model-title">
+            <h4 id="card-model-title">Source-card generation</h4>
+            <p class="hint">Independent Qwen3-8B models create scientific-paper cards during indexing. Models are loaded only when cards need generation.</p>
+            <label for="source-card-mlx" data-settings-key="model_settings.source_card_models.mlx">MLX generation model</label>
+            <input id="source-card-mlx" type="text" autocomplete="off">
+            <label for="source-card-torch" data-settings-key="model_settings.source_card_models.torch">PyTorch generation model</label>
+            <input id="source-card-torch" type="text" autocomplete="off">
+            <div class="settings-grid">
+              <label for="source-card-temperature" data-settings-key="source_cards.generation.temperature">Temperature
+                <input id="source-card-temperature" type="number" min="0" step="0.1">
+              </label>
+              <label for="source-card-input" data-settings-key="source_cards.generation.max_input_tokens">Maximum input tokens
+                <input id="source-card-input" type="number" min="1" max="200000">
+              </label>
+              <label for="source-card-output" data-settings-key="source_cards.generation.max_new_tokens">Maximum output tokens
+                <input id="source-card-output" type="number" min="1" max="200000">
+              </label>
+            </div>
+            <label class="check-row" for="source-card-thinking" data-settings-key="source_cards.generation.thinking"><input id="source-card-thinking" type="checkbox"> Request thinking during card generation</label>
+            <button id="save-source-card-models" class="secondary" type="button">Save source-card settings</button>
+          </section>
+          <p id="models-backend" class="hint hidden"></p>
+          <div id="model-list"></div>
+          </section>
+          <section id="settings-answers" class="settings-section" data-settings-tab="answers">
+            <div class="conversation-fields">
+              <label class="chat-setting" for="temperature" data-settings-key="project.profile.temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
+              <label class="chat-setting" for="max-new-tokens" data-settings-key="project.profile.max_new_tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="Automatic (remaining context)"></label>
+            </div>
+            <!-- Filled with the Models tab's drafts, so it applies with them. -->
+            <div id="search-depth"></div>
+            <label class="check-row thinking-row" for="thinking" data-settings-key="project.profile.thinking"><input id="thinking" type="checkbox"> Request thinking via chat template</label>
+          </section>
+          <section id="settings-intents" class="settings-section" data-settings-tab="intents">
+            <p class="hint">Customize instructions, routing, and retrieval for this project. Packaged project types remain unchanged. Save each section explicitly.</p>
+            <button id="reload-project-behavior" type="button" class="secondary">Reload settings</button>
+            <div id="intent-settings" aria-live="polite"></div>
+          </section>
+          <section id="settings-tools" class="settings-section" data-settings-tab="tools">
+            <div id="tool-settings"></div>
+          </section>
+          <section id="settings-general" class="settings-section project-identity" data-settings-tab="general">
+            <label for="project-title" data-settings-key="interface.project_name">Project name</label>
+            <!-- On the start screen the name is used for the next new project. -->
+            <div class="folder-row"><input id="project-title" type="text" autocomplete="off"><button id="delete-project" type="button" class="secondary danger hidden">Delete project</button></div>
+          </section>
+          <section id="settings-indexing" class="settings-section" data-settings-tab="indexing">
+            <div class="advanced-fields">
+              <label for="extensions" data-settings-key="project.profile.extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">
+              <label for="max-file-bytes" data-settings-key="project.profile.max_file_bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
+              <div class="settings-grid"><label data-settings-key="project.profile.target_tokens">Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label data-settings-key="project.profile.max_tokens">Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label data-settings-key="project.profile.overlap_tokens">Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
+              <section class="source-card-settings" aria-labelledby="index-capabilities-title">
+                <h4 id="index-capabilities-title">Advanced indexing</h4>
+                <p class="hint">These project-specific capabilities affect indexed data. Saving changes rebuilds affected indexes.</p>
+                <label for="code-graph" data-settings-key="project_behavior.capabilities.code_graph">Code graph</label>
+                <select id="code-graph" disabled><option value="auto">Automatic</option><option value="on">Enabled</option><option value="off">Disabled</option></select>
+                <label class="check-row" for="document-headers" data-settings-key="project_behavior.capabilities.document_headers"><input id="document-headers" type="checkbox" disabled> Extract scientific-paper document headers</label>
+                <p id="index-capabilities-status" class="hint" role="status">Open a project to edit indexing capabilities.</p>
+                <div class="source-card-actions">
+                  <button id="save-index-capabilities" class="secondary" type="button" disabled>Save indexing capabilities</button>
+                  <button id="reset-index-capabilities" class="secondary" type="button" disabled>Restore defaults</button>
+                </div>
+              </section>
+              <section class="source-card-settings" aria-labelledby="card-index-title">
+                <h4 id="card-index-title">Source cards</h4>
+                <p class="hint">Scientific-paper cards are optional derived indexes. Original passages remain the evidence for answers. Other document kinds may be added later.</p>
+                <label class="check-row" for="source-card-enabled" data-settings-key="source_cards.policy.enabled"><input id="source-card-enabled" type="checkbox"> Enable source cards</label>
+                <label for="source-card-kind" data-settings-key="source_cards.policy.kind">Preferred card kind</label>
+                <select id="source-card-kind"><option value="">None</option><option value="scientific_paper">Scientific paper</option></select>
+                <label class="check-row" for="source-card-automatic" data-settings-key="source_cards.policy.automatic"><input id="source-card-automatic" type="checkbox"> Generate missing cards during indexing</label>
+                <p id="source-card-summary" class="hint" role="status">No card status available.</p>
+                <p id="source-card-progress" class="hint" role="status"></p>
+                <div class="source-card-actions">
+                  <button id="save-source-card-policy" class="secondary" type="button">Save source-card settings</button>
+                  <button id="regenerate-source-cards" class="secondary" type="button">Regenerate source cards</button>
+                </div>
+              </section>
+            </div>
+          </section>
+          <section id="settings-memory" class="settings-section" data-settings-tab="memory">
+            <section class="source-card-settings conversation-memory-settings" aria-labelledby="conversation-memory-title">
+              <h4 id="conversation-memory-title">Conversation memory</h4>
+              <p class="hint">Use previous project discussions for continuity. Conversation memory is separate from source evidence and cannot supply scientific citations.</p>
+              <label class="check-row" for="memory-enabled" data-settings-key="project_behavior.memory.enabled"><input id="memory-enabled" type="checkbox"> Enable conversation memory</label>
+              <div class="settings-grid">
+                <label for="memory-questions" data-settings-key="project_behavior.memory.questions">Index questions
+                  <select id="memory-questions"><option value="all">All eligible questions</option><option value="none">None</option></select>
+                </label>
+                <label for="memory-answers" data-settings-key="project_behavior.memory.answers">Index answers
+                  <select id="memory-answers"><option value="none">None</option><option value="selected">Saved or liked only</option><option value="all">All eligible answers</option></select>
+                </label>
+                <label for="memory-max-hits" data-settings-key="project_behavior.memory.max_hits">Maximum memory hits
+                  <input id="memory-max-hits" type="number" min="1" step="1">
+                </label>
+                <label for="memory-max-tokens" data-settings-key="project_behavior.memory.max_tokens">Memory token budget
+                  <input id="memory-max-tokens" type="number" min="1" step="1">
+                </label>
+              </div>
+              <label class="check-row" for="memory-exclude-disliked" data-settings-key="project_behavior.memory.exclude_disliked_answers"><input id="memory-exclude-disliked" type="checkbox"> Exclude disliked answers and their questions from chat context</label>
+              <p class="hint">The history setting applies even when long-term memory is disabled. Intent-specific exclusions are configured under Intents.</p>
+              <p id="memory-policy-status" class="hint" role="status">Open a project to configure memory.</p>
+              <div class="source-card-actions">
+                <button id="save-memory-policy" class="secondary" type="button" disabled>Save memory settings</button>
+                <button id="reset-memory-policy" class="secondary" type="button" disabled>Restore defaults</button>
+              </div>
+              <p id="memory-index-status" class="hint" role="status">No memory index status available.</p>
+              <button id="sync-memory-index" class="secondary" type="button" disabled>Update conversation memory</button>
+              <div class="memory-management" aria-labelledby="memory-management-title">
+                <h4 id="memory-management-title">Manage remembered messages</h4>
+                <p class="hint">Inspect saved project discussions. Exclude removes a message from future memory retrieval without deleting the conversation or changing Save, Like, or Dislike. Restoring still follows project and intent policies.</p>
+                <p id="memory-messages-status" class="hint" role="status">Open a project to inspect messages.</p>
+                <div id="memory-messages-list" class="memory-messages-list" aria-label="Saved conversation messages"></div>
+                <div class="source-card-actions memory-messages-pages">
+                  <button id="memory-previous" class="secondary" type="button" disabled>Previous</button>
+                  <button id="memory-next" class="secondary" type="button" disabled>Next</button>
+                </div>
+              </div>
+            </section>
+          </section>
+        </div>
+        <!-- Below the tabs, so messages from Close show on every tab. -->
         <p id="model-download-status" class="hint" role="status"></p>
         <button id="cancel-model-download" class="secondary hidden" type="button">Stop download</button>
-        </section>
-        <section id="settings-answers" class="settings-section">
-          <h3>Answers</h3>
-          <div class="conversation-fields">
-            <label class="chat-setting" for="temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
-            <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="Automatic (remaining context)"></label>
-            <label class="check-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
-          </div>
-        </section>
-        <section id="settings-project" class="settings-section">
-          <h3>Project</h3>
-          <div class="advanced-fields">
-            <label for="workspace-path">Workspace folder</label>
-            <div class="folder-row"><input id="workspace-path" type="text" placeholder="Required without sources"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
-            <label for="backend">Computation backend</label>
-            <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
-            <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">
-            <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
-            <div class="settings-grid"><label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
-          </div>
-        </section>
       </div>
     </section>
+    <dialog id="source-sync" class="sync-dialog" aria-labelledby="source-sync-title">
+      <h2 id="source-sync-title">Original files changed</h2>
+      <p id="source-sync-summary"></p>
+      <ul id="source-sync-counts" class="sync-counts"></ul>
+      <div id="source-sync-files" class="sync-files hidden"></div>
+      <div id="source-sync-quick" class="sync-actions">
+        <button id="source-sync-pick" type="button" class="link-button">Choose file by file</button>
+        <button id="source-sync-keep" type="button" class="secondary">Keep old copies</button>
+        <button id="source-sync-both" type="button" class="secondary">Keep both</button>
+        <button id="source-sync-update" type="button" class="primary">Update all</button>
+      </div>
+      <div id="source-sync-manual" class="sync-actions hidden">
+        <button id="source-sync-back" type="button" class="secondary">Back</button>
+        <button id="source-sync-apply" type="button" class="primary">Apply choices</button>
+      </div>
+    </dialog>
+    <dialog id="source-add" class="sync-dialog" aria-labelledby="source-add-title">
+      <h2 id="source-add-title">Add sources</h2>
+      <p id="source-add-summary"></p>
+      <ul id="source-add-counts" class="sync-counts"></ul>
+      <div id="source-add-files" class="sync-files"></div>
+      <div class="sync-actions">
+        <button id="source-add-cancel" type="button" class="secondary">Cancel</button>
+        <button id="source-add-confirm" type="button" class="primary">Add</button>
+      </div>
+    </dialog>
+    <dialog id="leave-project" class="sync-dialog" aria-labelledby="leave-project-title">
+      <h2 id="leave-project-title">Back to the start screen?</h2>
+      <p>KíLín will close this project. Its chats and sources are saved, so you can resume it from the start screen.</p>
+      <div class="sync-actions">
+        <button id="leave-project-cancel" type="button" class="secondary">Cancel</button>
+        <button id="leave-project-confirm" type="button" class="primary">Close project</button>
+      </div>
+    </dialog>
+    <!-- Shown until the current terms (kilin/gui/terms.txt) are accepted. -->
+    <dialog id="welcome" class="sync-dialog welcome-dialog" aria-labelledby="welcome-title" tabindex="-1">
+      <div class="welcome-heading">
+        <div><h2 id="welcome-title">Welcome to KíLín</h2><p class="hint">Research software · Terms of use</p></div>
+      </div>
+      <p class="welcome-intro">KíLín is free, open-source research software that uses locally running AI models.</p>
+      <ul class="welcome-points">
+        <li><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg><div><strong>Local processing</strong><span>Your questions, KíLín's answers and your files are processed and saved only on your computer. Models are downloaded from Hugging Face.</span></div></li>
+        <li><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 2 20h20L12 3Z"/><path d="M12 10v4M12 17h.01"/></svg><div><strong>Verify AI responses</strong><span>Answers can be incorrect, even with citations. Verify important information before use.</span></div></li>
+        <li><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h4"/></svg><div><strong>Open-source and third-party licences</strong><span>KíLín is licensed under Apache 2.0. Downloaded models have their own licences.</span></div></li>
+      </ul>
+      <details class="welcome-terms">
+        <summary>Read the full terms of use</summary>
+        <div id="terms-text" class="terms-text" tabindex="0"></div>
+      </details>
+      <div class="welcome-links">
+        <button type="button" class="external-link" data-url="https://github.com/giovannivolpe/KiLin/blob/main/LICENSE">KíLín licence ↗</button>
+        <button type="button" class="external-link" data-url="https://huggingface.co/terms-of-service">Hugging Face terms ↗</button>
+        <button type="button" class="external-link" data-url="https://huggingface.co/privacy">Hugging Face privacy ↗</button>
+      </div>
+      <label class="welcome-agree" for="terms-agree"><input id="terms-agree" type="checkbox"><span>I have read and accept the terms of use. I understand that AI-generated answers must be verified, that third-party model licences apply, and that KíLín's developers are not liable for its use or outputs.</span></label>
+      <p id="welcome-hint" class="welcome-hint hidden" role="status">Scroll to the end, tick the box above, and press Continue to use KíLín.</p>
+      <p id="welcome-error" class="welcome-error hidden" role="alert"></p>
+      <button id="accept-terms" type="button" class="primary" disabled>Continue</button>
+    </dialog>
+    <!-- One dialog for KíLín's yes/no questions; askKilin fills it in. -->
+    <dialog id="kilin-ask" class="sync-dialog" aria-labelledby="kilin-ask-title" aria-describedby="kilin-ask-message">
+      <h2 id="kilin-ask-title"></h2>
+      <p id="kilin-ask-message"></p>
+      <div class="sync-actions">
+        <button id="kilin-ask-cancel" type="button" class="secondary">Cancel</button>
+        <button id="kilin-ask-other" type="button" class="secondary hidden"></button>
+        <button id="kilin-ask-confirm" type="button" class="primary"></button>
+      </div>
+    </dialog>
   </body>
 </html>

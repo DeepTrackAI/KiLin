@@ -15,7 +15,7 @@ presents suggested models through `gui/model_catalog.py`.
 | `runtime.choose_backend()` | Resolve `auto`, `mlx` or `torch` using operating system and architecture. |
 | `runtime.torch_device()` | Select CUDA, then MPS, then CPU from caller-supplied availability flags. |
 | `huggingface.available_models()` | Inventory model repositories and cached revisions (not runtime compatibility). |
-| `huggingface.cached_model_snapshot()` | Resolve a usable local cached snapshot without downloading. |
+| `huggingface.cached_model_snapshot()` | Resolve a local snapshot containing `config.json`, without downloading. |
 | `huggingface.download_model()` | Explicitly fetch permitted model files, with progress integration. |
 | `EmbeddingSession` | Load embedding tokenizer/model, count text tokens, create query/document vectors. |
 | `ChatSession` | Load causal LM and tokenizer, format history, generate, retain/reset messages. |
@@ -28,13 +28,20 @@ PDF/Hugging Face dependencies, platform-conditional `mlx` and general
 working native packages and compatible model weights, not merely a matching
 platform string.
 
-![RAGSession owns embedding and chat sessions, optionally a router, and reuses loaded models across conversation switches until close or Stop.](figures/model-lifetimes.svg)
+![RAGSession owns embedding and chat sessions, optionally a router, and reuses loaded models across conversation switches and acknowledged cancellation; close or forced process termination releases them.](figures/model-lifetimes.svg)
 
 *Figure: Live model sessions are distinct from persisted project state; backend policies and subprocess lifetime determine what can be reused.*
 
 ## Backend resolution
 
 With `auto`, KíLín chooses MLX on native Darwin/arm64 and PyTorch otherwise.
+For GUI setup, the preference saved in the user's `preferences.json` chooses
+which backend's required models are checked, downloaded, or replaced by
+cached alternatives. Explicit `mlx` and `torch` selections never fall back to
+the platform's automatic choice. The Qt bridge refreshes readiness after a
+successful preference write; a failed write leaves the previous choice in
+effect and is reported to the page. Missing runtime packages keep readiness
+false even if every model ID appears cached.
 An explicit MLX request outside that platform is rejected. MLX also checks
 that Metal is available when loading the chat model. PyTorch probes device
 availability and follows CUDA -> MPS -> CPU, then moves the loaded model to
@@ -52,12 +59,33 @@ identical streaming or thinking controls.
 ## Model identity, caching and network behavior
 
 A model identifier may denote an existing local directory or a Hugging Face
-repository. Loading with `allow_download=False` resolves a local directory
-or a complete cached snapshot; a missing/incomplete snapshot raises rather
-than downloading it. With downloading allowed, backend loaders or an
-explicit download command may access remote repositories. The cache
-inventory alone does not prove that dependencies, architecture, quantization
-or tokenizer are usable.
+repository. With `allow_download=False`, resolution stays offline; the core's
+`cached_model_snapshot()` checks for `config.json` but does not certify all
+weights or tokenizer assets. A later backend load can reject missing files.
+With downloading allowed, backend loaders or an explicit download command may
+access remote repositories. Cache inventory alone does not prove that
+backend dependencies, architecture or quantization are usable.
+
+### Lightweight GUI cache readiness
+
+For setup and model selection, `gui.model_catalog.downloaded_models()`
+filters cached repositories by inspecting local snapshots. At least one
+revision must have a nonempty, valid JSON `config.json`, recognized nonempty
+tokenizer files, and a supported weight representation. Tokenizers may use
+`tokenizer.json`, a SentencePiece model, `vocab.txt`, a `.tiktoken` file, or
+both `vocab.json` and `merges.txt`. Indexed safetensors and PyTorch `.bin`
+checkpoints require every listed shard to exist and be nonempty. Numbered
+checkpoint shards without their index are not considered complete.
+
+The check uses directory listings, file sizes and small configuration/index
+JSON files. It **does not** read model weights or tokenizer vocabularies,
+compute hashes, contact the Hub, instantiate a tokenizer, or load a model.
+It is therefore suitable for repeated readiness checks, but can miss an
+unusual valid file layout or accept files whose contents are incompatible
+or corrupt. The actual backend loader remains responsible for loadability.
+The GUI's `cached`/`downloaded` labels mean *locally complete by these
+supported-file rules*, not *verified loadable*. This is distinct from the
+core's less restrictive `cached_model_snapshot()` lookup.
 
 `ChatSession` passes `trust_remote_code=False` when loading tokenizers and
 models via supported backends. This is a useful precaution, **not** a
@@ -72,23 +100,47 @@ Model **IDs** in packaged `DEFAULT_MODELS` are recommended starting values,
 not a frozen allowlist. See [Package defaults](package_defaults.md) for
 exact default IDs and validation.
 
+### GUI chat-template thinking probe
+
+`gui.model_catalog.thinking_switches()` renders the locally cached chat
+model's template once with `enable_thinking=True` and once with
+`enable_thinking=False`, using one short sample prompt and a Jinja sandbox.
+It does not load a tokenizer or model, run inference, or use a model-name
+heuristic. A `True` result means that the two rendered prompts differ; a
+`False` result means they are identical for this test. Missing or failing
+templates give no result (unknown). Neither result verifies a model's
+reasoning capability, actual behavior, or runtime compatibility.
+
+The GUI labels these outcomes *thinking switch detected*, *no template
+switch detected*, and no label, respectively. The composer's Thinking
+control is enabled only for a detected prompt difference; it is not a
+capability test. The Answers checkbox requests the `enable_thinking`
+setting for generation independently of what the probe can establish.
+
 ## Chat generation lifecycle
 
 `ChatSession(model_id, *, backend, thinking, temperature, max_new_tokens,
-system_prompt, allow_download, revision, trace)` constructs a model session
-and records its effective settings. `configure_generation()` validates
-updates to `thinking`, `temperature` and `max_new_tokens` before applying
-any values; unsupported fields are rejected. Settings persist on the loaded
-session until changed, not necessarily just for one reply.
+system_prompt, allow_download, revision, trace, block_unrequested_cjk)`
+constructs a model session and records its effective settings.
+`configure_generation()` validates updates to `thinking`, `temperature` and
+`max_new_tokens` before applying any values; unsupported fields are rejected.
+Settings persist on the loaded session until changed.
 
-`reply(message, *, max_new_tokens, trace_turn_id, token_callback)`:
+`reply(message, *, max_new_tokens, thinking, trace_turn_id, token_callback,
+language_context)` validates the request, renders the chat template,
+generates an answer, and commits the messages only on success. The optional
+`thinking` argument defaults to `None` (inherit the session setting); an
+explicit boolean applies only to this reply, including when generation
+fails. Both prompt rendering and tokenization receive the resolved
+`enable_thinking` value. This does not mutate `ChatSession.thinking`,
+reload a model, or guarantee control over an unsupported template.
 
-1. Validates the nonblank user message and effective limit.
-2. Builds the tokenizer's chat template using the retained message history.
-3. Executes the backend's generation function.
-4. Returns a complete nonblank reply and appends the user/assistant messages
-   to in-memory history only on success.
-5. Records generation timing and token statistics if tracing is enabled.
+RAG passes an explicit intent override through this interface; see
+[Per-intent thinking policy](configuration.md#per-intent-thinking-policy).
+Tracing records the effective thinking request, timing, token statistics,
+and the requested/effective CJK token policy.
+
+### Context, history and streaming
 
 A tokenizer template, model context length, thinking tags, EOS behavior and
 backend streaming granularity can vary across models. A `max_new_tokens`
@@ -103,6 +155,59 @@ independent backend first-token timestamp. The GUI can further reveal a
 completed answer over time as a presentation effect; do not treat that as
 evidence of live model token generation. See [Performance](performance.md)
 for which timings can actually be measured.
+
+### Best-effort suppression of unsolicited CJK output
+
+Suppression is enabled by default. It aims to prevent unsolicited Chinese,
+Japanese, or Korean script in answers, not to prevent legitimate multilingual
+requests. Only **original user messages** authorize output, by using script
+characters or positively asking for them. Later explicit negative requests
+or switches to English take precedence over earlier authorization. Ordinary
+mentions such as "Explain Japanese culture" or "avoid Korean text" do not
+authorize CJK output. Pinyin and romaji requests do not request Han or kana.
+The detector is a deterministic heuristic for common English directives,
+not a complete multilingual intent parser. The mask treats the supported
+scripts as a group, not as independently enforceable language preferences.
+
+For direct chat, `language_context=None` uses user-role history and the
+current message, excluding system and assistant content. For constructed
+prompts, supply the original user messages explicitly, in chronological
+order, ending with the current question. An empty sequence grants no script
+permission. RAG supplies selected earlier user questions and the original
+current question, not evidence, resolved guidance, or generated wrappers.
+Tool answer adapters do the same; internal side requests default to no
+user authorization. No extra model call is made to decide this policy.
+
+```python
+answer = chat.reply(
+    prompt_with_retrieved_material,
+    language_context=(original_question,),
+)
+```
+
+Tokens whose individual decoded text contains covered characters are
+suppressed with an MLX logits processor or PyTorch `suppress_tokens`.
+The cached scan runs once per loaded tokenizer on the first blocked reply.
+It may add cold latency and does not cover characters assembled across
+multiple byte-level tokens. A tokenizer without a usable vocabulary cannot
+provide this suppression. This is **best-effort**, not an absolute guarantee
+about generated language. Special tokens, general punctuation, and fullwidth
+Latin letters are not suppressed.
+
+The curated ranges follow Unicode 17.0's Han ideographs (including extensions
+A-J and compatibility ideographs), kana and supplementary/halfwidth kana,
+Hangul syllables and Jamo, Bopomofo, and CJK radicals. They are fixed code-point
+ranges, including reserved positions within those ranges, not an exhaustive
+Unicode script-property classifier. The reference block definitions are in
+[Unicode 17.0 Blocks.txt](https://www.unicode.org/Public/17.0.0/ucd/Blocks.txt).
+
+The input trace reports `cjk_blocking_requested`, `cjk_tokens_blocked`
+(whether any standalone token IDs were selected), and
+`cjk_suppressed_token_count`. These describe the mask, not proof that no CJK
+character can appear. `ChatSession(block_unrequested_cjk=False)`, or
+`block_unrequested_cjk = false` in a project's `[generation]` section,
+disables suppression. Existing profiles retain explicit values; profiles
+without the setting use the packaged default.
 
 ## Embeddings and retrieval
 
@@ -122,7 +227,16 @@ may require controlled evaluation.
 ## Router and loaded-session reuse
 
 `RAGSession` normally holds an answering chat session, embedding session and
-possibly a separate router session. When `router_model` equals the
+possibly a separate router session. The core loads the selected router ID
+from the project's `[router]` section (separately for MLX and PyTorch).
+When absent, it checks the legacy `effort_levels.json` router choice, then
+uses the packaged `DEFAULT_ROUTER_MODEL_*` for the selected backend. An
+explicit `RAGSession(router_model=...)` overrides that choice for the
+session without changing `profile.ini`. Core callers do not need the GUI
+to read or update router configuration: use
+`kilin.read_router_model()` / `kilin.write_router_model()`.
+
+When `router_model` equals the
 answering model ID, the same model session can be shared; separate IDs can
 increase initial model-loading and memory costs. Router side calls are
 kept distinct from committed chat history. `router_reply()` exposes a
@@ -131,9 +245,39 @@ controlled auxiliary model call (for example a conversation title).
 Switching an active conversation keeps the project indexes and compatible
 loaded sessions. Switching a chat model has backend-specific constraints;
 `RAGSession.use_chat_model()` explicitly rejects unsupported switching
-situations rather than promising transparent hot swapping. The GUI engine
-remains the owner of its child process, and the Stop action unloads every
-session in that process.
+situations rather than promising transparent hot swapping. The Qt window
+owns the engine subprocess. An acknowledged answer cancellation retains
+its project and loaded models; forceful Stop, including cancellation timeout
+fallback, terminates the process and loses those live sessions. See the
+[GUI Stop contract](gui_protocol.md#errors-stop-and-restart) for the grace
+period, terminal events and restart behavior.
+
+## Dedicated source-card generation model
+
+The core owns the independent `[source_card_generation]` settings in each
+project's `profile.ini`, with backend-specific `mlx`/`torch` identifiers.
+The packaged defaults select Qwen3-8B (MLX 4-bit / PyTorch), not the router's
+Qwen3-4B. `kilin.read_source_card_generation_settings()` and
+`kilin.write_source_card_generation_settings()` validate and persist these
+settings without importing or initializing the GUI. The generation model
+never inherits the active answering model or its temperature, thinking, or
+output-token settings. There is no implicit fallback to another model.
+
+`SourceCardGenerator`, from `kilin.retrievals.source_cards`, uses a separate
+`ChatSession`. It loads on its first `generate()` request and reuses the
+model across a `with` block. `close()` releases the session on normal or
+exceptional exit; no dedicated model is loaded when there are no pending
+cards. The adapter uses established completion validation and temporary
+message handling, without changing conversational state.
+
+The project-wide `allow_download` setting is passed to this generator;
+source-card settings do not grant permission to download additional models.
+The scientific-paper kind uses the configured input-token budget for
+the whole prompt, while the adapter enforces the output cap. The
+indexing coordinator generates missing cards on project opening or source
+refresh and releases the card model before the answering model is loaded
+or restored. Default literature retrieval uses `source_first` and cites
+original source chunks, never generated card text.
 
 ## Failure and cleanup
 
@@ -151,6 +295,24 @@ network access and model choice; see [Security](security.md).
 
 ## Validation and tests
 
+### Change impact
+
+Separating model identity, loaded session state and saved project settings
+allows conversation switches without rebuilding the whole project. A new
+backend or generation control must preserve temporary reply overrides,
+restored side-call histories, explicit download policy and cleanup on partial
+initialization; it must not silently alter the user's saved configuration.
+
+Review chat rendering, tokenization, completion metadata and callbacks
+together. Embedding changes also require the
+[index-identity contract](retrieval_pipeline.md#index-persistence-and-identity),
+while tool generation policy belongs to
+[Tool packages](tool_packages.md#generation-settings-for-tools). Compare both
+supported backends rather than assuming identical streaming or template
+support.
+
+### Regression coverage
+
 Relevant suites cover `runtime`, `huggingface`, `chat`, `embeddings`, `rag`,
 `model_defaults` and GUI model settings/catalogs. Test substitutes cannot
 prove that native MLX and PyTorch models load or produce equivalent results.
@@ -158,7 +320,9 @@ Real model trials should record exact model revision, device, backend,
 profile and tracing state. Performance and backend compatibility must be
 confirmed separately on the target macOS/Python 3.12 environment.
 
-Related: [Configuration](configuration.md),
+## Related
+
+[Configuration](configuration.md),
 [Retrieval pipeline](retrieval_pipeline.md),
 [Answering pipeline](answering_pipeline.md),
 [GUI architecture](gui_architecture.md).

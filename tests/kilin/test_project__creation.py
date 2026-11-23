@@ -21,6 +21,7 @@ from unittest.mock import Mock, patch
 import kilin
 from kilin.atomic_writes import atomic_create_text
 from kilin._project_creation import claim_workspace
+from kilin.project import default_project_profile
 
 
 class TestExclusiveProjectCreation(unittest.TestCase):
@@ -103,7 +104,7 @@ class TestExclusiveProjectCreation(unittest.TestCase):
         """Enforce ownership through the lower-level public initializer."""
         project = self.create()
         before = self.snapshot(project.root)
-        for type_id in ("code", "literature"):
+        for type_id in kilin.PROJECT_TYPE_IDS:
             with self.subTest(type_id=type_id):
                 with self.assertRaises(kilin.ProjectAlreadyExistsError):
                     kilin.initialize_project(project.root, type_id)
@@ -161,9 +162,50 @@ class TestExclusiveProjectCreation(unittest.TestCase):
         self.assertEqual(second.root.name, first.root.name + "-2")
         self.assertEqual(third.root.name, first.root.name + "-3")
         self.assertEqual(self.snapshot(first.root), before)
-        self.assertEqual(first.profile.temperature, 0.0)
+        self.assertEqual(
+            first.profile.temperature,
+            default_project_profile("code").temperature,
+        )
+        self.assertIs(first.profile.thinking, False)
         self.assertEqual(second.profile.temperature, 0.7)
         self.assertEqual(third.profile.type_id, "literature")
+        self.assertEqual(
+            third.profile.temperature,
+            default_project_profile("literature").temperature,
+        )
+        self.assertIs(third.profile.thinking, False)
+
+    def test_empty_default_skips_occupied_names_and_keeps_saved_projects(self):
+        """Use core allocation for empty projects, not a project list."""
+        parent = self.root / "projects"
+        existing = kilin.prepare_sources_workspace(
+            [], "code", parent / "new-project"
+        )
+        (existing.root / "notes.txt").write_text(
+            "original project", encoding="utf-8"
+        )
+        occupied = parent / "new-project-2"
+        occupied.mkdir()
+        before = self.snapshot(existing.root)
+        first = kilin.prepare_sources_workspace(
+            [], "literature", workspace_root=parent,
+            settings={"temperature": 0.6},
+        )
+        second = kilin.prepare_sources_workspace(
+            [], "literature", workspace_root=parent
+        )
+        self.assertEqual(first.root, parent / "new-project-3")
+        self.assertEqual(second.root, parent / "new-project-4")
+        self.assertEqual(list(first.source.iterdir()), [])
+        self.assertEqual(first.profile.temperature, 0.6)
+        self.assertEqual(self.snapshot(existing.root), before)
+        self.assertEqual(list(occupied.iterdir()), [])
+        self.assertEqual(
+            kilin.default_workspace_path([], parent),
+            parent / "new-project",
+        )
+        with self.assertRaises(ValueError):
+            kilin.prepare_sources_workspace([], "code")
 
     def test_default_skips_empty_files_links_and_partial_directories(self):
         """Any occupied default name belongs to its current owner."""
@@ -219,9 +261,10 @@ class TestExclusiveProjectCreation(unittest.TestCase):
                         self.assertEqual(after[key], value)
 
     def test_mirror_source_cannot_alias_workspace_state(self):
-        """Never replace the creation marker or core folders with a mirror."""
+        """A mirror copies into sources/, never over core folders."""
         for name in (
-            "indexes", "logs", "outputs", "templates", "profile.ini",
+            "indexes", "logs", "memory", "outputs", "templates",
+            "profile.ini",
             "sources.json", "source_snapshot.json", ".kilin-creating",
         ):
             with self.subTest(name=name):
@@ -229,17 +272,22 @@ class TestExclusiveProjectCreation(unittest.TestCase):
                 source.mkdir(parents=True)
                 original = source / "data.py"
                 original.write_text("value = 1\n", encoding="utf-8")
-                parent = self.root / "projects"
-                with self.assertRaisesRegex(ValueError, "managed workspace"):
-                    kilin.prepare_project_workspace(source, "code", parent)
-                self.assertFalse(parent.exists())
+                mirror = kilin.prepare_project_workspace(
+                    source, "code", self.root / f"projects-{name}"
+                )
+                self.assertEqual(mirror.source, mirror.root / "sources")
+                self.assertEqual(
+                    (mirror.source / "data.py").read_text(), "value = 1\n"
+                )
+                self.assertFalse((mirror.root / name / "data.py").exists())
                 self.assertEqual(original.read_text(), "value = 1\n")
         with patch("kilin.project.scan_repository") as scan:
-            with self.assertRaisesRegex(ValueError, "managed workspace"):
+            with self.assertRaisesRegex(ValueError, "not the drive"):
                 kilin.prepare_project_workspace(
                     Path(self.root.anchor), "code", self.root / "projects"
                 )
         scan.assert_not_called()
+        self.assertFalse((self.root / "projects").exists())
 
     def test_source_can_already_contain_an_independent_project(self):
         """Copy an existing project as a source without mutating its owner."""
@@ -290,7 +338,8 @@ class TestExclusiveProjectCreation(unittest.TestCase):
     def test_open_is_read_only_even_when_managed_folders_are_missing(self):
         """Inspection must not recreate directories or resources."""
         project = kilin.prepare_sources_workspace([], "code", self.destination)
-        for name in ("indexes", "logs", "outputs", "templates"):
+        for name in ("indexes", "logs", "memory", "outputs",
+                     "templates"):
             (project.root / name).rmdir()
         before = self.snapshot(project.root)
         opened = kilin.open_project(project.root)

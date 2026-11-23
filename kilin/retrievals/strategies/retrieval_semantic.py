@@ -64,7 +64,7 @@ performing a query.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import math
 
@@ -136,6 +136,7 @@ def build_semantic_index(
     *,
     batch_size: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
+    texts: list[str] | None = None,
 ) -> SemanticIndex:
     """Embed chunks once and return their searchable semantic index.
 
@@ -151,6 +152,10 @@ def build_semantic_index(
     progress_callback: Callable[[int, int], None] | None, optional
         optional Called after each embedding batch with ``current`` and
         ``total``. Defaults to ``None``.
+    texts: list[str] | None, optional
+        Text embedded for each chunk, such as the chunk text with its file
+        path in front. ``None`` embeds the chunk texts. Defaults to
+        ``None``.
 
     Returns
     -------
@@ -175,7 +180,10 @@ def build_semantic_index(
     if progress_callback is not None and not callable(progress_callback):
         raise ValueError("progress_callback must be callable or None.")
 
-    texts = [chunk.text for chunk in chunks]
+    if texts is None:
+        texts = [chunk.text for chunk in chunks]
+    if len(texts) != len(chunks):
+        raise ValueError("Retrieval text count must match the chunks.")
     total = len(texts)
     effective_batch_size = total if batch_size is None else batch_size
     vectors: list[list[float]] = []
@@ -234,6 +242,7 @@ def semantic_search(
     backend: str = "loop",
     matrix: np.ndarray | None = None,
     trace_turn_id: str | None = None,
+    query_vector: Sequence[float] | None = None,
 ) -> list[SemanticResult]:
     """Rank indexed chunks by cosine similarity to one query.
 
@@ -265,6 +274,10 @@ def semantic_search(
     trace_turn_id: str | None, optional
         Optional identifier associating trace events with one conversation
         turn. Defaults to ``None``.
+    query_vector: Sequence[float] | None, optional
+        The query already embedded from ``query_text`` by the same model,
+        so a caller that also needs the vector embeds it once. ``None``
+        embeds the query. Defaults to ``None``.
 
     Returns
     -------
@@ -300,7 +313,9 @@ def semantic_search(
     if backend not in ("loop", "numpy"):
         raise ValueError('backend must be "loop" or "numpy".')
 
-    if trace_turn_id is None:
+    if query_vector is not None:
+        query_vector = list(query_vector)
+    elif trace_turn_id is None:
         query_vector = embedding_session.embed_query(query_text)
     else:
         query_vector = embedding_session.embed_query(

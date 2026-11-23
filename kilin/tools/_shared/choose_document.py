@@ -90,11 +90,13 @@ tool's ``run`` receives.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
+import re
 from typing import Final
 
 from kilin.retrievals.document_reading import dominant_path, named_paths
+from kilin.retrievals.source_descriptions import described_sources
 from kilin.tools._contract import ToolContext, ToolRequest
 from kilin.tools._shared.planning import ask_choice
 
@@ -113,6 +115,11 @@ _DOMINANT_SHARE: Final[float] = 0.6
 _MAX_CHOICES: Final[int] = 4
 # Reason for a file the question names; options with it are never left out.
 _NAMED_IN_QUESTION: Final[str] = "named in the question"
+_DESCRIBED_IN_QUESTION: Final[str] = "described in the question"
+# A pronoun for the document the earlier turns were about.
+_POINTS_BACK: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:it|its|itself)\b", re.IGNORECASE
+)
 # Router reply words. The prompts below ask for exactly these words, so
 # change both together.
 _REPLY_ALL: Final[str] = "ALL"
@@ -120,6 +127,34 @@ _REPLY_SAME: Final[str] = "SAME"
 _REPLY_DIFFERENT: Final[str] = "DIFFERENT"
 # Longest router reply; one word is expected.
 _ROUTER_REPLY_TOKENS: Final[int] = 8
+# Wording that clearly means one document ("its limitations", "that
+# study") or several ("these articles", "the other papers"). Clear wording
+# decides without the router model, which tends to answer ALL.
+_ONE_DOCUMENT: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:it|its|itself)\b"
+    r"|\b(?:this|that|the same|the) (?:paper|study|article|work|document"
+    r"|pdf|manuscript|preprint|publication)\b",
+    re.IGNORECASE,
+)
+_SEVERAL_DOCUMENTS: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:all|each|every|both|these|those|other|others|another"
+    r"|different|papers|articles|studies|documents|sources|pdfs"
+    r"|collection|project)\b",
+    re.IGNORECASE,
+)
+# One matched paper is not a complete scope for a comparison whose other
+# target may be unresolved. Do not spend an additional router model call.
+_COMPARISON: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:compar(?:e|es|ed|ing|ison|isons)|contrast(?:s|ed)?"
+    r"|differ(?:s|ent|ences)?|versus|vs\.?|between)\b",
+    re.IGNORECASE,
+)
+_MULTIPLE_TARGETS: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:all|each|every|both|these|those|other|several|multiple)\b"
+    r"(?:\W+\w+){0,2}\W+(?:papers?|articles?|studies|documents?"
+    r"|sources?|pdfs?)\b",
+    re.IGNORECASE,
+)
 
 
 def choose_document(
@@ -333,6 +368,7 @@ def document_scope(
     request: ToolRequest,
     ask_router: Callable[[str, str, int], str],
     sources: list[Path],
+    cards: Mapping[Path, Mapping[str, str]] | None = None,
 ) -> tuple[list[Path], str | None]:
     """Return the documents a request is limited to, if any.
 
@@ -345,26 +381,70 @@ def document_scope(
         session passes its own, so answers and tools decide alike.
     sources: list[pathlib.Path]
         Indexed files.
+    cards: Mapping[pathlib.Path, Mapping[str, str]] | None, optional
+        Source-card metadata (``title``, ``year``) by file, for documents
+        the question describes ("the 2017 paper", "the earlier BRAPH
+        framework"). Defaults to None: descriptions are not resolved.
 
     Returns
     -------
     tuple[list[pathlib.Path], str | None]
-        The files the question names; otherwise the file the earlier turns
-        were about, when the router model judges that the request means it
-        ("go through that paper", "in this paper", "does it say MRI?");
-        otherwise no files (the whole project). The second value says why.
+        Files the question names or describes (``described_sources``),
+        including the earlier file when the question says "it". If a
+        comparison leaves another target unresolved, no narrow scope is
+        selected. Otherwise, a file referred to in earlier turns can be
+        selected, or no scope is returned (the whole project). The second
+        value records why a scope was chosen.
+
+    Notes
+    -----
+    Clear wording decides without the router model: words for several
+    documents ("these articles", "the other papers", "all") mean the whole
+    project, and words for one document ("its limitations", "that study")
+    mean the earlier file. The router model judges only the remaining
+    requests.
 
     """
 
     named = named_paths(request.question, sources, authors=True)
-    if named:
-        return named, _NAMED_IN_QUESTION
+    indexed = set(sources)
+    described = described_sources(
+        request.question,
+        {path: card for path, card in (cards or {}).items()
+         if path in indexed},
+    )
+    targets = list(dict.fromkeys((*named, *described)))
+    if targets:
+        # An explicit filename wins for an ordinary one-document request;
+        # "it" also names an earlier paper only in a comparison.
+        if _POINTS_BACK.search(request.question) and (
+            not named or _COMPARISON.search(request.question)
+            or _MULTIPLE_TARGETS.search(request.question)
+        ):
+            earlier = earlier_file(request, sources, indexed)
+            if earlier is not None and earlier[0] not in targets:
+                targets.insert(0, earlier[0])
+        # An unresolved comparison target must not disappear merely
+        # because one of the documents was recognized deterministically.
+        if len(targets) < 2 and (
+            _COMPARISON.search(request.question)
+            or _MULTIPLE_TARGETS.search(request.question)
+        ):
+            return [], None
+        reason = (
+            _NAMED_IN_QUESTION if named else _DESCRIBED_IN_QUESTION
+        )
+        return targets, reason
 
     earlier = earlier_file(request, sources, set(sources))
     if earlier is None:
         return [], None
 
     path, why = earlier
+    if _SEVERAL_DOCUMENTS.search(request.question):
+        return [], None
+    if _ONE_DOCUMENT.search(request.question):
+        return [path], why
     system = (
         "You decide which documents a request is about. You reply with "
         "ALL, SAME, or DIFFERENT only."

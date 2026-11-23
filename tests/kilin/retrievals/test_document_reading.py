@@ -93,6 +93,134 @@ class TestDocumentPathMatching(unittest.TestCase):
             [Path("papers/lee25networks.pdf")],
         )
 
+    def test_author_names_without_year_need_author_use(self) -> None:
+        """Ordinary words do not select a file whose stem has no year.
+
+        """
+        paths = [
+            Path("docs/build_steps.md"),
+            Path("papers/smith_review.pdf"),
+            Path("papers/smith2020.pdf"),
+        ]
+        for question in (
+            "Which build options are supported?",
+            "How does the smith method work?",
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(
+                    dr.named_paths(question, paths[:2], authors=True), []
+                )
+        for question in (
+            "Summarize Smith's paper",
+            "summarize smith\u2019s review",
+            "what does the smith et al. paper say?",
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(
+                    dr.named_paths(question, paths[:2], authors=True),
+                    [Path("papers/smith_review.pdf")],
+                )
+        self.assertEqual(
+            dr.named_paths("How does the smith method work?", paths,
+                           authors=True),
+            [Path("papers/smith2020.pdf")],
+        )
+
+    def test_plain_word_stems_need_a_file_marker(self) -> None:
+        """A plain-word stem names its file only when marked as one.
+
+        """
+        paths = [Path("kilin/project.py"), Path("papers/hinton.pdf")]
+        for question, expected in (
+            ("How does the project type affect the query?", []),
+            ("What does the project module define?", [paths[0]]),
+            ("Explain `project` briefly.", [paths[0]]),
+            ("What does the hinton paper claim?", [paths[1]]),
+            ("Is project.py imported?", [paths[0]]),
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(dr.named_paths(question, paths), expected)
+        self.assertTrue(
+            dr._names_stem("see data_loader now", Path("data_loader.py"))
+        )
+
+    def test_generic_file_words_name_no_file(self) -> None:
+        """A noun for any file does not name a file with a plain-word stem.
+
+        """
+        docs = [
+            Path("docs/architecture.md"),
+            Path("docs/configuration.md"),
+            Path("docs/module_map.md"),
+        ]
+        code = [
+            Path("kilin/chat.py"),
+            Path("kilin/config.py"),
+            Path("kilin/router.py"),
+            Path("kilin/settings.py"),
+            Path("kilin/indexing/pipeline.py"),
+            Path("notebooks/training.ipynb"),
+        ]
+        pasted = (
+            "Revise this paragraph.\n\n\\subsection{Software "
+            "architecture}\nUsers edit the configuration file "
+            "(\\texttt{profile.ini}); the chat window and the router "
+            "file are described in the module map.\n"
+        )
+        for paths, question, expected in (
+            # Reproduced in issue 156.
+            (docs, "Revise this section about the configuration file "
+                   "(\\texttt{profile.ini}) and the architecture.", []),
+            (docs, "Explain the configuration file used by the "
+                   "application.", []),
+            (docs, "How should I configure this experiment?", []),
+            (docs, pasted, []),
+            (docs, "Summarize docs/configuration.md.", [docs[1]]),
+            (docs, "Explain configuration.md.", [docs[1]]),
+            (docs, "Explain `configuration`.", [docs[1]]),
+            (docs, "What does the architecture document say?", [docs[0]]),
+            (docs, "Compare architecture.md and module_map.md.",
+             [docs[0], docs[2]]),
+            # A noun for another kind of file does not mark the stem.
+            (docs, "What does the configuration module do?", []),
+            (code, "Which config file does the app read?", []),
+            (code, "How does the settings file get parsed?", []),
+            (code, "Where is the router file loaded?", []),
+            (code, "How does the chat window scroll?", []),
+            (code, pasted, []),
+            (code, "What does the chat module do?", [code[0]]),
+            (code, "Explain the indexing pipeline script.", [code[4]]),
+            (code, "Explain the training notebook.", [code[5]]),
+            (code, "Is router.py imported?", [code[2]]),
+        ):
+            with self.subTest(question=question[:50]):
+                self.assertEqual(
+                    dr.named_paths(question, paths, authors=True), expected
+                )
+
+    def test_paper_names_and_authors_keep_matching(self) -> None:
+        """Paper file names, author-year citations, and paper nouns match.
+
+        """
+        papers = [
+            Path("papers/smith2024.pdf"),
+            Path("papers/paper_a.pdf"),
+            Path("papers/paper_b.pdf"),
+            Path("papers/hinton.pdf"),
+        ]
+        for question, expected in (
+            ("According to Smith et al. (2024), what changed?",
+             [papers[0]]),
+            ("Compare paper_a.pdf and paper_b.pdf.", papers[1:3]),
+            ("What does the hinton paper claim?", [papers[3]]),
+            ("Compare the configuration methods described across the "
+             "papers.", []),
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(
+                    dr.named_paths(question, papers, authors=True), expected
+                )
+
     def test_author_boundary_cases(self) -> None:
         """Do not match author prefixes inside unrelated words.
 

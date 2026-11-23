@@ -1,5 +1,6 @@
 {
   "appearance": "system",
+  "backend": "auto",
   "effort_levels": {
     "mlx": [
       {"name": "Instant", "model": "Qwen/Qwen3-1.7B-MLX-4bit"},
@@ -22,5 +23,7 @@
     "mlx": "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
     "torch": "Qwen/Qwen3-Embedding-0.6B"
   },
-  "query_format": "qwen3"
+  "query_format": "qwen3",
+  "workspace_folder": "",
+  "terms_accepted": ""
 }

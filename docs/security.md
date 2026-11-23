@@ -14,6 +14,12 @@ sandbox, authenticated multi-user service, encryption system or adversarial
 prompt-injection defense. This document states implemented boundaries and
 where users or deployers remain responsible for security.
 
+The desktop GUI includes a basic passkey-based access check for invited
+prerelease users. It runs before the main desktop window opens and
+remembers successful activation locally. This GUI-level check is not
+project-file encryption; operating-system permissions and other local
+data protections remain important.
+
 | Boundary | What KíLín does | What it does not guarantee |
 | --- | --- | --- |
 | Local source selection | Applies scan exclusions, size limits, path containment checks and explicit import rules. | Comprehensive secret detection; race-free protection against filesystem changes. |
@@ -22,6 +28,42 @@ where users or deployers remain responsible for security.
 | Conversations | Uses advisory locks and atomic single-file replacement. | Encryption, tamper resistance against an uncooperative process, cross-file transactions or secure erase. |
 | GUI | Loads local HTML/JS, disables remote-local-content access in its Qt view, and inserts answer text without evaluating arbitrary HTML. | Strong isolation from all hostile local programs or malicious instructions embedded in viewed documents. |
 | Tools | Selects from registered built-ins with validated settings and scoped context. | A general permission/policy sandbox or arbitrary external plugin containment. |
+
+## Workspace source-access policy
+
+**Project tools may read source content only from the project's explicit
+source selection within its workspace.** A path appearing in a document,
+a model response, a bibliography command or a tool argument is a reference,
+not permission to import or read another file. The active selected-source
+inventory establishes authorization; filesystem existence alone does not.
+
+The ordinary workflow is to **explicitly import** outside files into the
+workspace through the core import APIs. This authorized import operation
+may read the selected originals for copying; subsequent indexing and
+source-reading tools operate on the managed copies, not the originals.
+Installed package files, separately approved model caches and other
+application infrastructure are distinct from project source data.
+
+Source-reading tools must reject paths outside the workspace or saved
+source root, unselected filenames, traversal escapes, and symlinks that
+redirect reads. They must not fall back from an absent selected source to
+another file with the same name at the workspace root or in the original
+import directory. Missing or ambiguous dependencies are reported.
+
+The reusable `tools/_shared/source_access.py` helper applies these checks
+for reference checking. In particular, `.tex` references to `.bib` and
+`.bbl` files resolve **only** to explicitly selected workspace sources;
+when the same filename exists in several selected directories, the
+referring `.tex` directory is preferred. Other tools should use the same
+contract for future source-reading changes. Existing profiles that point
+to source directories outside their workspace must import those files
+before this helper can read them.
+
+These are **application-level rules**, not an OS-enforced sandbox or a
+claim of complete repository-wide filesystem isolation. Existing reads
+outside this tool are not exhaustively audited by this change. The helper
+performs best-effort validation; concurrent changes to the filesystem
+still require a stronger boundary for adversarial multi-user operation.
 
 ## Sensitive data paths
 
@@ -66,6 +108,12 @@ prevents built-in tools from silently installing a packaged file outside
 safe destinations. None of these checks fully prevents concurrent local
 filesystem modification by another process.
 
+New-project reservation protects existing and partially created destinations
+from cooperating creators; stale markers require deliberate recovery. The
+[creation failure contract](project_workspaces.md#failure-behavior-and-limitations)
+owns that procedure. It is not protection against arbitrary hostile
+filesystem mutation, and it does not serialize later source updates.
+
 ## External access and third-party components
 
 Running KíLín locally does not imply every action is offline:
@@ -104,19 +152,20 @@ implemented in this repository snapshot.
 
 ## Persistence, concurrency and failure
 
-KíLín acquires per-conversation companion-file advisory locks; macOS/Linux
-use `flock`, Windows uses `msvcrt.locking`, and a process-local registry
-rejects competing same-process writers. Canonical paths prevent distinct
-owners through `/var` versus `/private/var` aliases on macOS. Locks are
-released when a process exits, but `.lock` companions remain. Do not delete
-an active lock companion, as doing so can break coordination.
+[Conversation ownership](conversation_ownership.md) specifies canonical paths,
+companion-file advisory locking and atomic single-file writes. These guards
+coordinate participating writers; they do not stop a program that ignores
+them, create a transaction across indexes/manifests/traces or guarantee
+power-loss durability. A persistent `.lock` file alone is not an active
+lease, and removing an active companion can break coordination.
 
-`atomic_write_text` writes a unique temporary file then replaces one target;
-it is not a transactional database across manifests, indexes and traces and
-does not guarantee durable flush after power loss. Unexpected failure may
-leave previously committed source imports while subsequent imports are
-unfinished. The GUI Stop path kills the engine and does not recover unsaved
-partial generation.
+Unexpected failure can leave previously completed source operations in
+place. GUI Stop is likewise not rollback of earlier filesystem work or a
+way to resume interrupted generation. The
+[Stop protocol](gui_protocol.md#errors-stop-and-restart) distinguishes
+cooperative cancellation from forced process replacement; the
+[answer lifecycle](answering_pipeline.md#persistence-and-exactly-one-committed-turn)
+distinguishes displayed partial output from a checkpointed result.
 
 ## Safe deployment and review checklist
 
@@ -141,20 +190,50 @@ services or stronger isolation requires a separate threat model and a
 separately approved design. Do not market workspace organization as a
 security guarantee.
 
-Related: [Project workspaces](project_workspaces.md),
+
+### Change impact and verification
+
+A new external action, executable capability or writable location changes the
+trust boundary, even when the UI calls it a convenience. Identify the actor,
+input, destination and failure residue first; review the owning subsystem's
+validation instead of inventing parallel GUI policy. Stronger guarantees
+require an explicit design, not stronger wording in this reference.
+
+Start with [workspace transactions](../tests/kilin/test__project_transactions.py),
+[resource containment](../tests/kilin/test_workspace_resources.py),
+[atomic writes](../tests/kilin/test_atomic_writes.py),
+[conversation ownership](../tests/kilin/test_conversation_ownership.py) and
+[safe generated outputs](../tests/kilin/tools/_shared/test_outputs.py).
+These are concrete boundary regressions, not a comprehensive security audit.
+
+## Conversation-memory trust and privacy
+
+Project conversation memory reads only active conversation records within
+`logs/traces/` of the opened workspace; archived entries are excluded on
+resynchronization. Source files do not automatically become conversation
+memories, and memory does not grant permission to read sources outside the
+project. Derived records and vectors are stored in the project-owned
+`indexes/conversation_memory.json`; authoritative user feedback remains in
+`memory/feedback.json`. Both contain potentially confidential information. Completed answers with
+conversation-memory references also persist short excerpts of retrieved
+messages in their trace checkpoints; these must be kept private as well.
+Deleting a memory origin from the active index is **not secure erasure** of
+archived conversations, trace snapshots, backups, or previous index copies.
+
+Retrieved memory is untrusted earlier text, not independently validated
+scientific evidence. It is placed in a separate prompt section, with role,
+turn identity, timestamp, and conversation origin. System-level instructions
+prevent its references from being treated as documentary citations and
+preserve existing project and reviewing role boundaries. This instruction
+boundary does **not** guarantee resistance to all prompt injections. Users
+remain responsible for validating scientific statements against current
+primary sources. No cross-project memory retrieval or remote memory
+service is implemented.
+
+## Related
+
+[Project workspaces](project_workspaces.md),
 [Source pipeline](source_pipeline.md),
 [Model management](model_management.md),
 [Trace recording](trace_recording.md),
 [Development](development.md).
-
-## Creation ownership
-
-Core creation accepts only nonexistent or empty explicit destinations and
-allocates independent folders on default-name collisions. An exclusive
-`.kilin-creating` marker coordinates cooperating processes; profile publication
-fails rather than replacing any existing entry. Nonempty or partial folders
-are protected, including stale creation markers. Recovery is deliberate, not
-an automatic deletion policy. These guards are not a defense against arbitrary
-hostile filesystem mutation; explicit imports and synchronization retain their
-separate update and partial-failure contracts. See
-[Project workspaces](project_workspaces.md).

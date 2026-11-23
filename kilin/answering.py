@@ -8,8 +8,17 @@ included, and whether evidence is searched, reused, or skipped.
 
 Earlier turns enter the prompt as question and answer text only; their
 retrieved evidence stays with the turn it was retrieved for. Each turn keeps
-a short representation (question, cited sources, first sentence of the
-answer) so the router can point back to older turns without reading them.
+a short representation (question, cited sources, and a one-sentence summary
+of the answer) so the router can point back to older turns without reading
+them. The router model writes the summary once, when the turn is saved; the
+answer's first sentence is kept when the answer has only one sentence or
+the model gives no usable summary.
+
+A question asked again, with the same normalized wording as an earlier
+question, is still routed by the router model, which is told which turn it
+repeats and how that turn was answered. Asked right after itself, the
+user chooses between the same way again and another way when they can be
+asked.
 
 The router's judgement of which turns a question relates to is checked
 before it is used: a related turn is kept only when the question points
@@ -41,8 +50,15 @@ Key Features
 
 - **Turn representations**
 
-    ``turn_representation`` builds a compact, model-free summary of a turn.
-    Invalid saved representations are rebuilt from the original turn.
+    ``turn_representation`` builds a compact summary of a turn, and
+    ``summarize_answer`` asks the router model for its one-sentence answer
+    summary. Invalid saved representations are rebuilt from the original
+    turn.
+
+- **Repeated questions**
+
+    ``route_question`` tells the router when a question repeats an
+    earlier turn, and how that turn was answered, so it can judge.
 
 - **Packaged answering defaults**
 
@@ -88,7 +104,15 @@ Module Structure
 
 - ``turn_representation``
 
-    Summarize a turn compactly, without a model.
+    Summarize a turn compactly, optionally with a model-written summary.
+
+- ``summarize_answer``
+
+    Ask the router model for a one-sentence summary of an answer.
+
+- ``another_way_guidance``
+
+    Tell the answer that the user wants another way than an earlier turn.
 
 - ``side_reply``
 
@@ -130,13 +154,18 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import json
 from pathlib import PureWindowsPath
 import re
+import unicodedata
 from typing import Final, Literal, Protocol, TypeAlias
 
+from kilin._model_completion import (
+    require_complete_reply,
+    strip_thinking,
+)
 from kilin.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
 from kilin.defaults import (
     load_defaults_section,
@@ -162,6 +191,8 @@ __all__ = [
     "MAX_RELATED_TURNS",
     "MachineState",
     "RouteDecision",
+    "another_way_guidance",
+    "extract_thinking",
     "history_messages",
     "refers_back",
     "route_question",
@@ -169,6 +200,7 @@ __all__ = [
     "select_history",
     "side_reply",
     "strip_thinking",
+    "summarize_answer",
     "turn_representation",
 ]
 
@@ -195,6 +227,13 @@ MAX_LISTED_TURNS: Final[int] = require_default_int(
 _ROUTER_MAX_TOKENS: Final[int] = require_default_int(
     _ANSWERING_DEFAULTS, "ROUTER_MAX_TOKENS", "ANSWERING"
 )
+# Token budget and answer length for the router's one-sentence summary.
+_SUMMARY_MAX_TOKENS: Final[int] = require_default_int(
+    _ANSWERING_DEFAULTS, "SUMMARY_MAX_TOKENS", "ANSWERING"
+)
+_SUMMARY_ANSWER_MAX_CHARACTERS: Final[int] = require_default_int(
+    _ANSWERING_DEFAULTS, "SUMMARY_ANSWER_MAX_CHARACTERS", "ANSWERING"
+)
 # Maximum question and answer-summary characters in a turn representation.
 _REPRESENTATION_MAX_CHARACTERS: Final[int] = require_default_int(
     _ANSWERING_DEFAULTS, "REPRESENTATION_MAX_CHARACTERS", "ANSWERING"
@@ -216,6 +255,17 @@ HISTORY_CITATION_MARKER: Final[str] = "[source]"
 # Reference-detection cues are compiled with case-insensitive matching.
 _REFERS_BACK: Final[re.Pattern[str]] = require_default_pattern(
     _ANSWERING_DEFAULTS, "REFERS_BACK_PATTERN", "ANSWERING", flags=re.I
+)
+# A tool that works on an earlier answer is not meant by a question that
+# names a file and says nothing about earlier answers ("In Figure 1G of
+# smith20.pdf, what does 79.7 represent?").
+_NAMED_FILE: Final[re.Pattern[str]] = re.compile(
+    r"\b[\w.-]+\.(?:pdf|md|txt|docx?|py|ipynb|m|json|js|html?|r)\b", re.I
+)
+_EARLIER_ANSWER: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:you|your|cited|quoted|listed|answer|answers|previous|earlier"
+    r"|above|just|that|this|these|those|them)\b",
+    re.I,
 )
 # Common words are excluded from term matching but keep their configured
 # vocabulary independent of Python source code.
@@ -263,7 +313,8 @@ class _Chat(Protocol):
         """
 
     def reply(
-        self, message: str, *, max_new_tokens: int | None = None
+        self, message: str, *, max_new_tokens: int | None = None,
+        language_context: Sequence[str] | None = None,
     ) -> str:
         """Generate, return, and retain one assistant reply.
 
@@ -274,6 +325,9 @@ class _Chat(Protocol):
         max_new_tokens: int | None, optional
             Maximum generated tokens, or None for the default. Defaults to
             ``None``.
+        language_context: Sequence[str] | None, optional
+            Original user messages for script permission, or ``None`` for
+            direct-chat history. Defaults to ``None``.
 
         Returns
         -------
@@ -308,6 +362,13 @@ class RouteDecision:
     dropped_turns: tuple[tuple[int, str], ...]
         Related turns the router named but the checks removed, each with
         the reason, for tracing.
+    repeated_turn: int | None
+        The earlier turn that asked the same question, which the router
+        was told about.
+    another_way: bool
+        True when the user chose "Try another way" for a question asked
+        twice in a row; the answer is then told that the last one missed
+        (``another_way_guidance``).
 
     """
 
@@ -319,29 +380,43 @@ class RouteDecision:
     shortcut: str | None = None
     refers_back: bool = False
     dropped_turns: tuple[tuple[int, str], ...] = ()
+    repeated_turn: int | None = None
+    another_way: bool = False
 
 
-def strip_thinking(text: str) -> str:
-    """Remove <think> blocks, including one opened by the chat template.
+def extract_thinking(text: str) -> str:
+    """Extract model thinking while leaving the original reply untouched.
 
     Parameters
     ----------
     text: str
-        Model output.
+        Model output, including possible thinking delimiters.
 
     Returns
     -------
     str
-        The output without thinking text, stripped of surrounding space.
+        Thinking text, or an empty string when there is none. Supports
+        multiple blocks and a closing tag opened by the chat template.
 
     """
 
-    text = re.sub(r"<think>.*?</think>", "", str(text), flags=re.S)
-    # A template that opens <think> itself leaves only the closing tag.
-    if "</think>" in text:
-        text = text.split("</think>", 1)[1]
+    raw = str(text)
+    parts: list[str] = []
+    first_close = raw.find("</think>")
+    first_open = raw.find("<think>")
+    if first_close != -1 and (first_open == -1 or first_close < first_open):
+        parts.append(raw[:first_close])
+        raw = raw[first_close + len("</think>"):]
 
-    return text.split("<think>", 1)[0].strip()
+    for match in re.finditer(r"<think>(.*?)</think>", raw, flags=re.S):
+        parts.append(match.group(1))
+
+    last_open = raw.rfind("<think>")
+    last_close = raw.rfind("</think>")
+    if last_open > last_close:
+        parts.append(raw[last_open + len("<think>"):])
+
+    return "\n\n".join(part.strip() for part in parts if part.strip())
 
 
 def _without_citations(text: str) -> str:
@@ -380,8 +455,10 @@ def _neutral_citations(text: str) -> str:
     return _CITATION.sub(f" {HISTORY_CITATION_MARKER}", text)
 
 
-def turn_representation(turn: object, number: int) -> dict[str, object]:
-    """Summarize a turn compactly, without a model.
+def turn_representation(
+    turn: object, number: int, *, summary: str | None = None
+) -> dict[str, object]:
+    """Summarize a turn compactly.
 
     Parameters
     ----------
@@ -389,23 +466,27 @@ def turn_representation(turn: object, number: int) -> dict[str, object]:
         A conversation turn with ``question``, ``answer``, and ``evidence``.
     number: int
         One-based position of the turn in its conversation.
+    summary: str | None, optional
+        Model-written answer summary from ``summarize_answer``. Defaults to
+        ``None``, which keeps the answer's first sentence.
 
     Returns
     -------
     dict[str, object]
         ``turn_id``, ``question``, ``sources`` (cited files and symbols),
-        and ``summary`` (the answer's first sentence).
+        and ``summary`` (the given summary, or the answer's first
+        sentence).
 
     """
 
-    answer = _without_citations(strip_thinking(getattr(turn, "answer", "")))
-    first = re.split(r"(?<=[.!?])\s+", " ".join(answer.split()), maxsplit=1)
+    clean = strip_thinking(getattr(turn, "answer", ""))
+    first = summary or _answer_sentences(clean)[0]
 
     # Only cited evidence is listed; an answer without citations lists all.
     cited = {
         int(citation)
         for group in re.findall(
-            r"\[(\d+(?:\s*,\s*\d+)*)\]", str(getattr(turn, "answer", ""))
+            r"\[(\d+(?:\s*,\s*\d+)*)\]", clean
         )
         for citation in re.split(r"\s*,\s*", group)
     }
@@ -425,12 +506,80 @@ def turn_representation(turn: object, number: int) -> dict[str, object]:
         "turn_id": number,
         "question": question[:_REPRESENTATION_MAX_CHARACTERS],
         "sources": sources[:_REPRESENTATION_MAX_SOURCES],
-        "summary": (
-            first[0][:_REPRESENTATION_MAX_CHARACTERS]
-            if first and first[0]
-            else ""
-        ),
+        "summary": first[:_REPRESENTATION_MAX_CHARACTERS],
     }
+
+
+def _answer_sentences(answer: str) -> list[str]:
+    """Split an answer into its first sentence and the rest.
+
+    Parameters
+    ----------
+    answer: str
+        Answer text, possibly with thinking and citations.
+
+    Returns
+    -------
+    list[str]
+        The first sentence, then the remaining text when there is any;
+        ``[""]`` for an empty answer. Thinking text and citation groups are
+        removed and whitespace is collapsed.
+
+    """
+
+    text = " ".join(_without_citations(strip_thinking(answer)).split())
+    return re.split(r"(?<=[.!?])\s+", text, maxsplit=1)
+
+
+def summarize_answer(chat: _Chat, question: str, answer: str) -> str | None:
+    """Ask the router model for a one-sentence summary of an answer.
+
+    The router lists each earlier turn by one line. An answer's first
+    sentence is often a status line ("This project has 1 source file."),
+    so a short model summary tells the router what the answer said.
+
+    Parameters
+    ----------
+    chat: ChatSession
+        Router model session; its conversation is restored afterwards.
+    question: str
+        The question the answer replies to.
+    answer: str
+        The saved answer, possibly with thinking and citations.
+
+    Returns
+    -------
+    str | None
+        One sentence with collapsed whitespace. None when the answer has
+        only one sentence, or the call fails, is cut off, or gives an empty
+        reply; the caller then keeps the answer's first sentence.
+
+    """
+
+    sentences = _answer_sentences(answer)
+    if len(sentences) < 2:
+        return None
+
+    text = " ".join(sentences)[:_SUMMARY_ANSWER_MAX_CHARACTERS]
+    system = (
+        "You summarize answers for KíLín. You reply with one sentence "
+        "only, in the language of the answer."
+    )
+    prompt = f"""Question: {question}
+
+Answer:
+{text}
+
+In one sentence of at most 30 words, say what the answer states, keeping
+its key names, numbers, and conclusion."""
+    try:
+        reply = side_reply(
+            chat, system, prompt,
+            max_new_tokens=_SUMMARY_MAX_TOKENS, require_complete=True,
+        )
+    except Exception:  # A summary failure must not stop saving a turn.
+        return None
+    return " ".join(reply.split()) or None
 
 
 def _representation_line(representation: dict[str, object]) -> str:
@@ -460,8 +609,13 @@ def side_reply(
     system: str,
     prompt: str,
     *,
-    max_new_tokens: int,
+    max_new_tokens: int | None,
     token_callback: Callable[[str], None] | None = None,
+    language_context: Sequence[str] = (),
+    inherit_settings: bool = False,
+    preserve_thinking: bool = False,
+    require_complete: bool = False,
+    thinking: bool | None = None,
 ) -> str:
     """Ask a chat model a side question, then restore its conversation.
 
@@ -473,22 +627,65 @@ def side_reply(
         System instruction for the side question only.
     prompt: str
         The side question.
-    max_new_tokens: int
-        Maximum length of the reply.
+    max_new_tokens: int | None
+        Optional cap for a nonthinking request. Inherited thinking requests
+        always use the active session maximum, including their thinking.
+        ``None`` inherits that maximum in either mode. Router calls retain
+        their separate explicit limits.
     token_callback: Callable[[str], None] | None, optional
         Receives the reply as it is generated, for a side answer shown to
         the user. Defaults to ``None``.
+    language_context: Sequence[str], optional
+        Original user messages authorizing CJK output, oldest first. The
+        generated side prompt cannot authorize scripts. Defaults to ``()``.
+    inherit_settings: bool, optional
+        Keep session thinking and temperature unless explicitly overridden.
+        Only nonthinking calls may use a smaller local cap; it never exceeds
+        the user's maximum. False retains deterministic router behavior.
+    preserve_thinking: bool, optional
+        Return the complete model output, including thinking text, for a
+        visible answer or for separate capture by the tool coordinator.
+        Other side requests continue to strip thinking by default.
+    require_complete: bool, optional
+        Reject truncated, thinking-only or empty output before a tool
+        consumes it. Defaults to ``False`` for router compatibility.
+    thinking: bool | None, optional
+        Temporary thinking override for an inherited tool request.
+        ``None`` inherits unchanged. Only valid with ``inherit_settings``
+        enabled; router calls cannot enable thinking through this option.
 
     Returns
     -------
     str
-        The reply with thinking text removed.
+        The complete reply when ``preserve_thinking`` is true; otherwise
+        the reply with thinking text removed.
+
+    Raises
+    ------
+    ValueError
+        If the cap is not a positive integer, an override is not a boolean,
+        or a caller attempts to change router thinking without inheriting
+        tool settings.
+    IncompleteModelResponse
+        If completion is required and the reply is truncated, unfinished
+        or has no usable final content.
 
     Notes
     -----
-    Thinking is off and sampling is greedy for the side question.
+    Router questions use greedy, nonthinking generation by default.
+    Tool questions can inherit the answering session generation settings.
 
     """
+
+    if max_new_tokens is not None and (
+        type(max_new_tokens) is not int or max_new_tokens < 1
+    ):
+        raise ValueError("max_new_tokens must be a positive integer or None.")
+    if thinking is not None:
+        if type(thinking) is not bool or not inherit_settings:
+            raise ValueError(
+                "thinking requires a boolean and inherit_settings=True."
+            )
 
     history = [dict(message) for message in chat.messages]
     previous = {"thinking": chat.thinking, "temperature": chat.temperature}
@@ -496,22 +693,55 @@ def side_reply(
     # Restore the conversation and settings even when the reply fails.
     try:
         chat.restore_history([{"role": SYSTEM_ROLE, "content": system}])
-        chat.configure_generation({"thinking": False, "temperature": 0.0})
-        options: dict[str, object] = {"max_new_tokens": max_new_tokens}
+        if not inherit_settings:
+            chat.configure_generation({
+                "thinking": False, "temperature": 0.0,
+            })
+        elif thinking is not None:
+            chat.configure_generation({
+                "thinking": thinking, "temperature": chat.temperature,
+            })
+        session_limit = getattr(chat, "max_new_tokens", None)
+        token_limit = max_new_tokens
+        if inherit_settings:
+            if chat.thinking or token_limit is None:
+                token_limit = session_limit
+            elif session_limit is not None:
+                token_limit = min(token_limit, session_limit)
+        options: dict[str, object] = {
+            "max_new_tokens": token_limit,
+            "language_context": language_context,
+        }
         if token_callback is not None:
             options["token_callback"] = token_callback
         reply = chat.reply(prompt, **options)
+        if require_complete:
+            # Some templates put <think> in the prompt. Reconstruct that
+            # opening for validation, without changing the generated text.
+            check_text = reply
+            if (
+                getattr(chat, "_last_prompt_opens_thinking", False)
+                and "<think>" not in reply and "</think>" not in reply
+            ):
+                check_text = "<think>" + reply
+            require_complete_reply(
+                check_text, getattr(chat, "last_finish_reason", None)
+            )
     finally:
         chat.restore_history(history)
-        chat.configure_generation(previous)
+        if not inherit_settings or thinking is not None:
+            chat.configure_generation(previous)
 
-    return strip_thinking(reply)
+    return reply if preserve_thinking else strip_thinking(reply)
 
 
 def _router_prompt(
     project: ProjectType,
     representations: list[dict[str, object]],
     question: str,
+    exclude: frozenset[str] = frozenset(),
+    *,
+    note: str = "",
 ) -> tuple[str, str]:
     """Build the router's system and user prompts.
 
@@ -525,6 +755,11 @@ def _router_prompt(
         listed.
     question: str
         The new question.
+    exclude: frozenset[str], optional
+        Intent IDs left out of the list. Defaults to none.
+    note: str, optional
+        A sentence placed after the new question, such as that it repeats
+        an earlier turn. Defaults to none.
 
     Returns
     -------
@@ -535,9 +770,16 @@ def _router_prompt(
 
     """
 
+    allowed = tuple(
+        intent_id for intent_id in project.intents
+        if intent_id not in exclude
+    )
+    if not allowed:
+        raise ValueError("No available intents for routing.")
     intents = "\n".join(
         f"- {intent_id}: {intent.description}"
         for intent_id, intent in project.intents.items()
+        if intent_id not in exclude
     )
     listed = [item for item in representations if not item.get("skip")]
     listed = listed[-MAX_LISTED_TURNS:]
@@ -551,6 +793,11 @@ def _router_prompt(
         f"{project.display_name.lower()}: {project.description} You never "
         "answer questions. You reply with one line of JSON only."
     )
+    asked = f"{question}\n{note}" if note else question
+    example_intent = (
+        project.default_intent
+        if project.default_intent in allowed else allowed[0]
+    )
     user = f"""Machine state: {MACHINE_STATE_ANSWERING}
 
 Intents:
@@ -559,7 +806,7 @@ Intents:
 Earlier turns:
 {turns}
 
-New question: {question}
+New question: {asked}
 
 Return one line of JSON with:
 "intent": one intent ID from the list; when unsure whether a message is
@@ -572,12 +819,13 @@ turn.
 Only when standalone is false, also add:
 "related_turns": numbers of the earlier turns it refers to.
 
-Example: {{"intent": "{project.default_intent}", "standalone": true}}"""
+Example: {{"intent": "{example_intent}", "standalone": true}}"""
     reuse = next(
         (
             intent_id
             for intent_id, intent in project.intents.items()
             if intent.retrieval_mode == RETRIEVAL_MODE_REUSE
+            and intent_id not in exclude
         ),
         None,
     )
@@ -697,6 +945,9 @@ def route_question(
     project: ProjectType,
     turns: list[object],
     question: str,
+    *,
+    excluded_turn_ids: frozenset[int] = frozenset(),
+    choose: Callable[[str, tuple[str, ...]], int | None] | None = None,
 ) -> RouteDecision:
     """Classify a question with the router model.
 
@@ -710,6 +961,14 @@ def route_question(
         Earlier conversation turns.
     question: str
         The new question.
+    excluded_turn_ids: frozenset[int], optional
+        Saved one-based turn numbers excluded from routing. Their stored
+        representations are not read or shown to the router; numbering
+        of other turns remains unchanged. Defaults to empty.
+    choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
+        ``choose(question, options)`` asks the user to pick one option and
+        returns its index. Used only for a question asked twice in a row.
+        Defaults to ``None``: nobody can be asked, so the router decides.
 
     Returns
     -------
@@ -719,12 +978,28 @@ def route_question(
 
     Notes
     -----
+    A question with the same normalized wording as an earlier question is
+    marked as repeating it (``_repeated_turn``); the router prompt names
+    that turn and its intent. Only
+    the user knows why they asked the last question again, so with
+    ``choose`` they pick: the same way again (the last turn's saved route,
+    so a repeated inventory stays consistent) or another way (the router
+    without the last intent). Without a callback, the router decides.
+
     The router's related turns are checked: a turn is kept only when the
     question points back (``refers_back``) or shares a distinctive term
     with the turn's question, sources, or summary. Turns whose intent
     neither reads history nor retrieves (small talk) are not listed to the
     router and are never related. A question left with no related turns
-    is standalone.
+    is standalone. An intent whose cue the question matches replaces the
+    router's choice ("give me an overview of the Smith paper"). Otherwise,
+    when the wording rules out the router's choice, the router is asked
+    once more without the ruled-out intents, and the default intent is
+    used when that fails: an intent with ``requires`` patterns needs one
+    of them to match, and a tool that works on an earlier answer
+    (``follows_up``) is not meant when the question names a file and says
+    nothing of earlier answers ("In Figure 1G of smith20.pdf, what does
+    79.7 represent?").
 
     """
 
@@ -740,14 +1015,30 @@ def route_question(
                 )
 
     representations = [
-        {
-            **_stored_representation(turn, index + 1),
-            "skip": _ignores_conversation(turn, project),
-        }
-        for index, turn in enumerate(turns)
+        (
+            {"turn_id": index, "skip": True}
+            if index in excluded_turn_ids
+            else {
+                **_stored_representation(turn, index),
+                "skip": _ignores_conversation(turn, project),
+            }
+        )
+        for index, turn in enumerate(turns, 1)
     ]
+    # A question asked again is not routed by rule: the router reads that
+    # it repeats an earlier turn, with that turn's intent, and decides.
+    repeated = _repeated_turn(turns, question, excluded_turn_ids)
+    if repeated == len(turns) and choose is not None:
+        chosen = _repeat_choice(
+            chat, project, representations, question, turns, choose
+        )
+        if chosen is not None:
+            return chosen
     pointing = refers_back(question)
-    system, prompt = _router_prompt(project, representations, question)
+    system, prompt = _router_prompt(
+        project, representations, question,
+        note=_repeat_note(turns, repeated) if repeated else "",
+    )
 
     try:
         raw = side_reply(
@@ -756,9 +1047,12 @@ def route_question(
     except Exception as error:  # A routing failure must not stop answers.
         return RouteDecision(
             intent=project.default_intent,
-            standalone=not turns,
+            standalone=not any(
+                not item["skip"] for item in representations
+            ),
             fallback=f"router failed: {error}",
             refers_back=pointing,
+            repeated_turn=repeated,
         )
     decision = _parse_route(raw, project, len(turns))
 
@@ -779,6 +1073,34 @@ def route_question(
     standalone = decision.standalone or (bool(dropped) and not kept)
 
     intent = project.intents.get(decision.intent)
+    fallback = decision.fallback
+    cued = _cued_intent(project, question)
+    if cued is not None and cued != decision.intent:
+        # Clear wording decides the intent; the router judged the history.
+        fallback = (
+            f"intent {cued} set by the question's wording (router chose "
+            f"{decision.intent})"
+        )
+        decision = RouteDecision(**{**_fields(decision), "intent": cued})
+        intent = project.intents[cued]
+    elif intent is not None and cued is None:
+        excluded = _unmeant_intents(project, question)
+        if decision.intent in excluded:
+            # The wording rules out the router's choice: ask once more
+            # without it, and use the default intent when that fails.
+            replaced = decision.intent
+            retry = _reroute(
+                chat, project, representations, question, len(turns),
+                excluded,
+            ).intent
+            decision = RouteDecision(
+                **{**_fields(decision), "intent": retry}
+            )
+            intent = project.intents[retry]
+            fallback = (
+                f"intent {replaced} replaced by {retry}: "
+                + excluded[replaced]
+            )
     if (
         not kept
         and intent is not None
@@ -786,7 +1108,7 @@ def route_question(
             intent.retrieval_mode == RETRIEVAL_MODE_REUSE
             or (
                 intent.tool is not None
-                and TOOL_REGISTRY[intent.tool.name].follows_up
+                and _tool_follows_up(intent.tool.name, question)
             )
         )
     ):
@@ -812,9 +1134,423 @@ def route_question(
             "standalone": standalone,
             "related_turn_ids": tuple(kept),
         },
-        fallback=decision.fallback,
+        fallback=fallback,
         refers_back=pointing,
         dropped_turns=tuple(dropped),
+        repeated_turn=repeated,
+    )
+
+
+def _repeat_key(question: str) -> str:
+    """Normalize surface wording without changing question semantics.
+
+    Case, Unicode compatibility forms, surrounding whitespace and
+    punctuation do not decide equivalence. Word order, negation, numbers,
+    plural forms and repeated words remain significant: fuzzy similarity
+    is not safe grounds for asking the user to reroute a supposed repeat.
+
+    Parameters
+    ----------
+    question: str
+        Question to normalize.
+
+    Returns
+    -------
+    str
+        Whitespace-separated normalized words.
+
+    """
+
+    text = unicodedata.normalize("NFKC", question).casefold()
+    return " ".join(re.findall(r"\w+", text))
+
+
+def _repeated_turn(
+    turns: list[object],
+    question: str,
+    excluded_turn_ids: frozenset[int],
+) -> int | None:
+    """Find the newest turn with the same normalized question wording.
+
+    A context-dependent question can only repeat the immediately prior
+    question; its pronouns may refer to different entities later. Excluded
+    turns, including disliked answers, are never used as repeat candidates.
+
+    Parameters
+    ----------
+    turns: list
+        Earlier conversation turns.
+    question: str
+        Current question.
+    excluded_turn_ids: frozenset[int]
+        Saved one-based turn numbers to ignore.
+
+    Returns
+    -------
+    int | None
+        Matching one-based turn number, or ``None``.
+
+    """
+
+    key = _repeat_key(question)
+    if not key:
+        return None
+    pointing = refers_back(question)
+    for number in range(len(turns), 0, -1):
+        if number in excluded_turn_ids:
+            continue
+        earlier = str(getattr(turns[number - 1], "question", ""))
+        if _repeat_key(earlier) != key:
+            continue
+        if number == len(turns) or not (pointing or refers_back(earlier)):
+            return number
+        return None
+    return None
+
+
+def _repeat_note(turns: list[object], number: int) -> str:
+    """Tell the router that the new question repeats an earlier one.
+
+    Parameters
+    ----------
+    turns: list
+        Earlier conversation turns.
+    number: int
+        The repeated turn, from ``_repeated_turn``.
+
+    Returns
+    -------
+    str
+        One sentence for the router prompt, naming the earlier turn and its
+        intent, so the same question tends to take the same route. Only the
+        user can say that the last answer missed ("Try another way" in
+        ``_repeat_choice``); the note never suggests another intent.
+
+    """
+
+    parameters = getattr(turns[number - 1], "parameters", None)
+    intent = (
+        parameters.get("intent") if isinstance(parameters, dict) else None
+    )
+    note = f"The new question repeats turn {number}"
+    if isinstance(intent, str):
+        return f"{note}, which was answered as {intent}."
+    return f"{note}."
+
+
+def _repeat_choice(
+    chat: _Chat,
+    project: ProjectType,
+    representations: list[dict[str, object]],
+    question: str,
+    turns: list[object],
+    choose: Callable[[str, tuple[str, ...]], int | None],
+) -> RouteDecision | None:
+    """Ask the user how to answer a question asked twice in a row.
+
+    The same words right after an answer can mean "do it again" (a source
+    inventory after adding files) or "that was not what I meant". Only
+    the user knows, so they choose.
+
+    Parameters
+    ----------
+    chat: ChatSession
+        Router model session, for another way.
+    project: ProjectType
+        Current project type with its intents.
+    representations: list[dict[str, object]]
+        One representation per earlier turn.
+    question: str
+        The new question.
+    turns: list
+        Earlier conversation turns; the last one asked the same question.
+    choose: Callable[[str, tuple[str, ...]], int | None]
+        Asks the user to pick one option.
+
+    Returns
+    -------
+    RouteDecision | None
+        The last turn's saved route for "Same way again", or the router's
+        choice for "Try another way", without the last intent and without
+        intents that reuse earlier passages (``reuse`` retrieval). None when
+        the user cancels or the last turn's saved route is unusable; the
+        router then decides.
+
+    """
+
+    number = len(turns)
+    parameters = getattr(turns[-1], "parameters", None)
+    if not isinstance(parameters, dict):
+        return None
+    intent = parameters.get("intent")
+    standalone = parameters.get("standalone")
+    related = parameters.get("related_turn_ids")
+    if (
+        not isinstance(intent, str)
+        or intent not in project.intents
+        or type(standalone) is not bool
+        or not isinstance(related, list)
+        or not all(type(item) is int and 0 < item < number for item in related)
+    ):
+        return None
+
+    label = intent.replace("_", " ").capitalize()
+    index = choose(
+        "You asked this right after the last answer. How should I answer?",
+        (f"Same way again ({label})", "Try another way"),
+    )
+    if index == 0:
+        return RouteDecision(
+            intent=intent,
+            standalone=standalone,
+            related_turn_ids=tuple(related),
+            fallback="the user chose the same way again",
+            repeated_turn=number,
+        )
+    if index != 1:
+        return None
+
+    # Never include the prior route or a reuse-only route among choices.
+    excluded = {
+        other: "it reuses the passages of the last answer"
+        for other, setting in project.intents.items()
+        if setting.retrieval_mode == RETRIEVAL_MODE_REUSE
+    }
+    excluded[intent] = "the user asked for another way"
+    retry = _reroute(
+        chat, project, representations, question, number, excluded
+    )
+    # Preserve the new router's history judgment, but apply the same
+    # relevance checks used by ordinary routing to its related IDs.
+    terms = _content_terms(question)
+    pointing = refers_back(question)
+    kept = tuple(
+        turn_id for turn_id in retry.related_turn_ids
+        if not representations[turn_id - 1].get("skip")
+        and (
+            pointing or terms & _content_terms(
+                _representation_text(representations[turn_id - 1])
+            )
+        )
+    )
+    return RouteDecision(
+        intent=retry.intent,
+        standalone=retry.standalone or not kept,
+        related_turn_ids=kept,
+        raw=retry.raw,
+        fallback=(
+            f"the user chose another way than {intent}"
+            + (f"; {retry.fallback}" if retry.fallback else "")
+        ),
+        refers_back=pointing,
+        repeated_turn=number,
+        another_way=True,
+    )
+
+
+def another_way_guidance(number: int) -> str:
+    """Tell the answer that the user wants another way than turn ``number``.
+
+    Used only after the user chose "Try another way" for a question asked
+    twice in a row: without it, the model sees the same question and its
+    earlier answer, and writes that answer again.
+
+    Parameters
+    ----------
+    number: int
+        The turn the user asked again right after.
+
+    Returns
+    -------
+    str
+        Answer guidance asking for a different approach, while keeping
+        what was correct.
+
+    """
+
+    return (
+        f"The user asked this again right after turn {number} and chose "
+        "another way: that answer did not give them what they wanted. If "
+        "it was correct, keep it and say so briefly, then add what it "
+        "missed; otherwise take a different approach, such as more "
+        "specific details from other parts of the documents or a "
+        "different structure. Do not repeat that answer."
+    )
+
+
+def _cued_intent(project: ProjectType, question: str) -> str | None:
+    """Return the first intent whose cue the question matches, if any.
+
+    Parameters
+    ----------
+    project: ProjectType
+        Current project type with its intents.
+    question: str
+        The new question.
+
+    Returns
+    -------
+    str | None
+        The intent ID, in the project type's order; None without a match.
+
+    """
+
+    return next(
+        (
+            intent_id
+            for intent_id, intent in project.intents.items()
+            if any(pattern.search(question) for pattern in intent.cues)
+        ),
+        None,
+    )
+
+
+def _unmeant_intents(project: ProjectType, question: str) -> dict[str, str]:
+    """Return the intents a question's wording rules out, with the reason.
+
+    Parameters
+    ----------
+    project: ProjectType
+        Current project type with its intents.
+    question: str
+        The new question.
+
+    Returns
+    -------
+    dict[str, str]
+        Intent ID to reason. An intent with ``requires`` patterns is ruled
+        out when the question matches none of them. A tool that works on an
+        earlier answer (``follows_up``) is ruled out when the question
+        names a file and says nothing of earlier answers.
+
+    """
+
+    new_about_file = bool(
+        _NAMED_FILE.search(question) and not _EARLIER_ANSWER.search(question)
+    )
+    excluded: dict[str, str] = {}
+    for intent_id, intent in project.intents.items():
+        if intent.requires and not any(
+            pattern.search(question) for pattern in intent.requires
+        ):
+            excluded[intent_id] = "the question lacks its required words"
+        elif (
+            new_about_file
+            and intent.tool is not None
+            and TOOL_REGISTRY[intent.tool.name].follows_up
+        ):
+            excluded[intent_id] = (
+                "the question names a file and no earlier answer"
+            )
+    return excluded
+
+
+def _reroute(
+    chat: _Chat,
+    project: ProjectType,
+    representations: list[dict[str, object]],
+    question: str,
+    turn_count: int,
+    excluded: Mapping[str, str],
+) -> RouteDecision:
+    """Ask the router again and return an allowed, complete decision.
+
+    An excluded default must never be silently reinstated when the model
+    fails or ignores the allowed intent list. A deterministic fallback
+    prefers the configured default when allowed, otherwise a non-tool,
+    non-reuse intent not contradicted by the wording. If there is no
+    suitable alternative, the request fails explicitly.
+
+    Parameters
+    ----------
+    chat: ChatSession
+        Router model session.
+    project: ProjectType
+        Available intents and default.
+    representations: list[dict[str, object]]
+        Earlier-turn representations.
+    question: str
+        Current question.
+    turn_count: int
+        Number of earlier turns.
+    excluded: Mapping[str, str]
+        Intents excluded from the new selection.
+
+    Returns
+    -------
+    RouteDecision
+        Checked intent and standalone/related-turn context.
+
+    Raises
+    ------
+    ValueError
+        No suitable alternative intent exists.
+
+    """
+
+    available = tuple(
+        key for key in project.intents if key not in excluded
+    )
+    if not available:
+        raise ValueError("No alternative intent is available.")
+    excluded_by_words = _unmeant_intents(project, question)
+    fallback = next(
+        (
+            key for key in (project.default_intent, *available)
+            if key in available and key not in excluded_by_words
+            and project.intents[key].tool is None
+            and project.intents[key].retrieval_mode != RETRIEVAL_MODE_REUSE
+        ),
+        None,
+    )
+    if fallback is None:
+        raise ValueError("No suitable alternative intent is available.")
+    system, prompt = _router_prompt(
+        project, representations, question, frozenset(excluded)
+    )
+    try:
+        raw = side_reply(
+            chat, system, prompt, max_new_tokens=_ROUTER_MAX_TOKENS
+        )
+        decision = _parse_route(raw, project, turn_count)
+    except Exception:
+        return RouteDecision(
+            intent=fallback,
+            standalone=not refers_back(question),
+            fallback="router failed; used an allowed alternative",
+        )
+    if decision.fallback is not None or decision.intent in excluded:
+        return RouteDecision(
+            intent=fallback,
+            standalone=not refers_back(question),
+            raw=decision.raw,
+            fallback="router did not select an allowed intent",
+        )
+    return decision
+
+
+def _tool_follows_up(name: str, question: str) -> bool:
+    """Tell whether a tool works on an earlier answer for a question.
+
+    Parameters
+    ----------
+    name: str
+        The registered tool's name.
+    question: str
+        The new question.
+
+    Returns
+    -------
+    bool
+        True for a tool marked ``follows_up``, or one whose
+        ``follows_up_when`` accepts the question ("rephrase line 75" for
+        ``writing_check``).
+
+    """
+
+    tool = TOOL_REGISTRY[name]
+    return tool.follows_up or (
+        tool.follows_up_when is not None and tool.follows_up_when(question)
     )
 
 
@@ -842,7 +1578,11 @@ def refers_back(question: str) -> bool:
 
 
 def search_text(
-    question: str, turns: list[object], decision: RouteDecision
+    question: str,
+    turns: list[object],
+    decision: RouteDecision,
+    *,
+    excluded_turn_ids: frozenset[int] = frozenset(),
 ) -> str:
     """Build the search query from the user's own words.
 
@@ -854,6 +1594,8 @@ def search_text(
         Earlier conversation turns with ``question``.
     decision: RouteDecision
         The checked routing decision.
+    excluded_turn_ids: frozenset[int], optional
+        Turn numbers whose questions must not extend this query.
 
     Returns
     -------
@@ -872,6 +1614,7 @@ def search_text(
         " ".join(str(getattr(turns[number - 1], "question", "")).split())
         for number in decision.related_turn_ids
         if 0 < number <= len(turns)
+        and number not in excluded_turn_ids
     ]
     return " ".join([question.strip(), *[text for text in earlier if text]])
 
@@ -880,7 +1623,8 @@ def _content_terms(text: str) -> set[str]:
     """Return the distinctive terms of a text.
 
     Lowercase words of three or more characters that are not common words,
-    plus capitalized acronyms and short names, such as ``MRI``.
+    in singular form ("datasets" and "dataset" match), plus capitalized
+    acronyms and short names, such as ``MRI``.
 
     Parameters
     ----------
@@ -895,13 +1639,39 @@ def _content_terms(text: str) -> set[str]:
     """
 
     words = {
-        word
+        _singular(word)
         for word in re.findall(r"[a-z0-9][a-z0-9_-]+", text.lower())
         if len(word) >= 3 and word not in _COMMON_WORDS
     }
     # Acronyms and short names ("R", "ML", "MRI") count, case-sensitively.
     names = set(re.findall(r"\b[A-Z][A-Z0-9]*\b", text)) - {"I"}
     return words | names
+
+
+def _singular(word: str) -> str:
+    """Return the singular form of a regular English plural.
+
+    Parameters
+    ----------
+    word: str
+        Lowercase word.
+
+    Returns
+    -------
+    str
+        "studies" becomes "study" and "datasets" "dataset"; words ending in
+        "ss", "us" or "is" ("process", "corpus", "analysis") and short words
+        are unchanged. Irregular plurals ("mice") are not handled.
+
+    """
+
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith(
+        ("ss", "us", "is")
+    ):
+        return word[:-1]
+    return word
 
 
 def _representation_text(representation: dict[str, object]) -> str:
@@ -956,6 +1726,17 @@ def _ignores_conversation(turn: object, project: ProjectType) -> bool:
     parameters = getattr(turn, "parameters", None)
     if not isinstance(parameters, dict):
         return False
+    policy = parameters.get("intent_history_policy")
+    mode = parameters.get("intent_retrieval_mode")
+    uses_tool = parameters.get("intent_tool_used")
+    if (
+        isinstance(policy, str) and isinstance(mode, str)
+        and type(uses_tool) is bool
+    ):
+        return (
+            not uses_tool and policy == HISTORY_POLICY_NONE
+            and mode == RETRIEVAL_MODE_NONE
+        )
     intent_id = parameters.get("intent")
     intent = (
         project.intents.get(intent_id)
@@ -1021,6 +1802,8 @@ def select_history(
     policy: HistoryPolicy,
     recent_turns: int,
     decision: RouteDecision,
+    *,
+    excluded_turn_ids: frozenset[int] = frozenset(),
 ) -> list[int]:
     """Choose which earlier turns enter the prompt.
 
@@ -1038,6 +1821,9 @@ def select_history(
         How many of the latest turns count as recent.
     decision: RouteDecision
         The router's decision for the new question.
+    excluded_turn_ids: frozenset[int], optional
+        Saved turns to omit without renumbering eligible history. Recent
+        history counts the most recent *eligible* turns.
 
     Returns
     -------
@@ -1049,18 +1835,42 @@ def select_history(
     if policy == HISTORY_POLICY_NONE or turn_count == 0:
         return []
 
-    recent = list(range(max(1, turn_count - recent_turns + 1), turn_count + 1))
+    # Preserve the constant-window cost and unchanged selection when
+    # no rejected turns need filtering.
+    if not excluded_turn_ids:
+        recent = list(range(
+            max(1, turn_count - recent_turns + 1), turn_count + 1
+        ))
+        if policy == HISTORY_POLICY_RECENT:
+            return recent
+        if decision.standalone:
+            return [turn_count]
+        return sorted(set(recent) | set(decision.related_turn_ids))
+
+    eligible = [
+        number for number in range(1, turn_count + 1)
+        if number not in excluded_turn_ids
+    ]
+    if not eligible:
+        return []
+    recent = eligible[-recent_turns:] if recent_turns else []
     if policy == HISTORY_POLICY_RECENT:
         return recent
 
     if decision.standalone:
-        return [turn_count]
+        return [eligible[-1]]
 
-    return sorted(set(recent) | set(decision.related_turn_ids))
+    return sorted(set(recent) | {
+        number for number in decision.related_turn_ids
+        if number in eligible
+    })
 
 
 def history_messages(
-    turns: list[object], numbers: list[int]
+    turns: list[object],
+    numbers: list[int],
+    *,
+    excluded_turn_ids: frozenset[int] = frozenset(),
 ) -> list[dict[str, str]]:
     """Return selected turns as user and assistant messages.
 
@@ -1070,6 +1880,8 @@ def history_messages(
         Conversation turns with ``question`` and ``answer``.
     numbers: list[int]
         One-based numbers of the turns to include.
+    excluded_turn_ids: frozenset[int], optional
+        Turns excluded from model context, including their questions.
 
     Returns
     -------
@@ -1078,13 +1890,22 @@ def history_messages(
         text is included. Thinking text is removed, and citation numbers
         become ``HISTORY_CITATION_MARKER``: the evidence they referred to is
         not in the prompt, but the answers still show the citing style.
+        Incomplete turns and legacy thinking-only replies are omitted as
+        complete question/answer pairs; stored turn numbering is unchanged.
 
     """
 
     messages: list[dict[str, str]] = []
     for number in numbers:
+        if number in excluded_turn_ids:
+            continue
         turn = turns[number - 1]
         answer = _neutral_citations(strip_thinking(turn.answer)).strip()
+        completion = getattr(turn, "parameters", {}).get("completion", {})
+        if not answer or completion.get("status") == "incomplete":
+            # Keep the saved turn for inspection, but never restore an
+            # empty assistant message or use a failed result as history.
+            continue
         messages.append({"role": USER_ROLE, "content": str(turn.question)})
         messages.append({"role": ASSISTANT_ROLE, "content": answer})
 

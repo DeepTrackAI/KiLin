@@ -2,6 +2,7 @@
 
 Unknown configuration keys and incorrect types are rejected at import.
 Project-type values override only the per-tool SETTINGS defaults.
+MODEL_CALLS owns the internal thinking policy, independently of the GUI.
 
 Key Features
 ------------
@@ -12,6 +13,10 @@ Key Features
 
 Module Structure
 ----------------
+
+- ``MODEL_CALLS``
+
+    Validated policy for internal answering-model requests.
 
 - ``DEFAULT_*`` and internal constants
 
@@ -39,7 +44,13 @@ from kilin.tools._defaults import (
     require_string,
 )
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "MODEL_CALLS",
     "DEFAULT_BATCH_TOKENS",
     "DEFAULT_MAX_MODEL_CALLS",
     "DEFAULT_QUICK_PASSAGES",
@@ -48,7 +59,6 @@ __all__ = [
     "DEFAULT_LARGE_BATCHES",
     "MIN_WORDS",
     "TOPIC_REPLY_TOKENS",
-    "JUDGE_REPLY_TOKENS",
     "SENTENCE_NUMBER_TOKENS",
     "PROMPT_TOKENS_PER_SECOND",
     "REPLY_TOKENS_PER_SECOND",
@@ -61,6 +71,7 @@ _DEFAULTS = load_tool_defaults(
     Path(__file__).with_name("defaults.json")
 )
 require_keys(_DEFAULTS, {
+    "MODEL_CALLS",
     "SETTINGS",
     "HEURISTICS",
     "ESTIMATES",
@@ -115,7 +126,6 @@ _ESTIMATES = require_section(
 require_keys(
     _ESTIMATES, {
         "TOPIC_REPLY_TOKENS",
-        "JUDGE_REPLY_TOKENS",
         "SENTENCE_NUMBER_TOKENS",
         "PROMPT_TOKENS_PER_SECOND",
         "REPLY_TOKENS_PER_SECOND",
@@ -128,15 +138,6 @@ TOPIC_REPLY_TOKENS: Final[int] = (
     require_int(
         _ESTIMATES,
         "TOPIC_REPLY_TOKENS",
-        "find_passages.ESTIMATES",
-        1,
-        100000,
-    )
-)
-JUDGE_REPLY_TOKENS: Final[int] = (
-    require_int(
-        _ESTIMATES,
-        "JUDGE_REPLY_TOKENS",
         "find_passages.ESTIMATES",
         1,
         100000,
@@ -195,4 +196,8 @@ CALL_SECONDS: Final[float] = (
         0,
         1000000000.0,
     )
+)
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )

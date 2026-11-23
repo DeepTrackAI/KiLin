@@ -1,0 +1,55 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "case_sensitive": {
+      "title": "Case-sensitive matching",
+      "summary": "Distinguishes uppercase and lowercase letters during text matching.",
+      "description": "When enabled, matching uses exact letter case. When disabled, matching ignores case differences."
+    },
+    "whole_words": {
+      "title": "Whole-word matching",
+      "summary": "Requires matched terms to form complete words.",
+      "description": "Prevents finding the search term merely inside a longer word."
+    },
+    "context_lines": {
+      "title": "Context lines",
+      "summary": "Sets how many neighboring lines are shown around a match.",
+      "description": "Adds nearby source lines to each match for inspection without modifying the underlying source."
+    },
+    "max_listed": {
+      "title": "Maximum listed results",
+      "summary": "Caps the number of matches or items returned in a list.",
+      "description": "A lower cap produces shorter reports even when additional candidates exist in the source."
+    },
+    "candidates": {
+      "title": "Candidate selection",
+      "summary": "Selects how candidates are found for classification.",
+      "description": "Controls which identified items enter the batch classifier."
+    },
+    "categories": {
+      "title": "Classification categories",
+      "summary": "Provides category labels used by the batch classifier.",
+      "description": "The selected categories are offered to the classifier when it assigns labels to candidates."
+    },
+    "batch_tokens": {
+      "title": "Batch token budget",
+      "summary": "Sets the approximate token budget for processing one batch.",
+      "description": "Controls how much candidate material is grouped for a model-based processing step."
+    },
+    "max_model_calls": {
+      "title": "Maximum model calls",
+      "summary": "Caps model calls permitted for one tool operation.",
+      "description": "Limits computational cost and processing time. Work may stop early before every candidate is examined."
+    },
+    "confirmation": {
+      "title": "Confirmation policy",
+      "summary": "Controls when user confirmation is required before a tool runs.",
+      "description": "Depending on the selected policy, the tool may ask before processing large or otherwise costly workloads."
+    },
+    "large_batches": {
+      "title": "Large workload threshold",
+      "summary": "Sets the batch threshold used by the confirmation policy.",
+      "description": "Used to decide whether a planned multi-batch operation is large enough to request confirmation."
+    }
+  }
+}

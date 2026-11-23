@@ -1,0 +1,10 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "max_tokens": {
+      "title": "Maximum overview tokens",
+      "summary": "Limits the text budget used for the paper overview.",
+      "description": "Caps context included while collecting an overview of a paper."
+    }
+  }
+}

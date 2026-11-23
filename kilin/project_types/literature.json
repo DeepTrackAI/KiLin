@@ -1,38 +1,66 @@
 {
-  "display_name": "Literature collection",
+  "display_name": "Literature Collection",
   "description": "A collection of scientific literature and related documents.",
-  "source_directory": "documents",
   "extensions": [
     ".pdf",
+    ".doc",
+    ".docx",
     ".md",
-    ".txt"
+    ".txt",
+    ".tex",
+    ".bib",
+    ".bbl",
+    ".html"
   ],
   "max_file_bytes": 20971520,
   "retrieval_instruction": "Given a question about academic literature, retrieve relevant research papers, abstracts, and citations that help answer the question.",
   "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
   "answer_guidance": "Follow any length or format the question asks for (for example 'in two sentences' or 'as a list'). Otherwise keep the answer concise: about 150-300 words, or more when the question asks for detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
   "capabilities": {
-    "code_graph": "auto"
+    "code_graph": "auto",
+    "document_headers": true,
+    "source_cards": {
+      "enabled": true,
+      "kind": "scientific_paper",
+      "automatic": true
+    }
   },
   "history": {
-    "recent_turns": 2
+    "recent_turns": 2,
+    "exclude_disliked_answers": true
+  },
+  "conversation_memory": {
+    "enabled": false,
+    "questions": "all",
+    "answers": "selected",
+    "max_hits": 4,
+    "max_tokens": 2000
+  },
+  "generation": {
+    "temperature": 0.3,
+    "thinking": false
   },
   "default_intent": "question_answering",
   "intents": {
     "question_answering": {
-      "description": "Answer a question about the documents' content, methods, or findings, or what the papers say about a topic ('how does the method work?', 'summarize what the papers say about sleep quality', 'why did the authors choose this design?'). Not for a specific number, setting, or name, or a complete list of the things a paper includes (fact_finding), not for a summary of one particular paper (paper_overview), and not when the user asks to read through a whole document (document_reading).",
+      "description": "Answer a question about the documents' content, methods, or findings, or what the papers say about a topic ('how does the method work?', 'summarize what the papers say about sleep quality', 'why did the authors choose this design?', 'what kind of data does that study analyze?', 'does the paper's software support plug-ins?', 'what does the value in Figure 2 represent?'). Not for a specific number, setting, or name, or a complete list of the things a paper includes (fact_finding), not for a summary of one particular paper (paper_overview), and not when the user asks to read through a whole document (document_reading).",
       "system_prompt": "Answer the question directly and support each claim with the evidence.",
       "history": {
         "policy": "relevant"
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "hybrid",
+        "strategy": "source_first",
+        "max_sources": 8,
+        "passages_per_source": 2,
+        "max_passages": 20,
+        "evidence_tokens": 11000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },
     "fact_finding": {
-      "description": "A specific fact, or a complete list of specific things, stated in one paper or across every paper in the project: a number, a setting, or the names of the models, datasets, methods, tools, species, materials, or samples involved ('what sample size does that paper use?', 'which model does each paper use?', 'give a full list of the species studied in that paper', 'list all the datasets used across the papers', 'how many participants are in the Smith study?'). Reads every passage for a thorough answer, and offers a quick answer instead. Not for explanations or what the papers say about a topic (question_answering), and not for listing sentences, passages, or files.",
+      "description": "A specific fact, or a complete list of specific things, stated in one paper or across every paper in the project: a number, a setting, or the names of the models, datasets, methods, tools, species, materials, or samples involved ('what sample size does that paper use?', 'which model does each paper use?', 'give a full list of the species studied in that paper', 'list all the datasets used across the papers', 'how many participants are in the Smith study?', 'which tools does Table 2 of that paper list?'). Reads every passage for a thorough answer, and offers a quick answer instead. Not for explanations, what the papers say about a topic, what kind of data or measurements a study analyzes in general, or whether a paper supports a feature (question_answering), and not for listing sentences, passages, or files.",
       "history": {
         "policy": "relevant"
       },
@@ -42,8 +70,6 @@
       "tool": {
         "name": "find_fact",
         "part_tokens": 6000,
-        "note_tokens": 300,
-        "answer_tokens": 1024,
         "max_model_calls": 200,
         "confirmation": "always",
         "large_batches": 0
@@ -51,13 +77,26 @@
     },
     "compare_sources": {
       "description": "Compare papers, methods, findings, or claims across sources.",
+      "cues": [
+        "^(?!.*\\breport\\b).*\\bdiffer(?:s|ent)?\\s+from\\b",
+        "^(?!.*\\breport\\b).*\\bthe\\s+same\\s+[\\w-]+(?:\\s+[\\w-]+)?\\s+as\\b",
+        "^(?!.*\\breport\\b).*\\b(?:all|both)\\s+(?:the\\s+)?(?:\\w+\\s+)?(?:papers|articles|studies)\\s+use\\s+the\\s+same\\b",
+        "^\\s*(?:now\\s+)?compare\\b",
+        "\\bcompare\\s+(?:it|them|this|that)\\s+(?:with|to)\\b",
+        "\\bhow\\s+does\\s+(?:it|this|that)\\s+compare\\b"
+      ],
       "system_prompt": "Compare the sources point by point, and say where they agree and where they differ.",
       "history": {
         "policy": "relevant"
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "hybrid",
+        "strategy": "source_first",
+        "max_sources": 12,
+        "passages_per_source": 3,
+        "max_passages": 32,
+        "evidence_tokens": 16000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },
@@ -72,15 +111,22 @@
       "tool": {
         "name": "batch_review",
         "part_tokens": 6000,
-        "note_tokens": 400,
-        "answer_tokens": 1024,
         "max_model_calls": 20,
         "confirmation": "when_large",
         "large_batches": 3
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": true
       }
     },
     "paper_overview": {
       "description": "A short summary or overview of one paper, in the chat ('give me a short summary of the Smith paper', 'what is the Lee paper about?', 'summarize another paper', 'a quick summary of one of the papers'). Asks which paper when none is named. Not for a named report format (research_briefing, popular_science_summary, technical_summary, or experimental_protocol), whether or not the user asks to save a file, and not for what several papers say about a topic (question_answering).",
+      "cues": [
+        "^(?!.*\\b(?:briefing|report|templates?|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b).*\\b(?:an?\\s+)?(?:short\\s+|brief\\s+|quick\\s+)?overview\\s+of\\b",
+        "^(?!.*\\b(?:briefing|report|templates?|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b)(?!.*\\b(?:its|their|main|contributions|limitations|results|methods|findings)\\b)\\s*(?:now\\s+)?summari[sz]e\\s+(?:the|this|that|[\\w-]+\\.pdf)\\b",
+        "^(?!.*\\b(?:briefing|report|templates?|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b)\\s*(?:now\\s+)?tell\\s+me\\s+about\\s+(?:the|this|that)\\s+[\\w\\s-]+?\\s(?:paper|article|study)[.?!]?\\s*$"
+      ],
       "history": {
         "policy": "relevant"
       },
@@ -89,12 +135,18 @@
       },
       "tool": {
         "name": "paper_overview",
-        "max_tokens": 6000,
-        "answer_tokens": 500
+        "max_tokens": 6000
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "reference_check": {
-      "description": "Check one paper's references against the project's files: which cited papers are in the project and which are missing, where each reference is cited in the paper's text, and whether the cited papers support the sentences citing them ('check the references of the Smith paper', 'which papers cited by patil25 are missing from the project?', 'does the Lee paper cite its sources correctly?', 'are the claims in that paper supported by the papers it cites?'). Asks which paper when none is named. Not for what a paper says about a topic (question_answering) or a summary of one paper (paper_overview).",
+      "description": "Only about one paper's references and citations. Check them against the project's files: which cited papers are in the project and which are missing, where each reference is cited in the paper's text, and whether the cited papers support the sentences citing them ('check the references of the Smith paper', 'which papers cited by patil25 are missing from the project?', 'does the Lee paper cite its sources correctly?', 'are the claims in that paper supported by the papers it cites?'). Provides offline search links for missing references, and optionally resolves them online with explicit user approval ('find web links for missing references in that paper'). Link-only requests do not recheck scientific claims. Asks which paper when none is named. Not for what a paper says about a topic, or whether a paper supports, offers, or includes a feature or capability ('did that paper already support plug-ins?' is question_answering), and not for a summary of one paper (paper_overview).",
+      "requires": [
+        "\\b(?:referenc\\w*|citation\\w*|cit(?:e|es|ed|ing)|bibliograph\\w*)\\b"
+      ],
       "history": {
         "policy": "relevant"
       },
@@ -118,6 +170,28 @@
         "name": "suggest_reference"
       }
     },
+    "writing_check": {
+      "description": "Check the grammar, spelling and style of one document of the project, usually the user's own draft, or a part of it, and suggest corrections ('check the grammar and style of draft.tex', 'proofread the methods section', 'check the English of the second paragraph of the introduction', 'are there typos in my manuscript?', 'check this sentence: ...'). Asks which document when none is named. Not for checking references or citations (reference_check), not for whether claims are supported, and not for writing or rewriting text.",
+      "cues": [
+        "\\b(?:check|correct|fix|review)\\w*\\s+(?:\\w+\\s+){0,3}?(?:grammar|spelling|typos?|style|wording|english)\\b",
+        "\\bproofread\\w*\\b[^\\n]{0,80}?(?:\\S+\\.(?:tex|md|docx?|txt|pdf)\\b|\\b(?:manuscript|draft|paper|thesis|chapter|document|article|section)s?\\b)",
+        "\\b(?:any|are\\s+there)\\s+(?:\\w+\\s+){0,2}?(?:typos|(?:grammar|grammatical|spelling)\\s+(?:errors|mistakes))\\b",
+        "\\b(?:rephras\\w*|rewrit\\w*|reword\\w*|split\\w*|shorten\\w*|simplif\\w*|phrasing|alternatives?|better\\s+(?:version|wording))\\b[\\s\\S]{0,400}?\\bline\\s+\\d+\\b",
+        "\\bline\\s+\\d+\\b[\\s\\S]{0,400}?\\b(?:rephras\\w*|rewrit\\w*|reword\\w*|split\\w*|shorten\\w*|simplif\\w*|phrasing|alternatives?|better\\s+(?:version|wording))\\b"
+      ],
+      "requires": [
+        "\\b(?:grammar\\w*|proofread\\w*|spelling|typos?|stylistic|style|wording|copy-?edit\\w*)\\b|\\b(?:the|my|its|our)\\s+english\\b"
+      ],
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "writing_check"
+      }
+    },
     "research_briefing": {
       "description": "Generate a structured research briefing for a single scientific paper, emphasizing the research question, key findings, strength of evidence, limitations, and implications. Examples: \"write a research briefing for patil25\", \"prepare a research briefing of the Smith paper\". Use even without an explicit request to save a file. Not for a short informal summary (paper_overview).",
       "history": {
@@ -130,8 +204,6 @@
         "name": "generate_paper_summary",
         "template": "research_briefing",
         "part_tokens": 6000,
-        "note_tokens": 500,
-        "section_tokens": 600,
         "repair_attempts": 3,
         "max_model_calls": 20,
         "confirmation": "when_large",
@@ -150,8 +222,6 @@
         "name": "generate_paper_summary",
         "template": "popular_science_summary",
         "part_tokens": 6000,
-        "note_tokens": 500,
-        "section_tokens": 600,
         "repair_attempts": 3,
         "max_model_calls": 20,
         "confirmation": "when_large",
@@ -170,8 +240,6 @@
         "name": "generate_paper_summary",
         "template": "technical_summary",
         "part_tokens": 6000,
-        "note_tokens": 500,
-        "section_tokens": 600,
         "repair_attempts": 3,
         "max_model_calls": 20,
         "confirmation": "when_large",
@@ -190,12 +258,61 @@
         "name": "generate_paper_summary",
         "template": "experimental_protocol",
         "part_tokens": 6000,
-        "note_tokens": 500,
-        "section_tokens": 600,
         "repair_attempts": 3,
         "max_model_calls": 20,
         "confirmation": "when_large",
         "large_batches": 3
+      }
+    },
+    "templated_report": {
+      "description": "Write a report on one document with one of the project's report templates (Markdown files in templates/), named by its title or file name, and save it to outputs/; also list the project's templates or check one. Examples: \"write a journal club summary of smith20\", \"fill the lab notes template for patil25\", \"which templates do I have?\", \"check my journal_club template\". When no template is named, the user chooses one. Not for a short informal summary (paper_overview).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "generate_paper_summary",
+        "template": "choose",
+        "part_tokens": 6000,
+        "repair_attempts": 3,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      },
+      "cues": [
+        "\\b(?:using|with|from|in|into|per)\\s+(?:the\\s+|my\\s+|our\\s+|this\\s+|a\\s+)?[\\w\\s-]{0,40}?\\btemplate\\b",
+        "\\btemplate\\b[\\s\\S]{0,40}?\\b(?:for|of|on)\\b",
+        "\\b(?:list|which|what|show|available)\\b[^\\n]{0,40}\\btemplates\\b|\\btemplates\\b[^\\n]{0,40}\\b(?:do\\s+(?:i|we)\\s+have|available)\\b",
+        "\\b(?:check|validate|test|verify)\\b[^\\n]{0,40}\\btemplate\\b"
+      ],
+      "requires": [
+        "\\b(?:templates?|reports?|briefings?|summar(?:y|ies)|protocols?|notes|write|prepare|make|generate|create|produce|draft|fill)\\b"
+      ]
+    },
+    "templated_project_report": {
+      "description": "Write one report on all the documents of the project with a project report template (scope: project, in templates/), reading every document, and save it to outputs/: a project overview, a literature table, or a template of the user's. Examples: \"write a project overview\", \"summarize the whole project\", \"make a literature table of all the papers\", \"wrap up everything in the collection\". When no template is named, the user chooses one. Not for an overview of one topic across the papers (report_generation), nor for one document (paper reports).",
+      "cues": [
+        "\\b(?:summar\\w*|overview|report|tables?|wrap\\s*up|synthes\\w*|review)\\b[^\\n]{0,60}?\\b(?:whole|entire|all)\\s+(?:of\\s+)?(?:the\\s+|this\\s+|my\\s+|our\\s+)?(?:project|collection|papers|documents|articles|sources)\\b",
+        "\\b(?:whole|entire)\\s+(?:project|collection)\\b[^\\n]{0,40}?\\b(?:summar\\w*|overview|report)\\b",
+        "\\bwrap\\s*up\\b[^\\n]{0,40}?\\b(?:everything|project|collection|all)\\b",
+        "\\bproject\\s+(?:report|summary|overview|wrap[\\s-]*up)\\b",
+        "\\b(?:every|each)\\s+(?:paper|document|article)\\b[^\\n]{0,60}?\\b(?:table|report|overview)\\b",
+        "\\bproject\\s+(?:report\\s+)?templates?\\b"
+      ],
+      "requires": [
+        "\\b(?:project|collection|all\\s+(?:the\\s+|of\\s+the\\s+)?(?:papers|documents|articles|sources)|every\\s+(?:paper|document|article)|everything|whole|entire|templates?|table)\\b"
+      ],
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "project_summary",
+        "template": "choose"
       }
     },
     "project_inventory": {
@@ -210,10 +327,14 @@
         "name": "project_inventory",
         "max_listed": 200,
         "max_folders": 20
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "mention_listing": {
-      "description": "The sentences or files that mention or contain an exact word, name, or phrase, or whether, where, or how often it appears, in one paper or across the papers, including spelling variants such as 'COVID19' and 'COVID-19' ('give me a list of sentences in that paper mentioning MRI', 'how many sentences in that paper mention MRI?', 'does that paper mention MRI?', 'how many papers mention transfer learning?', 'check whether all the papers contain the phrase \"random forest\"', 'how many times does the Smith paper say MRI?'). Exhaustive and exact. Not when the sentences must match a meaning rather than a word (topic_listing), and not for sorting mentions into categories.",
+      "description": "The sentences or files that mention or contain an exact word, name, or phrase, or whether, where, or how often it appears, in one paper or across the papers, including spelling variants such as 'COVID19' and 'COVID-19' ('give me a list of sentences in that paper mentioning MRI', 'how many sentences in that paper mention MRI?', 'does that paper mention MRI?', 'how many papers mention transfer learning?', 'check whether all the papers contain the phrase \"random forest\"', 'how many times does the Smith paper say MRI?'). Exhaustive and exact. Not when the sentences must match a meaning rather than a word (topic_listing), not for what a table, figure, or section of a paper lists (fact_finding), and not for sorting mentions into categories.",
       "history": {
         "policy": "none"
       },
@@ -226,10 +347,17 @@
         "whole_words": true,
         "context_lines": 1,
         "max_listed": 100
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "topic_listing": {
       "description": "Only when the user asks for the sentences, passages, or files that match a description judged by meaning, not by an exact word: 'list the sentences that discuss the study's limitations', 'which files use method X to study Y?', 'how many of the files are related to X?', 'list the papers that apply X to Y'. Reads every passage. Not for whether or where a word, name, or phrase appears, or the sentences that contain or mention it ('does it mention X?', 'how many papers mention X?', 'list the sentences that mention X' are mention_listing), and not for summarizing what the papers say.",
+      "cues": [
+        "^\\s*(?:now\\s+)?(?:find|show|list)\\s+(?:me\\s+)?(?:new\\s+|more\\s+|other\\s+|the\\s+)?passages?\\b"
+      ],
       "history": {
         "policy": "none"
       },
@@ -244,6 +372,10 @@
         "max_listed": 100,
         "confirmation": "when_large",
         "large_batches": 3
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "mention_classification": {
@@ -265,6 +397,10 @@
         "max_model_calls": 30,
         "confirmation": "when_large",
         "large_batches": 2
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "report_generation": {
@@ -276,12 +412,20 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "hybrid",
+        "strategy": "source_first",
+        "max_sources": 12,
+        "passages_per_source": 2,
+        "max_passages": 28,
+        "evidence_tokens": 14000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },
     "refine_results": {
       "description": "Narrow down or judge the items an earlier answer listed (mentions, sentences, files, or passages) by a criterion, without searching again ('among those 7, how many are about XYZ 2?', 'of these sentences, which discuss limitations?', 'which of them are in the methods section?'). Judges each listed item.",
+      "cues": [
+        "^(?!.*\\b(?:find|search)\\b).*\\b(?:you\\s+(?:just\\s+)?listed|previously\\s+listed|listed\\s+(?:earlier|before|above))\\b"
+      ],
       "history": {
         "policy": "relevant"
       },
@@ -295,7 +439,7 @@
       }
     },
     "source_context": {
-      "description": "Show the exact source text behind an earlier answer: the sentence or passage it cited, word for word, with the sentences around it, and what it is talking about ('show me that sentence', 'where exactly does it say that?', 'what is that passage about?', 'show me the context of that quote'). Reads only the cited passages and their neighbours; no new search.",
+      "description": "Show the exact source text behind an earlier answer: the sentence or passage it cited, word for word, with the sentences around it, and what it is talking about ('show me that sentence', 'where exactly does it say that?', 'what is that passage about?', 'show me the context of that quote'). Reads only the cited passages and their neighbours; no new search. Only about the sources of an earlier answer: not for a question about a paper's figure, table, or value (question_answering), and not for finding new passages (topic_listing).",
       "history": {
         "policy": "relevant"
       },
@@ -305,8 +449,7 @@
       "tool": {
         "name": "show_source",
         "context_sentences": 2,
-        "max_passages": 3,
-        "answer_tokens": 400
+        "max_passages": 3
       }
     },
     "conversation_followup": {
@@ -330,6 +473,7 @@
       }
     },
     "small_talk": {
+      "thinking": false,
       "description": "Only greetings, thanks, goodbyes, or pleasantries such as 'how are you?'. Any question about a term, name, method, the sources, an earlier answer, or the conversation itself is never small talk.",
       "system_prompt": "This message is small talk, not a question about the sources, so the evidence rules above do not apply. Reply in one short, friendly sentence. Do not cite sources, summarize the conversation, mention evidence, or invent project details.",
       "answer_guidance": "Reply in one short sentence.",
@@ -346,27 +490,63 @@
         "how (are|r) (you|u)( doing)?( today)?",
         "how('s| is) it going( today)?|how('s| is) your day( going)?|what'?s up|sup",
         "(bye|goodbye|see you|see you later|good night|have a (nice|good) day)"
+      ],
+      "memory": {
+        "indexing": "never",
+        "read": false
+      }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files and what it does with them: how to add, upload, import, attach, drag, or remove files or folders ('how do I add my papers?', 'how to drag files', 'can I upload a folder?', 'what do you mean by adding files?', 'what do you do with my files?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "(how (do|can|should) i|how to|can i|where (do|should|can) i) (add|upload|import|attach|drag|drop|put|place|remove|delete)( and drop| in)? (my |a |the |some |more |new |these |this |our )?(whole |own |other )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?",
+        "what do you mean( by)? (add|adding|upload|uploading|attach|attaching|import|importing|sources?|files?)( .*)?",
+        "what (do|will|can) you do (with|to|for) (my|the|these|our) (files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
       ]
     }
   },
   "welcome_prompts": [
-    "What would you like to understand from your literature?",
-    "Which concept should we explore across these sources?",
-    "What evidence are you looking for?",
-    "What would you like to compare in the literature?",
-    "Which finding should we investigate?"
+    "What would you like to read or understand today?",
+    "Which question shall we look into?",
+    "Add your papers, or ask what I can do for you."
+  ],
+  "welcome_templates": [
+    "What would you like to understand about {theme}?",
+    "What would you like to explore in your papers on {theme}?",
+    "Which question about {theme} shall we answer from your sources?"
   ],
   "suggestions": [
-    "Turn any paper into a Nature research briefing",
-    "Summarize what the papers say about …",
-    "Give me a short summary of …",
-    "Check the references of …",
-    "Which datasets does each paper use?",
-    "Compare how the papers approach …",
-    "What are the limitations of …?",
-    "Show every sentence about …",
-    "Show every sentence that mentions …",
-    "Which papers mention …?",
-    "How many papers are in this project?"
-  ]
+    "What can you do for me?",
+    "How do I add my files?"
+  ],
+  "suggestion_templates": {
+    "question_answering": "What do the papers say about {topic}?",
+    "fact_finding": "Which datasets does {file} use?",
+    "compare_sources": "Compare the methods of {file} and {file2}.",
+    "document_reading": "Go through the whole {file} and tell me which software it uses.",
+    "paper_overview": "Give me a short summary of {file}.",
+    "reference_check": "Check the references of {file}.",
+    "suggest_reference": "Which paper could I cite for a sentence about {topic}?",
+    "writing_check": "Check the grammar and spelling of {file}.",
+    "research_briefing": "Write a research briefing for {file}.",
+    "popular_science_summary": "Explain {file} for a general audience.",
+    "technical_summary": "Write a technical summary of {file}.",
+    "experimental_protocol": "Extract an experimental protocol from {file}.",
+    "project_inventory": "How many papers are in this project?",
+    "mention_listing": "Which papers mention {term}?",
+    "topic_listing": "Which papers are related to {topic}?",
+    "mention_classification": "Which mentions of {term} describe the authors' own work, and which cite other work?",
+    "report_generation": "Write an overview of how the papers approach {topic}.",
+    "assistant_help": "What can you do for me?"
+  }
 }

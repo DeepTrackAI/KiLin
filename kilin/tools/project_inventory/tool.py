@@ -95,21 +95,44 @@ _TYPE_WORDS: Final[dict[str, tuple[str, ...]]] = {
     "readme": (".md",),
     "readmes": (".md",),
     "txt": (".txt",),
+    "doc": (".doc",),
+    "docx": (".docx",),
+    "latex": (".tex",),
+    "tex": (".tex",),
+    "bib": (".bib",),
+    "bibtex": (".bib",),
+    "bbl": (".bbl",),
+    "bibliographies": (".bib", ".bbl"),
     "notebook": (".ipynb",),
     "notebooks": (".ipynb",),
     "python": (".py",),
     "matlab": (".m",),
-    "script": (".py", ".m"),
-    "scripts": (".py", ".m"),
+    "script": (".py", ".m", ".js", ".r"),
+    "scripts": (".py", ".m", ".js", ".r"),
+    "javascript": (".js",),
+    "js": (".js",),
+    "json": (".json",),
+    "html": (".html",),
+    "webpage": (".html",),
+    "webpages": (".html",),
 }
 # How the answer names each suffix.
 _TYPE_NAMES: Final[dict[str, str]] = {
     ".pdf": "PDF",
     ".md": "Markdown",
     ".txt": "text",
+    ".doc": "Word",
+    ".docx": "Word",
+    ".tex": "LaTeX",
+    ".bib": "BibTeX",
+    ".bbl": "LaTeX bibliography",
     ".ipynb": "notebook",
     ".py": "Python",
     ".m": "MATLAB",
+    ".js": "JavaScript",
+    ".json": "JSON",
+    ".html": "HTML",
+    ".r": "R",
 }
 # Questions about files that could not be read list only those files.
 _UNREADABLE_WORDS: Final[re.Pattern[str]] = re.compile(
@@ -197,6 +220,12 @@ def file_types_in(question: str) -> tuple[str, ...]:
     # "text" alone is too common ("searchable text"); "text files" counts.
     if re.search(r"\btext files?\b", text):
         found.append(".txt")
+    # "word" alone is too common ("the word MRI"); "Word files" counts.
+    if re.search(r"\bword (?:files?|documents?|docs?)\b", text):
+        found.extend((".doc", ".docx"))
+    # "r" alone is too common; "R files" and "R scripts" count.
+    if re.search(r"\br (?:files?|scripts?|code)\b", text):
+        found.append(".r")
 
     for word in re.findall(r"\.?[a-z]+", text):
         if word.startswith(".") and word in _TYPE_NAMES:

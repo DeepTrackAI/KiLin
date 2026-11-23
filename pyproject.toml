@@ -9,13 +9,26 @@ authors = [
 ]
 description = "Local, provider-independent question-answering application"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
+keywords = ["question answering", "local LLM", "RAG", "literature", "code"]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Science/Research",
+]
 # Packages required regardless of the selected LLM backend.
 dependencies = [
     "huggingface-hub==1.29.0",
     "numpy==2.5.2",
+    "olefile==0.47",
     "pdfminer-six==20260107",
     "pypdf==6.16.2",
+    "python-docx==1.2.0",
 ]
 
 # Install one computation backend for model work; GUI adds only Qt.
@@ -31,6 +44,16 @@ torch = [
 gui = [
     "PySide6>=6.8,<7",
 ]
+# Everything the desktop app needs on this computer: Qt plus the backend
+# for the platform, MLX on Apple-silicon Macs and PyTorch elsewhere. This
+# is what `pip install "kilin[app]"` and the macOS app install.
+app = [
+    "PySide6>=6.8,<7",
+    "mlx-embeddings==0.0.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-lm==0.31.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "torch==2.14.0; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "transformers==5.16.1; sys_platform != 'darwin' or platform_machine != 'arm64'",
+]
 # Extra dependencies for the CodeRAG-Bench evaluation notebooks only.
 bench = [
     "datasets==5.0.1",
@@ -38,8 +61,15 @@ bench = [
 ]
 
 
+[project.urls]
+Repository = "https://github.com/giovannivolpe/KiLin"
+
 [project.scripts]
 kilin = "kilin.cli:main"
+
+# Opens the desktop window without a terminal (on Windows, no console).
+[project.gui-scripts]
+kilin-gui = "kilin.gui.app:main"
 
 [build-system]
 requires = ["setuptools==84.0.0"]
@@ -52,31 +82,47 @@ include = ["kilin*"]
 # Data-only folders: project types and report templates.
 "kilin" = [
     "kilin_defaults.json",
+    "settings_info.json",
     "repository_reason_codes.json",
     "project_types/*.json",
 ]
-"kilin.tools.project_inventory" = ["README.md", "defaults.json"]
-"kilin.tools.scan_and_list" = ["README.md", "defaults.json"]
-"kilin.tools.batch_classify" = ["README.md", "defaults.json"]
-"kilin.tools.batch_review" = ["README.md", "defaults.json"]
-"kilin.tools.filter_results" = ["README.md", "defaults.json"]
-"kilin.tools.find_fact" = ["README.md", "defaults.json"]
-"kilin.tools.find_passages" = ["README.md", "defaults.json"]
-"kilin.tools.paper_overview" = ["README.md", "defaults.json"]
-"kilin.tools.reference_check" = ["README.md", "defaults.json"]
-"kilin.tools.show_source" = ["README.md", "defaults.json"]
-"kilin.tools.suggest_reference" = ["README.md", "defaults.json"]
+"kilin.tools.project_inventory" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.scan_and_list" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.batch_classify" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.batch_review" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.filter_results" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.find_fact" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.find_passages" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.paper_overview" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.reference_check" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.show_source" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.suggest_reference" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.writing_check" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.project_summary" = [
+    "README.md",
+    "defaults.json",
+    "settings_info.json",
+    "templates/*.md",
+]
+"kilin.tools.assistant_guide" = ["README.md", "defaults.json", "settings_info.json"]
 "kilin.tools.generate_paper_summary" = [
     "README.md",
     "defaults.json",
+    "settings_info.json",
     "templates/*.md",
 ]
 "kilin.gui" = [
     "defaults.json",
+    "terms.txt",
     "web/*.html",
     "web/*.css",
     "web/*.js",
+    "web/katex/katex.min.js",
+    "web/katex/LICENSE",
+    "web/katex/README.md",
     "icons/*.png",
+    "icons/*.svg",
+    "icons/README.md",
 ]
 
 # Development tools are installed by `uv sync` but are not runtime dependencies.

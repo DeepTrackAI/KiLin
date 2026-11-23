@@ -1,0 +1,25 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "part_tokens": {
+      "title": "Part token budget",
+      "summary": "Sets the token budget for one part of a multi-part operation.",
+      "description": "Constrains the context provided for each model call when work is split into parts."
+    },
+    "max_model_calls": {
+      "title": "Maximum model calls",
+      "summary": "Caps model calls permitted for one tool operation.",
+      "description": "Limits computational cost and processing time. Work may stop early before every candidate is examined."
+    },
+    "confirmation": {
+      "title": "Confirmation policy",
+      "summary": "Controls when user confirmation is required before a tool runs.",
+      "description": "Depending on the selected policy, the tool may ask before processing large or otherwise costly workloads."
+    },
+    "large_batches": {
+      "title": "Large workload threshold",
+      "summary": "Sets the batch threshold used by the confirmation policy.",
+      "description": "Used to decide whether a planned multi-batch operation is large enough to request confirmation."
+    }
+  }
+}

@@ -4,11 +4,14 @@
     "VERIFY": true,
     "PASSAGES": 6,
     "PASSAGE_TOKENS": 5000,
-    "ANSWER_TOKENS": 250,
-    "MAX_MODEL_CALLS": 100,
+    "RETRY_PASSAGES": 8,
+    "FOCUS_CLAIMS": true,
+    "MAX_CHECKED_CLAIMS": 100,
     "QUICK_CLAIMS": 5,
     "CONFIRMATION": "when_large",
-    "LARGE_BATCHES": 10
+    "LARGE_BATCHES": 10,
+    "ONLINE_LOOKUP": false,
+    "MAX_ONLINE": 100
   },
   "REFERENCES": {
     "REFERENCE_CHARACTERS": 100000,
@@ -49,6 +52,10 @@
     "REPLY_TOKENS_PER_SECOND": 25.0,
     "CALL_SECONDS": 1.0,
     "PROMPT_OVERHEAD_TOKENS": 450,
-    "REPLY_SHARE": 0.6
+    "REPLY_SHARE": 0.6,
+    "JUDGE_REPLY_TOKENS": 256
+  },
+  "MODEL_CALLS": {
+    "THINKING": "inherit"
   }
 }

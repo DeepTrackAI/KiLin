@@ -18,7 +18,7 @@ from pathlib import Path
 import re
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from kilin import answering
 from kilin.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
@@ -150,6 +150,7 @@ class _FakeChat:
         *,
         max_new_tokens: int | None = None,
         token_callback: Callable[[str], None] | None = None,
+        language_context: tuple[str, ...] = (),
     ) -> str:
         """Capture the side-request state and simulate a model response.
 
@@ -161,6 +162,8 @@ class _FakeChat:
             Explicit generation length. Defaults to ``None``.
         token_callback: object, optional
             Receives generated text when supplied. Defaults to ``None``.
+        language_context: tuple[str, ...], optional
+            Original user messages for script policy. Defaults to ``()``.
 
         Returns
         -------
@@ -177,6 +180,7 @@ class _FakeChat:
                 "temperature": self.temperature,
                 "history": [dict(item) for item in self.messages],
                 "token_callback": token_callback,
+                "language_context": language_context,
             }
         )
         self.messages.append({"role": USER_ROLE, "content": message})
@@ -202,6 +206,10 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
             "MAX_RELATED_TURNS": answering.MAX_RELATED_TURNS,
             "MAX_LISTED_TURNS": answering.MAX_LISTED_TURNS,
             "ROUTER_MAX_TOKENS": answering._ROUTER_MAX_TOKENS,
+            "SUMMARY_MAX_TOKENS": answering._SUMMARY_MAX_TOKENS,
+            "SUMMARY_ANSWER_MAX_CHARACTERS": (
+                answering._SUMMARY_ANSWER_MAX_CHARACTERS
+            ),
             "REPRESENTATION_MAX_CHARACTERS": (
                 answering._REPRESENTATION_MAX_CHARACTERS
             ),
@@ -243,6 +251,8 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
                 "MAX_RELATED_TURNS",
                 "MAX_LISTED_TURNS",
                 "ROUTER_MAX_TOKENS",
+                "SUMMARY_MAX_TOKENS",
+                "SUMMARY_ANSWER_MAX_CHARACTERS",
                 "REPRESENTATION_MAX_CHARACTERS",
                 "REPRESENTATION_MAX_SOURCES",
                 "SHORT_QUESTION_MAX_WORDS",
@@ -255,7 +265,35 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
 
 
 class TestStripThinking(unittest.TestCase):
-    """Test removal of optional model reasoning from visible answers."""
+    """Test extraction and removal of model-generated thinking text."""
+
+    def test_extracts_complete_and_template_opened_thinking(self) -> None:
+        """Read thinking separately from answer text in common formats."""
+
+        self.assertEqual(
+            answering.extract_thinking(
+                "<think>First</think>Body<think>Second</think>"
+            ),
+            "First\n\nSecond",
+        )
+        self.assertEqual(
+            answering.extract_thinking("Template reasoning</think>Answer"),
+            "Template reasoning",
+        )
+        self.assertEqual(
+            answering.extract_thinking("Implicit</think><think>More</think>"),
+            "Implicit\n\nMore",
+        )
+
+    def test_extracts_open_thinking_without_inventing_answer(self) -> None:
+        """Keep an unfinished thought without retaining ordinary text."""
+
+        self.assertEqual(
+            answering.extract_thinking("Text<think>unfinished"),
+            "unfinished",
+        )
+        self.assertEqual(answering.extract_thinking("Plain answer"), "")
+        self.assertEqual(answering.extract_thinking(""), "")
 
     def test_removes_complete_thinking_blocks(self) -> None:
         """Remove multiple reasoning blocks without removing answer text."""
@@ -311,9 +349,108 @@ class TestSideReply(unittest.TestCase):
                         {"role": SYSTEM_ROLE, "content": "Side instructions"}
                     ],
                     "token_callback": None,
+                    "language_context": (),
                 }
             ],
         )
+
+    def test_tool_side_reply_inherits_generation_settings(self) -> None:
+        """Inherit thinking/temperature and cap the tool output budget."""
+
+        chat = _FakeChat()
+        chat.max_new_tokens = 64
+        original = [dict(message) for message in chat.messages]
+        result = answering.side_reply(
+            chat, "Tool system", "Tool question", max_new_tokens=250,
+            inherit_settings=True,
+        )
+        self.assertEqual(result, "Final reply.")
+        self.assertEqual(chat.messages, original)
+        observation = chat.observations[0]
+        self.assertTrue(observation["thinking"])
+        self.assertEqual(observation["temperature"], 0.6)
+        self.assertEqual(observation["max_new_tokens"], 64)
+        # Router calls retain their existing deterministic behavior.
+        answering.side_reply(
+            chat, "Router", "Choose", max_new_tokens=30,
+        )
+        self.assertFalse(chat.observations[1]["thinking"])
+        self.assertEqual(chat.observations[1]["temperature"], 0.0)
+
+    def test_visible_tool_reply_preserves_thinking_and_stream(self) -> None:
+        """Return the raw tool answer without altering the streamed text."""
+
+        chat = _FakeChat()
+        history = [dict(message) for message in chat.messages]
+        streamed: list[str] = []
+
+        answer = answering.side_reply(
+            chat, "Tool", "Summarize", max_new_tokens=120,
+            token_callback=streamed.append, inherit_settings=True,
+            preserve_thinking=True,
+        )
+
+        self.assertEqual(answer, "<think>draft</think>Final reply.")
+        self.assertEqual(streamed, [answer])
+        self.assertEqual(chat.messages, history)
+        self.assertTrue(chat.thinking)
+        self.assertEqual(chat.temperature, 0.6)
+        self.assertTrue(chat.observations[0]["thinking"])
+
+    def test_internal_tool_reply_strips_thinking_by_default(self) -> None:
+        """Do not expose thinking from tool calls used internally."""
+
+        chat = _FakeChat()
+        answer = answering.side_reply(
+            chat, "Tool", "Inspect", max_new_tokens=120,
+            inherit_settings=True,
+        )
+
+        self.assertEqual(answer, "Final reply.")
+        self.assertTrue(chat.observations[0]["thinking"])
+
+    def test_tool_side_reply_inherits_token_budget_by_default(self) -> None:
+        """No tool cap: use the active user-selected output allowance."""
+
+        chat = _FakeChat()
+        chat.max_new_tokens = 4096
+        original = [dict(message) for message in chat.messages]
+        result = answering.side_reply(
+            chat, "Tool system", "Check the quotation",
+            max_new_tokens=None, inherit_settings=True,
+        )
+        self.assertEqual(result, "Final reply.")
+        self.assertEqual(chat.messages, original)
+        observation = chat.observations[0]
+        self.assertEqual(observation["max_new_tokens"], 4096)
+        self.assertTrue(observation["thinking"])
+        self.assertEqual(observation["temperature"], 0.6)
+
+        # Thinking bypasses a local cap, while respecting the user maximum.
+        answering.side_reply(
+            chat, "Tool system", "Check the quotation",
+            max_new_tokens=2048, inherit_settings=True,
+        )
+        self.assertEqual(chat.observations[1]["max_new_tokens"], 4096)
+        answering.side_reply(
+            chat, "Tool system", "Check the quotation",
+            max_new_tokens=8192, inherit_settings=True,
+        )
+        self.assertEqual(chat.observations[2]["max_new_tokens"], 4096)
+
+    def test_tool_side_reply_restores_history_after_failure(self) -> None:
+        """An inherited tool reply cannot corrupt the conversation."""
+
+        chat = _FakeChat(reply_error=RuntimeError("model failed"))
+        original = [dict(message) for message in chat.messages]
+        with self.assertRaisesRegex(RuntimeError, "model failed"):
+            answering.side_reply(
+                chat, "Tool", "Question", max_new_tokens=120,
+                inherit_settings=True,
+            )
+        self.assertEqual(chat.messages, original)
+        self.assertTrue(chat.thinking)
+        self.assertEqual(chat.temperature, 0.6)
 
     def test_side_reply_passes_token_callback(self) -> None:
         """Forward streaming output without retaining side messages."""
@@ -470,6 +607,35 @@ class TestRouting(unittest.TestCase):
         self.assertIsNone(decision.fallback)
         self.assertIn("code_generation", decision.raw)
 
+    def test_writing_router_uses_default_only_as_fallback(self) -> None:
+        """Preserve source-free edits and use grounded fallback on errors.
+
+        """
+
+        writing = project_type("writing")
+        cases = (
+            (
+                '{"intent": "writing", "standalone": true}',
+                "Help me improve my draft", "writing",
+            ),
+            (
+                "invalid router output",
+                "Help me improve my draft", "grounded_writing",
+            ),
+            (
+                '{"intent": "grounded_writing", "standalone": true}',
+                "Rewrite this abstract for clarity", "writing",
+            ),
+        )
+        for reply, question, expected in cases:
+            with self.subTest(reply=reply, question=question):
+                with patch.object(answering, "side_reply",
+                                  return_value=reply):
+                    decision = answering.route_question(
+                        object(), writing, [], question
+                    )
+                self.assertEqual(decision.intent, expected)
+
     def test_unknown_intent_falls_back(self) -> None:
         """Preserve the default intent and explain an unknown identifier."""
 
@@ -616,6 +782,151 @@ class TestRouting(unittest.TestCase):
         self.assertIsNone(mixed.shortcut)
         router.assert_called_once()
 
+    def test_follow_up_tools_need_an_earlier_answer(self) -> None:
+        """Replace an answer-inspecting tool for a new question on a file."""
+
+        literature = project_type("literature")
+        reply = '{"intent": "source_context", "standalone": true}'
+        cases = (
+            ("In Figure 1G of smith20.pdf, what does 79.7 represent?",
+             literature.default_intent),
+            ("Show the sentence you cited from smith20.pdf.",
+             "source_context"),
+            ("Show the context of the first cited passage.",
+             "source_context"),
+        )
+        for question, intent in cases:
+            with self.subTest(question=question):
+                with patch.object(answering, "side_reply",
+                                  return_value=reply):
+                    decision = answering.route_question(
+                        object(), literature, self.turns, question
+                    )
+                self.assertEqual(decision.intent, intent)
+                if intent == literature.default_intent:
+                    self.assertIn("names a file", decision.fallback)
+
+    def test_follow_up_tools_are_rerouted_without_them(self) -> None:
+        """Ask the router again without tools that need an earlier answer."""
+
+        literature = project_type("literature")
+        replies = [
+            '{"intent": "source_context", "standalone": true}',
+            '{"intent": "topic_listing", "standalone": true}',
+        ]
+        question = (
+            "Which passages of smith20.pdf explain how its interface works?"
+        )
+        with patch.object(
+            answering, "side_reply", side_effect=replies
+        ) as reply:
+            decision = answering.route_question(
+                object(), literature, self.turns, question
+            )
+
+        self.assertEqual(decision.intent, "topic_listing")
+        self.assertIn("source_context replaced by topic_listing",
+                      decision.fallback)
+        first, second = (call.args[2] for call in reply.call_args_list)
+        self.assertIn("- source_context:", first)
+        self.assertNotIn("- source_context:", second)
+        self.assertIn("- topic_listing:", second)
+
+    def test_wording_cues_set_the_intent(self) -> None:
+        """Let clear wording overrule the router's intent."""
+
+        literature = project_type("literature")
+        cases = (
+            ("Give me an overview of the BRAPH 2 paper.", "research_briefing",
+             "paper_overview"),
+            ("Prepare a research briefing for smith20.pdf.",
+             "research_briefing", "research_briefing"),
+            ("Summarize its main contributions and limitations.",
+             "question_answering", "question_answering"),
+            ("How does BRAPH 2 differ from the earlier BRAPH framework?",
+             "question_answering", "compare_sources"),
+            ("Write a structured report comparing the methods of a.pdf "
+             "and b.pdf.", "report_generation", "report_generation"),
+            ("Of the BRAPH mentions you listed, which describe software "
+             "features?", "mention_classification", "refine_results"),
+            ("Find new passages discussing interfaces, not just the "
+             "earlier matches.", "refine_results", "topic_listing"),
+        )
+        for question, routed, expected in cases:
+            with self.subTest(question=question):
+                reply = json.dumps({"intent": routed, "standalone": True})
+                with patch.object(answering, "side_reply",
+                                  return_value=reply) as call:
+                    decision = answering.route_question(
+                        object(), literature, self.turns, question
+                    )
+                self.assertEqual(decision.intent, expected)
+                self.assertEqual(call.call_count, 1)
+                if routed != expected:
+                    self.assertIn("set by the question's wording",
+                                  decision.fallback)
+
+    def test_code_routing_cues_preserve_listing_and_generation(
+        self,
+    ) -> None:
+        """Apply code relation cues without hijacking other code intents."""
+
+        code = project_type("code")
+        cases = (
+            ("Which functions call save?", "mention_listing",
+             "code_explanation"),
+            ("What calls save?", "mention_listing", "code_explanation"),
+            ("Find every use of save.", "mention_listing",
+             "mention_listing"),
+            ("List every call to save.", "mention_listing",
+             "mention_listing"),
+            ("Write a function which calls save.", "code_generation",
+             "code_generation"),
+            ("Which functions handle loading?", "topic_listing",
+             "topic_listing"),
+        )
+        for question, routed, expected in cases:
+            with self.subTest(question=question):
+                reply = json.dumps({"intent": routed, "standalone": True})
+                with patch.object(
+                    answering, "side_reply", return_value=reply
+                ) as router:
+                    decision = answering.route_question(
+                        object(), code, [], question
+                    )
+                self.assertEqual(decision.intent, expected)
+                router.assert_called_once()
+
+    def test_required_words_rule_out_an_intent(self) -> None:
+        """Ask again without an intent whose required words are absent."""
+
+        literature = project_type("literature")
+        replies = [
+            '{"intent": "reference_check", "standalone": true}',
+            '{"intent": "question_answering", "standalone": true}',
+        ]
+        question = "Did the original paper a.pdf support plug-ins?"
+        with patch.object(
+            answering, "side_reply", side_effect=replies
+        ) as reply:
+            decision = answering.route_question(
+                object(), literature, self.turns, question
+            )
+
+        self.assertEqual(decision.intent, "question_answering")
+        self.assertIn("lacks its required words", decision.fallback)
+        self.assertNotIn("- reference_check:",
+                         reply.call_args_list[1].args[2])
+        with patch.object(
+            answering, "side_reply",
+            return_value='{"intent": "reference_check", "standalone": true}',
+        ):
+            kept = answering.route_question(
+                object(), literature, self.turns,
+                "Check the references of a.pdf.",
+            )
+        self.assertEqual(kept.intent, "reference_check")
+
     def test_router_errors_do_not_stop_answers(self) -> None:
         """Use a fallback when generation of the route raises."""
 
@@ -645,6 +956,269 @@ class TestRouting(unittest.TestCase):
         self.assertTrue(decision.standalone)
         self.assertEqual(decision.related_turn_ids, ())
         self.assertEqual(decision.intent, self.config.default_intent)
+
+
+class TestRepeatedQuestions(unittest.TestCase):
+    """Test that the router is told when a question repeats a turn."""
+
+    def setUp(self) -> None:
+        """Create a conversation whose second of three turns used a tool."""
+
+        self.config = project_type("code")
+        self.turns = [
+            _turn("Explain the fit function", "Fit trains [1]. More."),
+            _turn("List every MRI scanner", "Two scanners [1]. More."),
+            _turn("Explain the predict function", "It predicts [1]. More."),
+        ]
+        self.turns[1].parameters = {"intent": "code_generation"}
+
+    def _route(
+        self,
+        question: str,
+        excluded: frozenset[int] = frozenset(),
+    ) -> tuple[answering.RouteDecision, str]:
+        """Route a question and return the router's user prompt.
+
+        Parameters
+        ----------
+        question: str
+            User question being classified.
+        excluded: frozenset[int], optional
+            Turns excluded from routing. Defaults to none.
+
+        Returns
+        -------
+        tuple[answering.RouteDecision, str]
+            The decision, and the prompt the router model received.
+
+        """
+
+        reply = '{"intent": "debugging", "standalone": true}'
+        with patch.object(
+            answering, "side_reply", return_value=reply
+        ) as side:
+            decision = answering.route_question(
+                object(), self.config, self.turns, question,
+                excluded_turn_ids=excluded,
+            )
+        return decision, side.call_args.args[2]
+
+    def test_router_is_told_about_a_repeat_and_decides(self) -> None:
+        """Name the turn and its intent; keep the router's choice."""
+
+        for question in (
+            "List every MRI scanner",
+            "list every mri scanner?",
+        ):
+            with self.subTest(question=question):
+                decision, prompt = self._route(question)
+                self.assertIn(
+                    "repeats turn 2, which was answered as code_generation.",
+                    prompt,
+                )
+                self.assertEqual(decision.repeated_turn, 2)
+                self.assertEqual(decision.intent, "debugging")
+
+    def test_repeat_of_the_last_turn_only_names_it(self) -> None:
+        """Without the user, the note never suggests another intent."""
+
+        del self.turns[2]
+        decision, prompt = self._route("List every MRI scanner")
+        self.assertIn(
+            "repeats turn 2, which was answered as code_generation.", prompt
+        )
+        self.assertNotIn("different", prompt.split("New question:")[1])
+        self.assertEqual(decision.repeated_turn, 2)
+
+    def test_user_chooses_how_to_answer_a_back_to_back_repeat(self) -> None:
+        """Same way reuses the saved route; another way reroutes."""
+
+        del self.turns[2]
+        self.turns[1].parameters = {
+            "intent": "project_inventory",
+            "standalone": True,
+            "related_turn_ids": [],
+        }
+        reply = '{"intent": "debugging", "standalone": true}'
+        for choice, intent, asked in (
+            (0, "project_inventory", False),
+            (1, "debugging", True),
+        ):
+            with self.subTest(choice=choice):
+                choose = Mock(return_value=choice)
+                with patch.object(
+                    answering, "side_reply", return_value=reply
+                ) as side:
+                    decision = answering.route_question(
+                        object(), self.config, self.turns,
+                        "List every MRI scanner", choose=choose,
+                    )
+                question, options = choose.call_args.args
+                self.assertIn("right after the last answer", question)
+                self.assertEqual(
+                    options,
+                    ("Same way again (Project inventory)", "Try another way"),
+                )
+                self.assertEqual(decision.intent, intent)
+                self.assertEqual(decision.repeated_turn, 2)
+                self.assertEqual(decision.another_way, asked)
+                self.assertEqual(side.called, asked)
+                if asked:
+                    intents = side.call_args.args[2].split("Earlier")[0]
+                    self.assertNotIn("- project_inventory:", intents)
+                    # Reuse intents would answer from the same passages.
+                    self.assertNotIn("- conversation_followup:", intents)
+                    self.assertNotIn("- rephrase_previous:", intents)
+                    self.assertIn("- debugging:", intents)
+
+    def test_cancelled_or_unusable_choice_leaves_it_to_the_router(
+        self,
+    ) -> None:
+        """Route with the repeat note when the user cancels."""
+
+        del self.turns[2]
+        self.turns[1].parameters = {
+            "intent": "project_inventory",
+            "standalone": True,
+            "related_turn_ids": [],
+        }
+        choose = Mock(return_value=None)
+        reply = '{"intent": "debugging", "standalone": true}'
+        with patch.object(answering, "side_reply", return_value=reply):
+            decision = answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=choose,
+            )
+        self.assertEqual(decision.intent, "debugging")
+
+        # Without a saved route there is nothing to repeat, so no question.
+        self.turns[1].parameters = {}
+        choose.reset_mock()
+        with patch.object(answering, "side_reply", return_value=reply):
+            answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=choose,
+            )
+        choose.assert_not_called()
+
+    def test_earlier_repeats_are_not_asked_about(self) -> None:
+        """Only a question asked twice in a row asks the user."""
+
+        choose = Mock(return_value=0)
+        reply = '{"intent": "debugging", "standalone": true}'
+        with patch.object(answering, "side_reply", return_value=reply):
+            answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=choose,
+            )
+        choose.assert_not_called()
+
+    def test_back_to_back_repeat_counts_even_when_it_points_back(
+        self,
+    ) -> None:
+        """Right after the same question, "they" means the same thing."""
+
+        self.turns[2].question = "Which dataset did they use?"
+        decision, prompt = self._route("which dataset did they use")
+        self.assertEqual(decision.repeated_turn, 3)
+        self.assertIn("repeats turn 3", prompt)
+
+    def test_singular_and_plural_are_different_for_repeat_matching(
+        self,
+    ) -> None:
+        """Plural heuristics must not trigger a repeat-choice dialog."""
+
+        decision, _ = self._route("List every MRI scanners")
+        self.assertIsNone(decision.repeated_turn)
+        self.assertEqual(answering._singular("studies"), "study")
+        for word in ("analysis", "process", "corpus", "gas"):
+            with self.subTest(word=word):
+                self.assertEqual(answering._singular(word), word)
+
+    def test_repeats_preserve_negation_order_names_and_counts(self) -> None:
+        """Avoid offering rerouting for semantically distinct questions."""
+
+        pairs = (
+            ("Use model A", "Do not use model A"),
+            ("The result works", "The result does not work"),
+            ("What is the new result?", "What is the news result?"),
+            ("List 2 scanners", "List 3 scanners"),
+            ("Model A compares with B", "Model B compares with A"),
+            ("Use MRI once", "Use MRI twice"),
+        )
+        for earlier, question in pairs:
+            with self.subTest(question=question):
+                self.turns[1].question = earlier
+                decision, prompt = self._route(question)
+                self.assertIsNone(decision.repeated_turn)
+                self.assertNotIn("repeats turn", prompt)
+
+    def test_another_way_keeps_new_related_turns(self) -> None:
+        """Use rerouting context, not the prior answer's saved context."""
+
+        del self.turns[2]
+        self.turns[0].question = "List every MRI scanner model"
+        self.turns[1].parameters = {
+            "intent": "project_inventory", "standalone": True,
+            "related_turn_ids": [],
+        }
+        reply = (
+            '{"intent": "debugging", "standalone": false, '
+            '"related_turns": [1]}'
+        )
+        with patch.object(answering, "side_reply", return_value=reply):
+            decision = answering.route_question(
+                object(), self.config, self.turns,
+                "List every MRI scanner", choose=lambda *_: 1,
+            )
+        self.assertEqual(decision.intent, "debugging")
+        self.assertEqual(decision.related_turn_ids, (1,))
+        self.assertFalse(decision.standalone)
+        self.assertTrue(decision.another_way)
+
+    def test_alternative_never_falls_back_to_excluded_default(self) -> None:
+        """An invalid router reply cannot restore the previous method."""
+
+        del self.turns[2]
+        self.turns[1].parameters = {
+            "intent": self.config.default_intent,
+            "standalone": True, "related_turn_ids": [],
+        }
+        for response in ("invalid JSON", '{"intent": "code_explanation"}'):
+            with self.subTest(response=response), patch.object(
+                answering, "side_reply", return_value=response
+            ):
+                decision = answering.route_question(
+                    object(), self.config, self.turns,
+                    "List every MRI scanner", choose=lambda *_: 1,
+                )
+                self.assertNotEqual(
+                    decision.intent, self.config.default_intent
+                )
+                self.assertTrue(decision.another_way)
+
+    def test_new_questions_are_not_repeats(self) -> None:
+        """A changed name, an added word, or pointing back later is new."""
+
+        self.turns[1].question = "List every MRI scanner it uses"
+        for question in (
+            "List every CT scanner",
+            "List every MRI scanner model",
+            "List every MRI scanner it uses",
+        ):
+            with self.subTest(question=question):
+                decision, prompt = self._route(question)
+                self.assertIsNone(decision.repeated_turn)
+                self.assertNotIn("repeats turn", prompt)
+
+    def test_excluded_turns_are_not_matched(self) -> None:
+        """A disliked answer is never named as the repeated turn."""
+
+        decision, prompt = self._route(
+            "List every MRI scanner", frozenset({2})
+        )
+        self.assertIsNone(decision.repeated_turn)
+        self.assertNotIn("repeats turn", prompt)
 
 
 class TestRouterPrompt(unittest.TestCase):
@@ -951,6 +1525,21 @@ class TestRelatedTurnChecks(unittest.TestCase):
         self.assertEqual(decision.related_turn_ids, (2,))
         self.assertFalse(decision.standalone)
 
+    def test_rewrite_of_a_line_relates_the_last_turn(self) -> None:
+        """Pass a writing check to its line-rewrite follow-up."""
+
+        # Cued to writing_check whatever the router says, with no word
+        # pointing back: the tool still needs the check's answer.
+        decision, _ = self._route(
+            "suggest a better phrasing for line 75", "[]"
+        )
+        self.assertEqual(decision.intent, "writing_check")
+        self.assertEqual(decision.related_turn_ids, (2,))
+        decision, _ = self._route(
+            "check the grammar of draft.tex", "[]", "writing_check"
+        )
+        self.assertEqual(decision.related_turn_ids, ())
+
     def test_reuse_without_meaningful_turn_has_no_related_id(self) -> None:
         """Never reuse a small-talk-only conversation as evidence."""
 
@@ -1161,6 +1750,15 @@ class TestHistory(unittest.TestCase):
         self.assertEqual(representation["sources"], ["file2.py:fit"])
         self.assertEqual(representation["summary"], "Fit trains the model.")
 
+    def test_representation_uses_a_given_summary(self) -> None:
+        """Replace the first sentence with a model-written summary."""
+
+        turn = _turn("Explain fit", "Fit trains [1]. More.")
+        representation = answering.turn_representation(
+            turn, 1, summary="S" * 250
+        )
+        self.assertEqual(representation["summary"], "S" * 200)
+
     def test_representation_handles_foreign_platform_paths(self) -> None:
         """Read POSIX and Windows evidence labels on every host platform."""
 
@@ -1203,6 +1801,16 @@ class TestHistory(unittest.TestCase):
         self.assertEqual(turn.question, question)
         self.assertEqual(turn.answer, answer)
 
+    def test_representation_ignores_citations_inside_thinking(self) -> None:
+        """Only cited evidence in the visible answer selects sources."""
+
+        turn = _turn(
+            "Explain fit", "<think>Inspect [1]</think>Result [2].", (1, 2)
+        )
+        representation = answering.turn_representation(turn, 4)
+        self.assertEqual(representation["sources"], ["file2.py:fit"])
+        self.assertEqual(representation["summary"], "Result.")
+
     def test_representation_strips_thinking_and_collapses_spaces(self) -> None:
         """Exclude thinking text and normalize whitespace in summaries."""
 
@@ -1217,3 +1825,47 @@ class TestHistory(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnswerSummary(unittest.TestCase):
+    """Test the router model's one-sentence answer summary."""
+
+    def test_long_answer_is_summarized_without_citations(self) -> None:
+        """Send the visible answer only and collapse the reply."""
+
+        chat = _FakeChat(response="  Fit trains\n the model.  ")
+        summary = answering.summarize_answer(
+            chat, "Explain fit",
+            "<think>Inspect [1]</think>Status line [1]. Fit trains it [2].",
+        )
+        self.assertEqual(summary, "Fit trains the model.")
+        prompt = chat.observations[0]["message"]
+        self.assertIn("Status line. Fit trains it.", prompt)
+        self.assertNotIn("Inspect", prompt)
+        self.assertEqual(
+            chat.observations[0]["max_new_tokens"],
+            answering._SUMMARY_MAX_TOKENS,
+        )
+        self.assertEqual(chat.messages[0]["content"], "Original instructions")
+
+    def test_one_sentence_answer_needs_no_model(self) -> None:
+        """Keep the first sentence when it is the whole answer."""
+
+        chat = _FakeChat()
+        self.assertIsNone(
+            answering.summarize_answer(chat, "Q", "Only one sentence [1].")
+        )
+        self.assertEqual(chat.observations, [])
+
+    def test_failed_or_empty_summaries_are_none(self) -> None:
+        """A failed call never stops saving the turn."""
+
+        for chat in (
+            _FakeChat(reply_error=RuntimeError("out of memory")),
+            _FakeChat(response="<think>unfinished"),
+            _FakeChat(response="   "),
+        ):
+            with self.subTest(response=chat.response):
+                self.assertIsNone(
+                    answering.summarize_answer(chat, "Q", "One. Two.")
+                )

@@ -300,7 +300,10 @@ class _Visitor(ast.NodeVisitor):
                     CodeRelation(
                         name,
                         "inherits",
-                        _resolve_name(target, self.known),
+                        _resolve_name(
+                            target, self.known, self.parents[-1],
+                            self.parents[0],
+                        ),
                     )
                 )
 
@@ -353,7 +356,12 @@ class _Visitor(ast.NodeVisitor):
 
         target = _reference(node.func)
         if target is not None:
-            self._add("calls", _resolve_name(target, self.known))
+            self._add(
+                "calls",
+                _resolve_name(
+                    target, self.known, self.parents[-1], self.parents[0]
+                ),
+            )
 
         self.generic_visit(node)
 

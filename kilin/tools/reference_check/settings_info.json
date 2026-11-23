@@ -1,0 +1,65 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "max_listed": {
+      "title": "Maximum listed results",
+      "summary": "Caps the number of matches or items returned in a list.",
+      "description": "A lower cap produces shorter reports even when additional candidates exist in the source."
+    },
+    "verify": {
+      "title": "Verify references",
+      "summary": "Controls whether reference evidence is independently checked.",
+      "description": "When enabled, the tool attempts to verify evidence rather than relying only on model-generated claims."
+    },
+    "passages": {
+      "title": "Passage count",
+      "summary": "Sets the number of evidence passages considered.",
+      "description": "Controls how many retrieved passages can contribute to the tool result."
+    },
+    "passage_tokens": {
+      "title": "Passage token budget",
+      "summary": "Limits tokens devoted to retrieved evidence passages.",
+      "description": "Constrains the amount of passage text supplied for model analysis."
+    },
+    "retry_passages": {
+      "title": "Retry passages",
+      "summary": "Sets passage count for an additional verification pass.",
+      "description": "An extended retrieval pass can look for more evidence when the initial reference check is inconclusive."
+    },
+    "focus_claims": {
+      "title": "Focus on claims",
+      "summary": "Prioritizes explicit claims for reference checking.",
+      "description": "Concentrates verification work on claims that need evidence."
+    },
+    "max_checked_claims": {
+      "title": "Maximum checked claims",
+      "summary": "Caps the number of claims checked in one operation.",
+      "description": "Controls the maximum scope of claim-by-claim reference review."
+    },
+    "quick_claims": {
+      "title": "Quick-pass claims",
+      "summary": "Limits claims examined during a quick check.",
+      "description": "Keeps the faster checking mode bounded."
+    },
+    "confirmation": {
+      "title": "Confirmation policy",
+      "summary": "Controls when user confirmation is required before a tool runs.",
+      "description": "Depending on the selected policy, the tool may ask before processing large or otherwise costly workloads."
+    },
+    "large_batches": {
+      "title": "Large workload threshold",
+      "summary": "Sets the batch threshold used by the confirmation policy.",
+      "description": "Used to decide whether a planned multi-batch operation is large enough to request confirmation."
+    },
+    "online_lookup": {
+      "title": "Online lookup",
+      "summary": "Allows optional lookup of external reference evidence.",
+      "description": "Enabling it permits online source queries when the corresponding service is available; it may contact external resources."
+    },
+    "max_online": {
+      "title": "Maximum online lookups",
+      "summary": "Caps the number of online source lookups.",
+      "description": "Limits the external requests that reference checking can attempt."
+    }
+  }
+}

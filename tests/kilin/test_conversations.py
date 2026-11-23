@@ -17,16 +17,32 @@ from dataclasses import FrozenInstanceError, asdict
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 from kilin import conversations as module
+from kilin.conversation_memory.models import new_turn_uuid
+from kilin.conversation_ownership import (
+    ConversationFileLock,
+    ConversationLockedError,
+)
 from kilin.conversation_format import (
     CONVERSATION_SESSION_KEY,
     conversation_state,
     new_conversation_session,
 )
+
+
+def _identified(turns: list[dict]) -> list[dict]:
+    """Give branching fixtures distinct current-format completed-turn IDs."""
+
+    return [
+        {"conversation_turn_uuid": new_turn_uuid(), **item}
+        for item in turns
+    ]
 
 
 class ConversationStoreFixture(unittest.TestCase):
@@ -384,6 +400,7 @@ class TestStoreDiscovery(ConversationStoreFixture):
                 False, 42, [], {}, "", "bad parent", "bad/id"
             ),
             "origin_checkpoint_id": (False, 2, [], {}, ""),
+            "origin_turn_count": (False, True, -1, 1.5, "2", [], {}),
         }
         number = 0
         for field, values in invalid_fields.items():
@@ -634,8 +651,9 @@ class TestStoreBranching(ConversationStoreFixture):
 
     def test_branch_copies_resume_state_but_not_trace_operations(self):
         parent = self.store.create()
+        turns = _identified([{"question": "Original", "answer": "Yes"}])
         self._persist(parent, {
-            "turns": [{"question": "Original", "answer": "Yes"}],
+            "turns": turns,
             "checkpoint_id": "checkpoint-123",
             "checkpoint": {"parent_checkpoint_id": "before"},
             "system_prompt": "Do science",
@@ -652,11 +670,10 @@ class TestStoreBranching(ConversationStoreFixture):
         self.assertEqual(branch.parent_conversation_id,
                          parent.conversation_id)
         self.assertEqual(branch.origin_checkpoint_id, "checkpoint-123")
-        self.assertEqual(branch.name, f"{parent.name} branch 1")
+        self.assertEqual(branch.name, f"Branch: {parent.name}")
         self.assertEqual(self.store.active(), branch)
         saved = self._state(branch)
-        self.assertEqual(saved["turns"],
-                         [{"question": "Original", "answer": "Yes"}])
+        self.assertEqual(saved["turns"], turns)
         self.assertEqual(saved["system_prompt"], "Do science")
         self.assertEqual(saved["checkpoint_id"], "checkpoint-123")
         self.assertEqual(saved["profile"], {"kind": "literature"})
@@ -670,6 +687,31 @@ class TestStoreBranching(ConversationStoreFixture):
         self.assertEqual(self._state(parent)["turns"][0]["question"],
                          "Original")
 
+    def test_branch_preserves_core_timeline_on_selected_turns(self):
+        """Keep timing with the copied answer rather than a GUI sidecar."""
+        parent = self.store.create()
+        activity = {
+            "elapsed_ms": 50,
+            "steps": [{
+                "phase": "generating", "label": "Generating answer", "ms": 50,
+            }],
+        }
+        turns = _identified([
+            {"question": "Q1", "answer": "A1", "timeline": activity},
+            {"question": "Q2", "answer": "A2", "timeline": activity},
+        ])
+        self._persist(parent, {"turns": turns})
+        branch = self.store.create(
+            branch_from=parent.conversation_id, turn_count=1
+        )
+        branched = self._state(branch)["turns"]
+        self.assertEqual(branched, turns[:1])
+        branched[0]["timeline"]["steps"][0]["ms"] = 0
+        self.assertEqual(
+            self._state(parent)["turns"][0]["timeline"]["steps"][0]["ms"],
+            50,
+        )
+
     def test_branch_does_not_copy_parent_identity_or_metadata(self):
         parent = self.store.create()
         self._persist(parent, {"checkpoint_id": "one", "custom": 4})
@@ -682,10 +724,11 @@ class TestStoreBranching(ConversationStoreFixture):
                          parent.conversation_id)
 
     def test_branch_from_imported_conversation_uses_canonical_state(self):
+        turns = _identified([{"question": "Imported"}])
         source = self._candidate(
             "conversation_external.json",
             checkpoint_id="source-checkpoint",
-            turns=[{"question": "Old"}],
+            turns=turns,
         )
         self.store.ensure()
         branch = self.store.create(branch_from="conversation_external")
@@ -693,16 +736,36 @@ class TestStoreBranching(ConversationStoreFixture):
         self.assertNotIn("conversation", payload)
         self.assertIn(CONVERSATION_SESSION_KEY, payload["sessions"])
         self.assertEqual(branch.origin_checkpoint_id, "source-checkpoint")
-        self.assertEqual(self._state(branch)["turns"],
-                         [{"question": "Old"}])
+        self.assertEqual(self._state(branch)["turns"], turns)
         self.assertTrue(source.is_file())
 
     def test_multiple_branches_increment_names(self):
         parent = self.store.create()
+        names = [
+            self.store.create(branch_from=parent.conversation_id).name
+            for _ in range(3)
+        ]
+        self.assertEqual(names, [
+            f"Branch: {parent.name}",
+            f"Branch 2: {parent.name}",
+            f"Branch 3: {parent.name}",
+        ])
+
+    def test_branch_of_a_branch_is_named_after_the_original(self):
+        parent = self.store.create()
+        first = self.store.create(branch_from=parent.conversation_id)
+        second = self.store.create(branch_from=first.conversation_id)
+        third = self.store.create(branch_from=second.conversation_id)
+        self.assertEqual(second.name, f"Branch 2: {parent.name}")
+        self.assertEqual(third.name, f"Branch 3: {parent.name}")
+
+    def test_long_branch_names_fit_the_name_limit(self):
+        parent = self.store.create()
+        self.store.rename(parent.conversation_id, "x" * 80)
         first = self.store.create(branch_from=parent.conversation_id)
         second = self.store.create(branch_from=parent.conversation_id)
-        self.assertEqual(first.name, f"{parent.name} branch 1")
-        self.assertEqual(second.name, f"{parent.name} branch 2")
+        self.assertEqual(first.name, "Branch: " + "x" * 72)
+        self.assertEqual(second.name, "Branch 2: " + "x" * 70)
 
     def test_branches_without_valid_checkpoint_have_no_origin(self):
         parent = self.store.create()
@@ -733,12 +796,102 @@ class TestStoreBranching(ConversationStoreFixture):
         self.assertEqual(set(self.store.root.iterdir()), before)
         self.assertEqual(self.store.active(), parent)
 
+    def test_branch_refuses_saved_turn_without_uuid(self):
+        """Unsupported previous turn formats are never silently upgraded."""
+
+        parent = self.store.create()
+        self._persist(parent, {"turns": [{"question": "no identity"}]})
+        before = self.store.state_path(parent).read_bytes()
+        paths = set(self.store.root.iterdir())
+        with self.assertRaisesRegex(ValueError, "UUID4"):
+            self.store.create(branch_from=parent.conversation_id)
+        self.assertEqual(self.store.state_path(parent).read_bytes(), before)
+        self.assertEqual(set(self.store.root.iterdir()), paths)
+
     def test_branch_parent_with_missing_checkpoint_is_valid(self):
         parent = self.store.create()
-        self._persist(parent, {"turns": [1]})
+        turns = _identified([{"question": "Q"}])
+        self._persist(parent, {"turns": turns})
         branch = self.store.create(branch_from=parent.conversation_id)
         self.assertIsNone(branch.origin_checkpoint_id)
-        self.assertEqual(self._state(branch)["turns"], [1])
+        self.assertEqual(self._state(branch)["turns"], turns)
+
+    def test_branch_keeps_only_the_first_turns(self):
+        parent = self.store.create()
+        turns = _identified([
+            {"question": f"Q{index}"} for index in range(1, 4)
+        ])
+        self._persist(parent, {
+            "turns": turns,
+            "checkpoint_id": "checkpoint-3",
+            "checkpoint": {"turn_count": 3},
+            "system_prompt": "Do science",
+        })
+        branch = self.store.create(
+            branch_from=parent.conversation_id, turn_count=2
+        )
+        self.assertEqual(branch.origin_checkpoint_id, "checkpoint-3")
+        self.assertEqual(branch.origin_turn_count, 2)
+        saved = self._state(branch)
+        self.assertEqual(saved["turns"], turns[:2])
+        self.assertEqual(saved["system_prompt"], "Do science")
+        self.assertEqual(saved["origin_turn_count"], 2)
+        # The parent's checkpoint covers all three turns, not these two.
+        self.assertNotIn("checkpoint_id", saved)
+        self.assertNotIn("checkpoint", saved)
+        self.assertEqual(self._state(parent)["turns"], turns)
+        reopened = module.ConversationStore(self.store.project_directory)
+        reopened.ensure()
+        self.assertEqual(
+            reopened.select(branch.conversation_id).origin_turn_count, 2
+        )
+
+    def test_branch_turn_count_from_none_to_all_turns(self):
+        parent = self.store.create()
+        turns = _identified([{"question": "Q1"}, {"question": "Q2"}])
+        self._persist(parent, {"turns": turns, "checkpoint_id": "two"})
+        for turn_count, kept in ((0, []), (2, turns), (None, turns)):
+            with self.subTest(turn_count=turn_count):
+                branch = self.store.create(
+                    branch_from=parent.conversation_id,
+                    turn_count=turn_count,
+                )
+                self.assertEqual(branch.origin_turn_count, len(kept))
+                self.assertEqual(self._state(branch)["turns"], kept)
+        # Keeping every turn keeps the parent's checkpoint, as before.
+        self.assertEqual(self._state(branch)["checkpoint_id"], "two")
+
+    def test_branch_turn_count_outside_saved_turns_creates_nothing(self):
+        parent = self.store.create()
+        self._persist(parent, {
+            "turns": _identified([{"question": "Q1"}, {"question": "Q2"}])
+        })
+        before = set(self.store.root.iterdir())
+        for value in (-1, 3, True, 1.5, "1"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "turn_count"):
+                    self.store.create(
+                        branch_from=parent.conversation_id,
+                        turn_count=value,
+                    )
+                self.assertEqual(set(self.store.root.iterdir()), before)
+                self.assertEqual(self.store.active(), parent)
+
+    def test_only_a_branch_can_keep_a_number_of_turns(self):
+        self.store.create()
+        before = set(self.store.root.iterdir())
+        with self.assertRaisesRegex(ValueError, "Only a branch"):
+            self.store.create(turn_count=1)
+        self.assertEqual(set(self.store.root.iterdir()), before)
+
+    def test_records_saved_before_branch_points_still_load(self):
+        self._candidate(
+            "conversation_older.json", parent_conversation_id="parent_01"
+        )
+        item = self.store.ensure()
+        self.assertEqual(item.conversation_id, "conversation_older")
+        self.assertIsNone(item.origin_turn_count)
+        self.assertIsNone(self.store.create().origin_turn_count)
 
 
 class TestStoreMetadata(ConversationStoreFixture):
@@ -949,7 +1102,7 @@ class TestStoreArchiving(ConversationStoreFixture):
         old = self.store.ensure()
         old_path = self.store.state_path(old)
         active, archived = self.store.archive(old.conversation_id)
-        self.assertEqual(archived.parent.name, "deleted")
+        self.assertEqual(archived.parent.name, ".deleted")
         self.assertEqual(archived.name, old_path.name)
         self.assertTrue(archived.is_file())
         self.assertEqual(self.store.state_path(active).parent,
@@ -960,6 +1113,43 @@ class TestStoreArchiving(ConversationStoreFixture):
         self.assertEqual(len(self.store.conversations()), 1)
         self.assertIn(old.conversation_id,
                       archived.read_text(encoding="utf-8"))
+
+    def test_archive_last_borrowed_owner_reserves_original_filename(self):
+        """Create a replacement without colliding with an owned sidecar."""
+
+        when = datetime(2026, 11, 5, 9, 10, 11, tzinfo=timezone.utc)
+        with patch.object(module, "datetime") as clock:
+            clock.now.return_value = when
+            old = self.store.create()
+            path = self.store.state_path(old)
+            with ConversationFileLock(path) as owner:
+                active, archived = self.store.archive(
+                    old.conversation_id, ownership=owner
+                )
+                replacement = self.store.state_path(active)
+                self.assertTrue(owner.holds(path))
+                self.assertTrue(archived.is_file())
+                self.assertFalse(path.exists())
+                self.assertNotEqual(replacement, path)
+                self.assertTrue(replacement.is_file())
+                self.assertTrue(owner.lock_path.is_file())
+                self.assertNotEqual(
+                    ConversationFileLock(replacement).lock_path,
+                    owner.lock_path,
+                )
+
+    def test_new_conversation_skips_archived_lock_companion(self):
+        """Preserve a restorable name even if no JSON exists at that path."""
+
+        when = datetime(2026, 11, 5, 9, 10, 11, tzinfo=timezone.utc)
+        old_path = self.store.root / "conversation_2026-11-05T09-10-11.json"
+        with ConversationFileLock(old_path) as old:
+            with patch.object(module, "datetime") as clock:
+                clock.now.return_value = when
+                item = self.store.create()
+                self.assertNotEqual(self.store.state_path(item), old_path)
+                self.assertTrue(old.holds(old_path))
+                self.assertTrue(self.store.state_path(item).is_file())
 
     def test_archive_active_selects_latest_remaining(self):
         first = self.store.create()
@@ -989,7 +1179,7 @@ class TestStoreArchiving(ConversationStoreFixture):
     def test_archive_collision_appends_number_without_overwrite(self):
         item = self.store.create()
         path = self.store.state_path(item)
-        folder = self.store.root / "deleted"
+        folder = self.store.root / ".deleted"
         folder.mkdir()
         existing = folder / path.name
         existing.write_text("original archive", encoding="utf-8")
@@ -1003,10 +1193,152 @@ class TestStoreArchiving(ConversationStoreFixture):
         self.assertNotEqual(active.conversation_id,
                             item.conversation_id)
 
+    def test_archive_keeps_hidden_lock_companion_at_original_path(self):
+        """Keep the lock inode stable while the JSON moves to .deleted."""
+
+        # Another conversation stays, so no replacement takes the name.
+        self.store.create()
+        item = self.store.create()
+        path = self.store.state_path(item)
+        lock = ConversationFileLock(path).lock_path
+        lock.write_text("", encoding="utf-8")
+        before = lock.stat()
+        _, archived = self.store.archive(item.conversation_id)
+        self.assertTrue(archived.is_file())
+        self.assertTrue(lock.is_file())
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino),
+                         (before.st_dev, before.st_ino))
+        self.assertFalse(
+            ConversationFileLock(archived).lock_path.exists()
+        )
+
+    def test_restored_conversation_reuses_hidden_lock_when_opened(self):
+        """A manually restored JSON reuses the original stable companion."""
+
+        kept = self.store.create()
+        item = self.store.create()
+        path = self.store.state_path(item)
+        lock = ConversationFileLock(path).lock_path
+        _, archived = self.store.archive(item.conversation_id)
+        before = lock.stat()
+        archived.rename(path)
+        reopened = module.ConversationStore(self.project)
+        reopened.ensure()
+        self.assertIn(
+            item.conversation_id,
+            [x.conversation_id for x in reopened.conversations()],
+        )
+        with module.conversation_write_ownership(path):
+            self.assertTrue(lock.is_file())
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino),
+                         (before.st_dev, before.st_ino))
+        self.assertFalse(
+            ConversationFileLock(archived).lock_path.exists()
+        )
+        self.assertIn(
+            kept.conversation_id,
+            [x.conversation_id for x in reopened.conversations()],
+        )
+
+    def test_archive_while_borrowed_blocks_independent_process(self):
+        """Retain the same OS lock during archival of an active trace."""
+
+        self.store.create()
+        item = self.store.create()
+        path = self.store.state_path(item)
+        command = [
+            sys.executable, "-c",
+            "import sys; from kilin.conversation_ownership import "
+            "ConversationFileLock; "
+            "owner = ConversationFileLock(sys.argv[1]); "
+            "owner.acquire(); owner.release()",
+            str(path),
+        ]
+        with ConversationFileLock(path) as owner:
+            before = owner.lock_path.stat()
+            _, archived = self.store.archive(
+                item.conversation_id, ownership=owner
+            )
+            self.assertTrue(archived.is_file())
+            self.assertFalse(path.exists())
+            self.assertTrue(owner.holds(path))
+            self.assertTrue(owner.lock_path.is_file())
+            self.assertEqual(
+                (owner.lock_path.stat().st_dev,
+                 owner.lock_path.stat().st_ino),
+                (before.st_dev, before.st_ino),
+            )
+            rejected = subprocess.run(
+                command, capture_output=True, text=True,
+                timeout=15, check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("ConversationLockedError", rejected.stderr)
+        accepted = subprocess.run(
+            command, capture_output=True, text=True,
+            timeout=15, check=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_archive_refuses_an_unborrowed_active_lock(self):
+        """Reject deletion while another owner holds the conversation."""
+
+        item = self.store.create()
+        path = self.store.state_path(item)
+        before = path.read_bytes()
+        with ConversationFileLock(path):
+            with self.assertRaises(ConversationLockedError):
+                self.store.archive(item.conversation_id)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(self.store.active(), item)
+        self.assertTrue(path.is_file())
+
+    def test_repeated_archive_restore_keeps_single_companion(self):
+        """Never create a second sidecar during repeated manual recovery."""
+
+        self.store.create()
+        item = self.store.create()
+        path = self.store.state_path(item)
+        lock = ConversationFileLock(path).lock_path
+        with ConversationFileLock(path):
+            pass
+        before = lock.stat()
+        for _ in range(3):
+            _, archived = self.store.archive(item.conversation_id)
+            self.assertTrue(lock.is_file())
+            self.assertFalse(
+                ConversationFileLock(archived).lock_path.exists()
+            )
+            archived.rename(path)
+            self.store = module.ConversationStore(self.project)
+            self.store.ensure()
+            with module.conversation_write_ownership(path):
+                pass
+            self.assertEqual(
+                (lock.stat().st_dev, lock.stat().st_ino),
+                (before.st_dev, before.st_ino),
+            )
+
+    def test_manually_restored_path_respects_existing_ownership(self):
+        """Reject another lease even when archived JSON is moved back."""
+
+        self.store.create()
+        item = self.store.create()
+        path = self.store.state_path(item)
+        with ConversationFileLock(path) as owner:
+            _, archived = self.store.archive(
+                item.conversation_id, ownership=owner
+            )
+            archived.rename(path)
+            with self.assertRaises(ConversationLockedError):
+                ConversationFileLock(path).acquire()
+        with ConversationFileLock(path):
+            pass
+
     def test_archive_collision_skips_multiple_reserved_names(self):
         item = self.store.create()
         path = self.store.state_path(item)
-        folder = self.store.root / "deleted"
+        folder = self.store.root / ".deleted"
         folder.mkdir()
         (folder / path.name).write_text("1", encoding="utf-8")
         (folder / f"{path.stem}_2.json").write_text("2", encoding="utf-8")
@@ -1026,7 +1358,7 @@ class TestStoreArchiving(ConversationStoreFixture):
         outside = self.base / "outside"
         outside.mkdir()
         try:
-            (self.store.root / "deleted").symlink_to(
+            (self.store.root / ".deleted").symlink_to(
                 outside, target_is_directory=True
             )
         except (NotImplementedError, OSError) as error:
@@ -1040,7 +1372,7 @@ class TestStoreArchiving(ConversationStoreFixture):
         item = self.store.create()
         with self.assertRaisesRegex(ValueError, "not found"):
             self.store.archive("not-there")
-        self.assertFalse((self.store.root / "deleted").exists())
+        self.assertFalse((self.store.root / ".deleted").exists())
         self.assertEqual(self.store.active(), item)
 
     def test_missing_source_archive_does_not_change_registry(self):

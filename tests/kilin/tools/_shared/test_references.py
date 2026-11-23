@@ -18,6 +18,7 @@ from pathlib import Path
 import unittest
 
 from kilin.tools._shared.references import (
+    ReferenceList,
     ReferenceLayout,
     joined_text,
     numbered_reference_entries,
@@ -25,6 +26,7 @@ from kilin.tools._shared.references import (
     reference_body,
     reference_entries,
     reference_list,
+    reference_lists,
 )
 from tests.kilin.tools._shared._support import chunk
 
@@ -36,7 +38,7 @@ LAYOUT = ReferenceLayout(
     entry_min_words=5,
 )
 
-PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
+PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures" / "pdfs"
 
 NUMBERED = """Introduction
 Some text cites earlier work [1].
@@ -195,6 +197,205 @@ class TestReferenceEntries(unittest.TestCase):
         self.assertEqual(len(entries), 3)
         self.assertTrue(entries[1].startswith("Liu Y"))
 
+    def test_author_year_entries_start_at_their_head(self) -> None:
+        # APA entries end with volume and pages, which end no entry; the
+        # next "Surname, I. ... (year)" line starts one, but not a wrapped
+        # author list, before the entry has its year.
+        text = (
+            "References\n"
+            "Lee, B., Wu, C., Ode, D., Gray, E., Brown, F., Black, G.,\n"
+            "White, H., & Green, I. (2019). Networks. Nature, 521,\n"
+            "436–444.\n"
+            "Smith, J. A., & Lee, B. (2020a). Graphs of brains in\n"
+            "health and disease. Brain, 12, 3–4.\n"
+            "van den Heuvel, M. P. (2011). Rich clubs. J Neurosci, 31.\n"
+        )
+        entries = reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual(len(entries), 3)
+        self.assertTrue(entries[0].endswith("Nature, 521, 436–444."))
+        self.assertTrue(entries[1].startswith("Smith, J. A., & Lee"))
+        self.assertTrue(entries[2].startswith("van den Heuvel"))
+
+    def test_short_author_year_list_keeps_titles_with_authors(self) -> None:
+        # A date at the end of the author line must not end an eLife
+        # entry, even when there are fewer than five references.
+        text = (
+            "References\n"
+            "Bates AS, Costa M. 2020.\n"
+            "A long article on brain science in eLife volume 9.\n"
+            "Claudi F, Petrucco L. 2019.\n"
+            "A research tool for neuroscience atlases in JOSS.\n"
+            "Hunter JD. 2007.\n"
+            "Matplotlib for scientific graphics in CiSE volume 9.\n"
+        )
+        entries = numbered_reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual([(e.number, e.printed) for e in entries],
+                         [(1, False), (2, False), (3, False)])
+        self.assertIn("A long article", entries[0].text)
+        self.assertNotIn("Claudi", entries[0].text)
+        self.assertIn("A research tool", entries[1].text)
+        self.assertIn("Matplotlib", entries[2].text)
+
+        # A two-entry author-year list needs the same protection.
+        two = "References\n" + "\n".join(text.splitlines()[1:5])
+        self.assertEqual(
+            len(numbered_reference_entries((chunk("a", two),), LAYOUT)),
+            2,
+        )
+
+    def test_wrapped_author_headers_remain_one_reference(self) -> None:
+        """The first line of wrapped authors must start the entry.
+
+        """
+
+        for text, expected in (
+            (
+                "References\n"
+                "Adams, A. (2018). An overview of computational science. "
+                "Journal 1, 2.\n"
+                "Brown, A., Clark, B.,\n"
+                "Ford, C., & Green, D. (2019). Research on microscopy. "
+                "Journal 3, 4.\n"
+                "Cole, C. (2020). A different experimental study. "
+                "Journal 5, 6.\n",
+                ("Adams, A.", "Brown, A., Clark, B., Ford, C.",
+                 "Cole, C."),
+            ),
+            (
+                "References\n"
+                "Adams, A. (2018). A scientific overview. Journal 1, 2.\n"
+                "Brown, A., Clark, B.\n"
+                "Ford, C., & Green, D. (2019). A new study. Journal 3, 4.\n"
+                "Cole, C. (2020). Another study. Journal 5, 6.\n",
+                ("Adams, A.", "Brown, A., Clark, B. Ford, C.", "Cole, C."),
+            ),
+            (
+                "References\n"
+                "Adams AA. 2018. A scientific review in biology. J 1:2.\n"
+                "Brown AB, Clark CD,\n"
+                "Ford EF, Green GH. 2019. Findings about microscopy. "
+                "J 3:4.\n"
+                "Cole CC. 2020. A separate research article. J 5:6.\n",
+                ("Adams AA", "Brown AB, Clark CD, Ford EF", "Cole CC"),
+            ),
+        ):
+            with self.subTest(expected=expected):
+                entries = numbered_reference_entries(
+                    (chunk("a", text),), LAYOUT
+                )
+                self.assertEqual(len(entries), 3)
+                self.assertTrue(all(not e.printed for e in entries))
+                for entry, head in zip(entries, expected):
+                    self.assertTrue(entry.text.startswith(head), entry.text)
+                self.assertNotIn("Brown", entries[0].text)
+                self.assertNotIn("Cole", entries[1].text)
+
+    def test_year_in_title_is_not_author_year_header(self) -> None:
+        # A year after the title is a standard reference-list end, not
+        # evidence that all entries should be split only at their heads.
+        text = (
+            "References\n"
+            "Smith, J. A study of cells. Nature 1, 2-3 (2019).\n"
+            "Lee, K. A study of tissue. Science 4, 5-6 (2020).\n"
+            "Short fragment (2021).\n"
+        )
+        entries = reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual(len(entries), 2)
+        self.assertTrue(entries[1].endswith("(2020)."))
+
+    def test_elife_list(self) -> None:
+        # eLife: "Surname II, ... YEAR." heads, the year ending a line of
+        # authors, numbers broken off PMIDs, DOIs and page ranges, a page
+        # footer, accents printed apart, and an organisation as author.
+        text = (
+            "References\n"
+            "Ascoli GA, Donohue DE, Halavi M. 2007. NeuroMorpho.Org: a\n"
+            "resource. J Neurosci 27:9247–9251. PMID: 1772\n"
+            "8438\n"
+            "Claudi F, Petrucco L. 2020. BrainGlobe atlas API. JOSS 5:2668.\n"
+            "DOI: https://doi.org/10.21105/joss.\n"
+            "02668\n"
+            "Fu¨ rth D, Vaissie` re T, Carle´ n M. 2018. An interactive\n"
+            "framework. Nat Neurosci 21:139–149.\n"
+            "Kluyver T, Pe´ rez F. 2016. Jupyter Notebooks. IOS. p. 87–\n"
+            "90.\n"
+            "Lein ES, Hawrylycz MJ, Ao N, Ayres M, Dee NR, et al. 2007.\n"
+            "Genome-wide atlas of gene expression. Nature 445:168–176.\n"
+            "15 of 16Tools and resources\n"
+            "The pandas development team. 2020. Pandas. Zenodo. 1.2.3.\n"
+            "Yaoyao H. 2020. BrainMesh: a Matlab GUI. Github. 3.0.\n"
+        )
+        entries = numbered_reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual(
+            [(e.number, e.printed, e.text.split(".")[0]) for e in entries],
+            [(1, False, "Ascoli GA, Donohue DE, Halavi M"),
+             (2, False, "Claudi F, Petrucco L"),
+             (3, False, "Fürth D, Vaissière T, Carlén M"),
+             (4, False, "Kluyver T, Pérez F"),
+             (5, False,
+              "Lein ES, Hawrylycz MJ, Ao N, Ayres M, Dee NR, et al"),
+             (6, False, "The pandas development team"),
+             (7, False, "Yaoyao H")],
+        )
+        self.assertIn("PMID: 17728438", entries[0].text)
+        self.assertIn("joss.02668", entries[1].text)
+        self.assertTrue(entries[3].text.endswith("p. 87–90."))
+        self.assertIn("Genome-wide atlas", entries[4].text)
+
+    def test_dois_broken_over_lines(self) -> None:
+        # A DOI broken over lines is joined without a space, and a line
+        # ending in a DOI ("10.1101/447995") is not a "12 / 25" footer.
+        text = (
+            "References\n"
+            "Bates AS, Costa M. 2020. The Natverse. eLife 9:e53350. DOI:\n"
+            "https://doi.org/10.\n"
+            "7554/eLife.53350, PMID: 32286229\n"
+            "Jin M, Weber SJ. 2019. SMART. bioRxiv. DOI: https://doi.org/\n"
+            "10.1101/727529\n"
+            "Kunst M, Baier H. 2019. An atlas. Neuron 103:21–38. DOI:\n"
+            "https://doi.org/10.1016/j.neuron.\n"
+            "2019.04.034, PMID: 31147152\n"
+            "Shamash P, Steinmetz N. 2018. A tool for electrode tracks.\n"
+            "bioRxiv. DOI: https://doi.org/10.1101/447995\n"
+            "12 / 25\n"
+        )
+        entries = reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual(len(entries), 4)
+        for entry, doi in zip(entries, (
+            "https://doi.org/10.7554/eLife.53350,",
+            "https://doi.org/10.1101/727529",
+            "https://doi.org/10.1016/j.neuron.2019.04.034,",
+            "https://doi.org/10.1101/447995",
+        )):
+            with self.subTest(doi=doi):
+                self.assertIn(doi, entry)
+        self.assertNotIn("12 / 25", entries[-1])
+
+    def test_explicit_short_references_use_opt_in_filter(self) -> None:
+        text = (
+            "References\n"
+            "1. Nature 2020;12:22.\n"
+            "2. Garcia L. A full reference about tissue dynamics. "
+            "Science 2021;13:33.\n"
+        )
+        passages = (chunk("a", text),)
+        standard = numbered_reference_entries(passages, LAYOUT)
+        self.assertEqual([entry.number for entry in standard], [2])
+        seen = []
+
+        def accept_short(entry: str) -> bool:
+            seen.append(entry)
+            return entry.startswith("Nature 2020;")
+
+        extended = numbered_reference_entries(
+            passages, LAYOUT, accept_short=accept_short
+        )
+        self.assertEqual(
+            [entry.number for entry in extended], [1, 2]
+        )
+        self.assertTrue(extended[0].printed)
+        self.assertEqual(seen, ["Nature 2020;12:22."])
+
     def test_lone_numbers_go_to_unnumbered_entries(self) -> None:
         # PLOS prints some numbers apart from their entries ("6.", "7."),
         # others inline ("8. Baggio"); a DOI broken after "2013." must not
@@ -222,7 +423,122 @@ class TestReferenceEntries(unittest.TestCase):
                 (8, "Baggio", True),
             ],
         )
-        self.assertIn("2013. 07.003 PMID", entries[0].text)
+        # The DOI broken over lines is joined without a space.
+        self.assertIn("j.neuro.2013.07.003 PMID", entries[0].text)
+
+    def test_numbers_inside_an_entry_start_no_entry(self) -> None:
+        # A page range wrapped after its dash ("919–\n927.") looks like an
+        # entry number but does not follow the previous one.
+        text = (
+            "References\n"
+            "46. Smith J, Lee K. A study of brain networks. Brain 2011; 95:\n"
+            "629–635. PMID: 21930184\n"
+            "47. Weintraub D, Simuni T. Cognitive performance in early\n"
+            "Parkinson disease. Mov Disord 2015; 30: 919–\n"
+            "927. https://doi.org/10.1002/mds.26170 PMID: 25737166\n"
+            "48. Winblad B, Amouyel P. Defeating Alzheimer disease in\n"
+            "Europe. Lancet Neurol 2016; 15: 455–532.\n"
+        )
+        entries = numbered_reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual([e.number for e in entries], [46, 47, 48])
+        self.assertIn("919– 927. https://doi.org", entries[1].text)
+
+    def test_captions_and_restarted_numbers_end_the_list(self) -> None:
+        entries = "".join(
+            f"{n}. Author{n} A. A study number {n} of cells. "
+            f"Nature {n}, 2-3 (2019).\n"
+            for n in range(1, 7)
+        )
+        cases = (
+            "Table 1. Characteristics of the 40 participants.\n"
+            "1. Age, years 65 ± 3 and more values per group\n",
+            "Fig. 2 | The network of brain regions over the cortex.\n",
+            "Supplementary Figure S3: Additional results for all.\n",
+            "1. Patients were recruited at three clinical sites, all.\n",
+        )
+        for tail in cases:
+            with self.subTest(tail=tail.split()[0]):
+                found = numbered_reference_entries(
+                    (chunk("a", f"References\n{entries}{tail}"),), LAYOUT
+                )
+                self.assertEqual(
+                    [e.number for e in found], list(range(1, 7))
+                )
+                self.assertTrue(found[-1].text.endswith("(2019)."))
+
+    def test_several_lists_are_found_and_chosen(self) -> None:
+        main = "".join(
+            f"{n}. Main{n} A. A main study {n} of cells. Nature {n}, 2 "
+            f"(2019).\n" for n in range(1, 7)
+        )
+        extra = "".join(
+            f"{n}. Extra{n} B. A supplementary study {n}. Cell {n}, 3 "
+            f"(2020).\n" for n in range(1, 6)
+        )
+        text = (
+            "Intro cites [1] and [6].\nReferences\n" + main
+            + "Supplementary Information\nThe supplement cites [5].\n"
+            "Supplementary References\n" + extra
+        )
+        passages = (chunk("a", text),)
+        lists = reference_lists(passages, LAYOUT)
+        self.assertEqual(
+            [(found.index, found.heading, len(found.entries))
+             for found in lists],
+            [(0, "References", 6), (1, "Supplementary References", 5)],
+        )
+        self.assertIsInstance(lists[0], ReferenceList)
+        self.assertEqual(
+            lists[1].label, "Supplementary References (5 entries, 1–5)"
+        )
+        first = numbered_reference_entries(passages, LAYOUT, which=0)
+        self.assertTrue(first[0].text.startswith("Main1"))
+        self.assertTrue(
+            numbered_reference_entries(passages, LAYOUT)[0]
+            .text.startswith("Extra1")
+        )
+        # Each list's citing text: the main text, or the supplement.
+        self.assertEqual(
+            reference_body(passages, 0)[0].text.strip(),
+            "Intro cites [1] and [6].",
+        )
+        supplement = " ".join(
+            passage.text for passage in reference_body(passages, 1)
+        )
+        self.assertIn("The supplement cites [5].", supplement)
+        self.assertNotIn("Main1", supplement)
+        self.assertNotIn("Intro", supplement)
+
+    def test_supplementary_methods_ends_main_reference_list(self) -> None:
+        """A supplementary section is neither an entry nor lost body."""
+
+        main = "".join(
+            f"{n}. Main{n} A. A study of cells {n}. Nature {n}, 3 "
+            f"(2019).\n" for n in range(1, 7)
+        )
+        text = (
+            "Main work cites [1].\nReferences\n" + main
+            + "Supplementary Methods\nAdditional experiments cite [1].\n"
+            "Supplementary References\n"
+            "1. Extra B. A supplementary study of cells. Cell 1, 3 "
+            "(2020).\n"
+        )
+        passages = (chunk("a", text),)
+        self.assertEqual(
+            [len(ref.entries) for ref in reference_lists(passages, LAYOUT)],
+            [6, 1],
+        )
+        self.assertTrue(all(
+            "Supplementary" not in entry.text
+            for entry in numbered_reference_entries(
+                passages, LAYOUT, which=0
+            )
+        ))
+        supplement = " ".join(
+            part.text for part in reference_body(passages, 1)
+        )
+        self.assertIn("Additional experiments cite [1].", supplement)
+        self.assertNotIn("Main1", supplement)
 
     def test_unprinted_numbers_follow_the_previous(self) -> None:
         entries = numbered_reference_entries(

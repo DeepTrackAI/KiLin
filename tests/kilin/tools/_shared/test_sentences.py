@@ -104,5 +104,114 @@ class TestSplitSentences(unittest.TestCase):
         )
         self.assertIs(sentences[1].chunk, passages[0])
 
+    def test_page_number_between_the_halves_of_a_sentence(self) -> None:
+        within = [
+            chunk("a", "Cells respond to stress through the\n\n13\n\n"
+                       "accumulation of proteins. Next one starts.")
+        ]
+        across = [
+            chunk("a", "Cells respond to stress through the"),
+            chunk("b", "13\naccumulation of proteins. Next one starts.",
+                  line=2),
+        ]
+        for passages in (within, across):
+            with self.subTest(passages=len(passages)):
+                self.assertEqual(
+                    [s.text for s in split_sentences(passages, min_words=1)],
+                    [
+                        "Cells respond to stress through the accumulation "
+                        "of proteins.",
+                        "Next one starts.",
+                    ],
+                )
+
+    def test_paragraphs_and_numbers_stay_apart(self) -> None:
+        # A finished sentence, a heading or a capitalized start is not
+        # joined across a blank line, and a lone number stays when it is
+        # not between the halves of a sentence.
+        passages = [
+            chunk("a", "Cells grow fast.\n\n13\n\nresults follow here. "
+                       "Methods\n\nWe measured cells.")
+        ]
+        self.assertEqual(
+            [s.text for s in split_sentences(passages, min_words=1)],
+            ["Cells grow fast.", "13", "results follow here.",
+             "Methods", "We measured cells."],
+        )
+
+    def test_overlapping_passage_starting_earlier_is_not_joined(self) -> None:
+        # The next passage starts in the overlap, before the cut sentence:
+        # its lowercase start belongs to an earlier sentence.
+        passages = [
+            chunk("a", "Methods include (in alpha-\nbetical order): A, B and "
+                       "C19–26. These methods evaluate the association of\n\n",
+                  line=1),
+            chunk("b", "betical order): A, B and C19–26. These methods "
+                       "evaluate the association of\n\ncells with traits. "
+                       "Done here.", line=2),
+        ]
+        texts = [s.text for s in split_sentences(passages, min_words=1)]
+        self.assertEqual(
+            texts,
+            [
+                "Methods include (in alpha- betical order): A, B and "
+                "C19–26.",
+                "These methods evaluate the association of cells with "
+                "traits.",
+                "Done here.",
+            ],
+        )
+
+    def test_links_and_table_text_survive_page_reconstruction(self) -> None:
+        """Ordinary document content is not classified as page furniture."""
+
+        for meaningful in (
+            "https://github.com/example/repository",
+            "https://doi.org/10.1000/example",
+            "Signal | Noise",
+        ):
+            with self.subTest(content=meaningful):
+                passage = chunk(
+                    "p", "We release the source at\n\n" + meaningful
+                    + "\n\nand evaluated it across datasets."
+                )
+                sentences = split_sentences((passage,), min_words=1)
+                self.assertTrue(any(
+                    meaningful in sentence.text for sentence in sentences
+                ))
+
+    def test_standalone_link_between_passages_is_preserved(self) -> None:
+        """A lone URL without a repeated page header remains searchable."""
+
+        passages = (
+            chunk("p1", "The paper provides data at"),
+            chunk(
+                "p2", "https://github.com/example/source\nand shares "
+                "the results.", line=2,
+            ),
+        )
+        texts = [
+            sentence.text for sentence in split_sentences(
+                passages, min_words=1
+            )
+        ]
+        self.assertIn("https://github.com/example/source", " ".join(texts))
+
+    def test_footers_between_the_halves_are_left_out(self) -> None:
+        footer = "Nature Communications |\n\n (2025) 16:2748\n\n"
+        pages = [
+            chunk("a", f"Intro text here. {footer}11\n\n"),
+            chunk("b", f"Article\n\nMore text here. {footer}12\n\n"),
+            chunk("c", "Article\n\nSoftware ran on Numpy90 for data\n\n"
+                       f"{footer}13\n\n"),
+            chunk("d", "Article\n\nhttps://doi.org/10.1038/x\n\n"
+                       "handling and analysis91. Next one."),
+        ]
+        texts = [s.text for s in split_sentences(pages, min_words=1)]
+        self.assertIn(
+            "Software ran on Numpy90 for data handling and analysis91.",
+            texts,
+        )
+
 if __name__ == "__main__":
     unittest.main()

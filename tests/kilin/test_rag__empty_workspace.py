@@ -24,7 +24,7 @@ from kilin import (
 from kilin.conversation_format import conversation_state
 from kilin.trace_logging import TraceConfig
 from tests.kilin.retrievals._support import FakeEmbeddings
-from tests.kilin.test_rag import _session
+from tests.kilin._rag_support import _session
 
 
 class TestEmptyWorkspaceRAG(unittest.TestCase):

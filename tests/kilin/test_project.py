@@ -160,14 +160,15 @@ class TestProjectTypeIds(ProjectFixture):
     """Check the mapping from type definitions to project defaults."""
 
     def test_registry_identifiers_are_not_a_builtin_allowlist(self) -> None:
-        """Expose all configured types without requiring standard names."""
+        """Expose configured types without type-specific Python constants."""
 
         current = load_project_types()
         self.assertEqual(project.PROJECT_TYPE_IDS, tuple(current))
         self.assertTrue(project.PROJECT_TYPE_IDS)
         self.assertFalse(hasattr(project, "_check_built_in_kinds"))
-        self.assertEqual(project.PROJECT_TYPE_ID_CODE, "code")
-        self.assertEqual(project.PROJECT_TYPE_ID_LITERATURE, "literature")
+        self.assertFalse(
+            any(name.startswith("PROJECT_TYPE_ID_") for name in vars(project))
+        )
 
     def test_default_profiles_match_loaded_packaged_definitions(self) -> None:
         """File filters and size limits follow data, not hard-coded values."""
@@ -227,12 +228,12 @@ class TestProjectTypeIds(ProjectFixture):
 class TestProjectInitialization(ProjectFixture):
     """Exercise creating and reopening project profiles in actual folders."""
 
-    def test_initialize_both_types_without_modifying_source_files(
+    def test_initialize_all_types_without_modifying_source_files(
         self,
     ) -> None:
-        """Initialize each built-in type and preserve existing data."""
+        """Initialize every packaged type and preserve existing data."""
 
-        for type_id in ("code", "literature"):
+        for type_id in project.PROJECT_TYPE_IDS:
             with self.subTest(type_id=type_id):
                 directory = self._folder(type_id)
                 original = self._write(
@@ -240,10 +241,7 @@ class TestProjectInitialization(ProjectFixture):
                 )
                 result = project.initialize_project(directory, type_id)
                 self.assertEqual(result.root, directory)
-                self.assertEqual(
-                    result.source,
-                    directory / project_type(type_id).source_directory,
-                )
+                self.assertEqual(result.source, directory / "sources")
                 self.assertEqual(result.profile.type_id, type_id)
                 self.assertEqual(
                     result.profile.extensions,
@@ -261,10 +259,10 @@ class TestProjectInitialization(ProjectFixture):
                     "keep this content",
                 )
 
-    def test_initialize_prefers_sources_over_kind_specific_folders(
+    def test_initialize_never_adopts_existing_source_folders(
         self,
     ) -> None:
-        """Reject both existing source-layout alternatives without adoption."""
+        """Reject a folder that already holds source folders; adopt none."""
 
         for type_id, folder in (("code", "repository"),
                                 ("literature", "documents")):
@@ -278,20 +276,75 @@ class TestProjectInitialization(ProjectFixture):
                 self.assertTrue((directory / "sources").is_dir())
                 self.assertFalse((directory / "profile.ini").exists())
 
-    def test_initialize_uses_kind_specific_folder_when_available(
+    def test_initialize_creates_sources_for_every_type(self) -> None:
+        """Every project type gets sources/, never a type-specific name."""
+
+        for type_id in load_project_types():
+            with self.subTest(type_id=type_id):
+                directory = self.root / f"new-{type_id}"
+                result = project.initialize_project(directory, type_id)
+                self.assertEqual(result.source, directory / "sources")
+                self.assertEqual(result.profile.source, "sources")
+                self.assertEqual(
+                    sorted(path.name for path in directory.iterdir()),
+                    ["indexes", "logs", "memory", "outputs",
+                     "profile.ini", "sources", "templates"],
+                )
+
+    def test_every_creation_path_uses_sources(self) -> None:
+        """Core, mirror, and GUI creation give the same source folder."""
+
+        from kilin.workspace import prepare_sources_workspace
+        from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
+
+        original = self._folder("original")
+        self._write(original, "notes.md", "text")
+        for type_id in project.PROJECT_TYPE_IDS:
+            with self.subTest(type_id=type_id):
+                created = (
+                    project.initialize_project(
+                        self.root / f"core-{type_id}", type_id
+                    ),
+                    project.prepare_project_workspace(
+                        original, type_id, self.root / f"mirror-{type_id}"
+                    ),
+                    prepare_sources_workspace(
+                        [original], type_id, self.root / f"gui-{type_id}"
+                    ),
+                )
+                for result in created:
+                    self.assertEqual(
+                        result.profile.source, PROJECT_SOURCES_DIRECTORY
+                    )
+                    self.assertEqual(
+                        result.source, result.root / PROJECT_SOURCES_DIRECTORY
+                    )
+
+    def test_existing_source_folders_open_without_being_moved(
         self,
     ) -> None:
-        """Choose repository/documents when sources is absent."""
+        """Older documents/ or repository/ projects stay as they are."""
 
-        for type_id, source_name in (
-            ("code", "repository"),
+        for type_id, folder in (
             ("literature", "documents"),
+            ("code", "repository"),
+            ("code", "sources"),
         ):
-            directory = self._folder(f"specific-{type_id}")
-            source = directory / source_name
-            result = project.initialize_project(directory, type_id)
-            self.assertEqual(result.source, source)
-            self.assertEqual(result.profile.source, source_name)
+            with self.subTest(type_id=type_id, folder=folder):
+                directory = self._profile(
+                    f"saved-{type_id}-{folder}", type_id=type_id,
+                    source=folder,
+                )
+                paper = self._write(directory / folder, "a.md", "text")
+                opened = project.open_project(directory)
+                self.assertEqual(opened.source, directory / folder)
+                self.assertEqual(opened.profile.source, folder)
+                # Opening never renames, moves, or adds a source folder.
+                self.assertEqual(paper.read_text(encoding="utf-8"), "text")
+                self.assertEqual(
+                    sorted(path.name for path in directory.iterdir()),
+                    sorted([folder, "profile.ini"]),
+                )
 
     def test_initialize_is_idempotent_and_preserves_existing_profile(
         self,
@@ -363,7 +416,7 @@ class TestProjectProfileValidation(ProjectFixture):
     def test_default_template_round_trip(self) -> None:
         """Parse the canonical INI format without changing its contents."""
 
-        for type_id in ("code", "literature"):
+        for type_id in project.PROJECT_TYPE_IDS:
             with self.subTest(type_id=type_id):
                 root = self._profile(f"roundtrip-{type_id}", type_id=type_id)
                 parsed = project.open_project(root)
@@ -493,6 +546,27 @@ class TestProjectProfileValidation(ProjectFixture):
             self._edit(root, section, option, "possibly")
             with self.assertRaisesRegex(ValueError, "true or false"):
                 project.open_project(root)
+
+    def test_cjk_blocking_setting_is_optional(self) -> None:
+        """New profiles write the flag; older profiles use the default."""
+
+        root = self._profile("cjk")
+        text = (root / "profile.ini").read_text(encoding="utf-8")
+        self.assertIn("block_unrequested_cjk = true", text)
+        self.assertTrue(
+            project.open_project(root).profile.block_unrequested_cjk
+        )
+        self._edit(root, "generation", "block_unrequested_cjk", "false")
+        self.assertFalse(
+            project.open_project(root).profile.block_unrequested_cjk
+        )
+        self._edit(root, "generation", "block_unrequested_cjk", None)
+        self.assertTrue(
+            project.open_project(root).profile.block_unrequested_cjk
+        )
+        self._edit(root, "generation", "block_unrequested_cjk", "possibly")
+        with self.assertRaisesRegex(ValueError, "true or false"):
+            project.open_project(root)
 
     def test_generation_temperature_boundaries(self) -> None:
         """Allow zero/positive temperatures and reject negative/invalid."""
@@ -775,7 +849,8 @@ class TestProjectWorkspace(ProjectFixture):
         result = self._prepare()
         self.assertTrue(result.root.is_relative_to(self.sandbox))
         self.assertEqual(result.profile.type_id, "code")
-        self.assertEqual(result.profile.source, self.source.name)
+        self.assertEqual(result.profile.source, "sources")
+        self.assertEqual(result.source, result.root / "sources")
         self.assertEqual(
             (result.source / self.file).read_text(encoding="utf-8"),
             "first version\n",
@@ -911,6 +986,26 @@ class TestProjectWorkspace(ProjectFixture):
         self.assertEqual(independent.profile.type_id, "literature")
         self.assertEqual((original.root / "profile.ini").read_bytes(),
                          before)
+
+    def test_older_mirror_keeps_its_source_folder(self) -> None:
+        """A mirror copied into the original's name syncs in place."""
+
+        first = self._prepare()
+        older = first.root / self.source.name
+        first.source.rename(older)
+        self._edit(first.root, "project", "source", self.source.name)
+        self._write(self.source, "pkg/extra" + self.suffix, "new\n")
+
+        result = self._prepare()
+
+        self.assertEqual(result.source, older)
+        self.assertFalse((result.root / "sources").exists())
+        self.assertEqual(
+            (older / "pkg" / f"extra{self.suffix}").read_text(
+                encoding="utf-8"
+            ),
+            "new\n",
+        )
 
     def test_workspace_rejects_tampered_profile_source(self) -> None:
         """Reject profile sources that no longer point to the owned copy."""
@@ -1169,6 +1264,47 @@ class TestProjectWorkspace(ProjectFixture):
         self.assertTrue((result.root / "source_snapshot.json").is_file())
         self.assertFalse((result.source / self.file).exists())
         self.assertEqual(result.root, self._prepare().root)
+
+
+class TestDeleteProject(ProjectFixture):
+    """Move a project into the deleted folder beside it."""
+
+    def test_project_moves_to_deleted_and_keeps_its_files(self) -> None:
+        papers = project.initialize_project(self.root / "papers", "code").root
+        moved = project.delete_project(papers)
+        self.assertEqual(moved, self.root / ".deleted" / "papers")
+        self.assertFalse(papers.exists())
+        self.assertTrue((moved / "profile.ini").is_file())
+
+    def test_a_name_already_deleted_is_kept(self) -> None:
+        for _ in range(3):
+            project.initialize_project(self.root / "papers", "code")
+            project.delete_project(self.root / "papers")
+        self.assertEqual(
+            sorted(path.name for path in (self.root / ".deleted").iterdir()),
+            ["papers", "papers_2", "papers_3"],
+        )
+
+    def test_only_projects_are_moved(self) -> None:
+        folder = self._folder("not-a-project")
+        with self.assertRaises(FileNotFoundError):
+            project.delete_project(folder)
+        with self.assertRaises(FileNotFoundError):
+            project.delete_project(self.root / "missing")
+        papers = project.initialize_project(self.root / "papers", "code").root
+        link = self.root / "link"
+        link.symlink_to(papers)
+        with self.assertRaisesRegex(ValueError, "link"):
+            project.delete_project(link)
+        self.assertTrue(papers.is_dir())
+        self.assertFalse((self.root / ".deleted").exists())
+
+    def test_a_project_named_deleted_is_not_used_as_the_bin(self) -> None:
+        project.initialize_project(self.root / ".deleted", "code")
+        papers = project.initialize_project(self.root / "papers", "code").root
+        with self.assertRaisesRegex(ValueError, "is a project"):
+            project.delete_project(papers)
+        self.assertTrue(papers.is_dir())
 
 
 class TestWorkspaceHelpers(ProjectFixture):

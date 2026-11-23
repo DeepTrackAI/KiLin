@@ -56,7 +56,7 @@ class TestGUIGenerationSettings(unittest.TestCase):
         )
         engine._report_error = Mock()
         with patch.object(
-            gui_engine, "available_models", return_value=[]
+            gui_engine, "downloaded_models", return_value=[]
         ), patch.object(
             gui_engine, "installed_backends", return_value=[]
         ), patch.object(
@@ -72,5 +72,6 @@ class TestGUIGenerationSettings(unittest.TestCase):
         self.assertEqual(
             profile["max_new_tokens"], core.max_new_tokens
         )
-        self.assertTrue(core.thinking)
+        self.assertIs(core.thinking, False)
+        self.assertEqual(core.temperature, 0.2)
         self.assertEqual(core.max_new_tokens, 8192)

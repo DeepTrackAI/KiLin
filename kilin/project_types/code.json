@@ -1,27 +1,48 @@
 {
-  "display_name": "Code repository",
+  "display_name": "Code Repository",
   "description": "A software repository with source code and documentation.",
-  "source_directory": "repository",
   "extensions": [
-    ".py",
-    ".ipynb",
-    ".m",
-    ".md"
+      ".py",
+      ".ipynb",
+      ".m",
+      ".r",
+      ".md",
+      ".json",
+      ".js",
+      ".html"
   ],
   "max_file_bytes": 1048576,
   "retrieval_instruction": "Given a question about a software repository, retrieve relevant code and documentation that help answer the question.",
-  "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
+  "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient. When you list functions, callers, or uses, do not claim that the list is complete unless the evidence shows it is; say that it covers the supplied evidence. If no passage shows the code that does what the question asks about, say so plainly and name the closest code you found; do not infer the mechanism from settings, names, or tests.",
   "answer_guidance": "Follow any length or format the question asks for (for example 'in two sentences' or 'as a list'). Otherwise keep the answer concise: about 150-300 words, or more when the question asks for detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
   "capabilities": {
     "code_graph": true
   },
   "history": {
-    "recent_turns": 2
+    "recent_turns": 2,
+    "exclude_disliked_answers": true
+  },
+  "conversation_memory": {
+    "enabled": false,
+    "questions": "all",
+    "answers": "selected",
+    "max_hits": 4,
+    "max_tokens": 2000
+  },
+  "generation": {
+    "temperature": 0.2,
+    "thinking": false
   },
   "default_intent": "code_explanation",
   "intents": {
     "code_explanation": {
-      "description": "Explain existing code, or how parts of the repository work and connect.",
+      "description": "Explain existing code, or how parts of the repository work and connect, including where and how the code decides something (for example, how it selects, reads, or skips files), and how one function or class relates to others: which functions it calls, which ones call it, and which class it extends ('which function does load_data call?', 'what calls save?'). Also what the code can do for the user and how to use it for a task or analysis ('what can this code do for me?', 'which analyses does this toolbox support?', 'how do I analyze functional data with it?').",
+      "cues": [
+        "\\b(?:which|what)\\s+(?:functions?|methods?)\\s+(?:does|do|did)\\b.{0,80}\\bcall\\b",
+        "\\b(?:which|what|who)\\b(?:\\s+[\\w-]+){0,4}\\s+calls?\\s+[A-Za-z_][\\w.]*(?:\\(\\))?\\s*\\?",
+        "\\bwhich\\s+class(?:es)?\\s+does\\b.{0,80}\\b(?:extend|inherit)",
+        "\\bif\\s+i\\s+change\\b.{0,80}\\b(?:affected|break)"
+      ],
       "system_prompt": "Explain the code clearly, including its role and how it relates to other parts of the repository.",
       "history": {
         "policy": "relevant"
@@ -29,7 +50,8 @@
       "retrieval": {
         "mode": "search",
         "strategy": "hybrid",
-        "include_related_evidence": true
+        "include_related_evidence": true,
+        "prefer_source_code": true
       }
     },
     "fact_finding": {
@@ -43,8 +65,6 @@
       "tool": {
         "name": "find_fact",
         "part_tokens": 6000,
-        "note_tokens": 300,
-        "answer_tokens": 1024,
         "max_model_calls": 200,
         "confirmation": "always",
         "large_batches": 0
@@ -72,7 +92,8 @@
       "retrieval": {
         "mode": "search",
         "strategy": "hybrid",
-        "include_related_evidence": true
+        "include_related_evidence": true,
+        "prefer_source_code": true
       }
     },
     "file_reading": {
@@ -86,15 +107,17 @@
       "tool": {
         "name": "batch_review",
         "part_tokens": 6000,
-        "note_tokens": 400,
-        "answer_tokens": 1024,
         "max_model_calls": 20,
         "confirmation": "when_large",
         "large_batches": 3
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": true
       }
     },
     "project_inventory": {
-      "description": "Questions about the repository's files themselves rather than what the code does: how many files or scripts it has, which files or types are included, which could not be read ('how many Python files are there?', 'list the notebooks', 'which files were not indexed?'). Not when files are filtered by what they are about ('how many of the files are related to X?' or 'which files use X?' read the files: topic_listing), and not for whether files mention or contain a name (mention_listing).",
+      "description": "Questions about the repository's files themselves rather than what the code does: how many files or scripts it has, which files or types are included, which could not be read ('how many Python files are there?', 'list the notebooks', 'which files were not indexed?'). Not when files are filtered by what they are about ('how many of the files are related to X?' or 'which files use X?' read the files: topic_listing), and not for whether files mention or contain a name (mention_listing). Not for how the code itself selects, reads, or skips files ('where does the code decide which files to index?', 'how does the loader skip hidden files?'): that is code_explanation.",
       "history": {
         "policy": "none"
       },
@@ -105,10 +128,14 @@
         "name": "project_inventory",
         "max_listed": 200,
         "max_folders": 20
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "mention_listing": {
-      "description": "List or count every place an exact name or text appears in the code, and the lines that contain it ('find every use of load_data', 'list all TODO comments', 'how many files mention matplotlib?'). Exhaustive and exact; not for explaining what code does or sorting occurrences into groups.",
+      "description": "List or count every place an exact name or text appears in the code, and the lines that contain it ('find every use of load_data', 'list all TODO comments', 'how many files mention matplotlib?'). Exhaustive and exact; not for explaining what code does, what a function calls or what calls it (code_explanation), or sorting occurrences into groups.",
       "history": {
         "policy": "none"
       },
@@ -121,6 +148,10 @@
         "whole_words": true,
         "context_lines": 1,
         "max_listed": 100
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "topic_listing": {
@@ -139,6 +170,10 @@
         "max_listed": 100,
         "confirmation": "when_large",
         "large_batches": 3
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "mention_classification": {
@@ -160,6 +195,10 @@
         "max_model_calls": 30,
         "confirmation": "when_large",
         "large_batches": 2
+      },
+      "memory": {
+        "indexing": "explicit",
+        "read": false
       }
     },
     "refine_results": {
@@ -187,8 +226,7 @@
       "tool": {
         "name": "show_source",
         "context_sentences": 2,
-        "max_passages": 3,
-        "answer_tokens": 400
+        "max_passages": 3
       }
     },
     "conversation_followup": {
@@ -212,6 +250,7 @@
       }
     },
     "small_talk": {
+      "thinking": false,
       "description": "Only greetings, thanks, goodbyes, or pleasantries such as 'how are you?'. Any question about a term, name, method, the sources, an earlier answer, or the conversation itself is never small talk.",
       "system_prompt": "This message is small talk, not a question about the sources, so the evidence rules above do not apply. Reply in one short, friendly sentence. Do not cite sources, summarize the conversation, mention evidence, or invent project details.",
       "answer_guidance": "Reply in one short sentence.",
@@ -228,25 +267,60 @@
         "how (are|r) (you|u)( doing)?( today)?",
         "how('s| is) it going( today)?|how('s| is) your day( going)?|what'?s up|sup",
         "(bye|goodbye|see you|see you later|good night|have a (nice|good) day)"
+      ],
+      "memory": {
+        "indexing": "never",
+        "read": false
+      }
+    },
+    "assistant_help": {
+      "description": "Questions about KíLín itself, the assistant: what it can do, how it can help, or what kinds of questions to ask it ('what can you do for me?', 'how can you help me with this project?', 'what kinds of questions can I ask?', 'help'). Not about what the project's own documents or code say, do, or offer ('what can this code do for me?' and 'which analyses does this toolbox support?' are about the sources). Also how to give it files and what it does with them: how to add, upload, import, attach, drag, or remove files or folders ('how do I add my papers?', 'how to drag files', 'can I upload a folder?', 'what do you mean by adding files?', 'what do you do with my files?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "assistant_guide"
+      },
+      "shortcuts": [
+        "(help|what can you do( for me)?|how can you help( me)?|what can i ask( you)?|what kinds? of questions can i ask( you)?|what can you help me with)",
+        "(how (do|can|should) i|how to|can i|where (do|should|can) i) (add|upload|import|attach|drag|drop|put|place|remove|delete)( and drop| in)? (my |a |the |some |more |new |these |this |our )?(whole |own |other )?(files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?",
+        "what do you mean( by)? (add|adding|upload|uploading|attach|attaching|import|importing|sources?|files?)( .*)?",
+        "what (do|will|can) you do (with|to|for) (my|the|these|our) (files?|folders?|papers?|pdfs?|documents?|sources?|code)( .*)?"
       ]
     }
   },
   "welcome_prompts": [
-    "What would you like to understand about this codebase?",
-    "Which part of your project should we explore?",
-    "What do you want to trace through the code?",
-    "What behavior would you like to investigate?",
-    "Where should we start in this repository?"
+    "What would you like to do with your code today?",
+    "Which piece of code shall we look at?",
+    "Add your code, or ask what I can do for you."
+  ],
+  "welcome_templates": [
+    "What would you like to do with this code for {theme}?",
+    "What would you like to understand about this code for {theme}?"
   ],
   "suggestions": [
-    "Explain how … works",
-    "Review the whole … file",
-    "Write a function that …",
-    "Why does … fail?",
-    "Which libraries does each script use?",
-    "Show every line that uses …",
-    "Which files mention …?",
-    "Show every comment that discusses …",
-    "How many Python files are in this project?"
-  ]
+    "What can you do for me?",
+    "How do I add my files?",
+    "Explain this code: print(sum(range(1, 11)))  # paste your own code here",
+    "Explain this code: disp(sum(1:10))  % paste your own code here",
+    "Explain this code: console.log([1, 2, 3, 4, 5, 6, 7, 8, 9, 10].reduce((a, b) => a + b));  // paste your own code here",
+    "Explain this code: print(sum(1:10))  # paste your own code here"
+  ],
+  "suggestion_templates": {
+    "code_explanation": [
+      "Explain how {file} works.",
+      "How can I use this code for {topic}?"
+    ],
+    "fact_finding": "Which libraries does {file} use?",
+    "code_generation": "Write a unit test for a function in {file}.",
+    "file_reading": "Review the whole {file} file.",
+    "project_inventory": "How many files are in this project?",
+    "mention_listing": "Show every line that uses {term}.",
+    "topic_listing": "List the comments that discuss {topic}.",
+    "mention_classification": "Which uses of {term} are in tests, and which are in the main code?",
+    "assistant_help": "What can you do for me?"
+  }
 }

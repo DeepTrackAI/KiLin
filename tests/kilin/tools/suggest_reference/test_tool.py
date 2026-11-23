@@ -13,16 +13,20 @@ model-free run on a small project.
 from __future__ import annotations
 
 from dataclasses import fields
-import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
 from kilin.project_type import project_type
+from kilin.retrievals.requests import RetrievalResult
 from kilin.tools import suggest_reference as tool
 from kilin.tools._contract import ToolRequest
-from kilin.tools._registry import TOOL_REGISTRY, TOOL_SUGGEST_REFERENCE
+from kilin.tools._registry import TOOL_SUGGEST_REFERENCE
+from tests.kilin.tools._contract_support import (
+    assert_packaged_defaults,
+    assert_registry_entry,
+)
 from tests.kilin.tools._shared._support import chunk
 
 STATEMENT = "anomalous diffusion is common in living cells"
@@ -45,30 +49,24 @@ class TestSuggestReferencePackage(unittest.TestCase):
     """Configuration, registry and intent."""
 
     def test_registry_uses_package_entry_points(self) -> None:
-        entry = TOOL_REGISTRY[TOOL_SUGGEST_REFERENCE]
-        self.assertIs(entry.parse_settings, tool.parse_settings)
-        self.assertIs(entry.run, tool.run)
-        self.assertIsNone(entry.workspace_resources)
-        self.assertFalse(entry.follows_up)
+        assert_registry_entry(
+            self, "suggest_reference", tool, non_followup=True
+        )
 
     def test_packaged_defaults_are_documented(self) -> None:
-        package = Path(tool.__file__).parent
-        data = json.loads(
-            (package / "defaults.json").read_text(encoding="utf-8")
+        assert_packaged_defaults(
+            self, tool, tool.SuggestReferenceSettings, check_values=False,
         )
-        readme = (package / "README.md").read_text(encoding="utf-8")
-        for section, values in data.items():
-            with self.subTest(section=section):
-                self.assertIn(f"`{section}`", readme)
-            for key in values:
-                with self.subTest(key=f"{section}.{key}"):
-                    self.assertIn(f"`{key}`", readme)
-        defaults = tool.SuggestReferenceSettings()
-        self.assertEqual(defaults, tool.parse_settings({}, "example"))
-        self.assertEqual(
-            {f.name for f in fields(defaults)},
-            {name.lower() for name in data["SETTINGS"]},
-        )
+
+    def test_verdict_tokens_inherit_session_by_default(self) -> None:
+        """An omitted limit never imposes the historical 250-token cap."""
+
+        settings = tool.parse_settings({}, "test")
+        self.assertNotIn("answer_tokens", {f.name for f in fields(settings)})
+        for obsolete in (None, 4096, 0, -1, "250", False, 131073):
+            with self.subTest(value=obsolete):
+                with self.assertRaisesRegex(ValueError, "unknown settings"):
+                    tool.parse_settings({"answer_tokens": obsolete}, "test")
 
     def test_invalid_project_type_settings(self) -> None:
         for values in (
@@ -91,7 +89,9 @@ class TestStatement(unittest.TestCase):
     def test_quoted_or_after_a_colon(self) -> None:
         router = Mock()
         self.assertEqual(
-            tool.statement_of(f"which paper supports “{STATEMENT}”?", router),
+            tool.statement_of(
+                f"which paper supports “{STATEMENT}”?", router
+            ),
             STATEMENT,
         )
         self.assertEqual(
@@ -117,6 +117,91 @@ class TestStatement(unittest.TestCase):
         self.assertEqual(tool.statement_of(question, broken), question)
 
 
+    def test_named_subject(self) -> None:
+        for question, name in (
+            ("which paper should I cite for BRAPH2?", "BRAPH2"),
+            ("What should I cite for TrackMate in my paper?", "TrackMate"),
+            ("the reference for the BRAPH 2 software", "BRAPH 2 software"),
+            ("which article introduced U-Net?", "U-Net"),
+            ("how do I cite BRAPH 2?", "BRAPH 2"),
+            ("Which paper should I cite for DeepTrack 2.1?", "DeepTrack 2.1"),
+            # Statements, topics and text pointed at are not names.
+            ("what should I cite for anomalous diffusion?", None),
+            (f"suggest a reference for: {STATEMENT}", None),
+            ("find a citation for BRAPH2 being widely used", None),
+            ("What can I cite for this sentence: cells move", None),
+            ("a reference for This claim", None),
+            ("cite this", None),
+            ("which paper describes MRI?", None),
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(tool.named_subject(question), name)
+
+    def test_router_reports_a_name(self) -> None:
+        question = (
+            "what's the original reference for the brain connectivity "
+            "toolbox braph?"
+        )
+        self.assertIsNone(tool.named_subject(question))  # Lower case.
+        for reply, name in (
+            ("NAME: braph", "braph"),
+            ('NAME: "the brain connectivity toolbox braph".',
+             "brain connectivity toolbox braph"),
+        ):
+            with self.subTest(reply=reply):
+                self.assertEqual(
+                    tool.request_of(question, Mock(return_value=reply)),
+                    (tool.name_statement(name), name),
+                )
+        self.assertEqual(
+            tool.request_of(
+                "which paper should I cite when using scikit-learn?",
+                Mock(return_value="NAME: scikit-learn"),
+            )[1],
+            "scikit-learn",
+        )
+        # A name not in the question, or a topic, is not trusted.
+        topic = "what should I cite for anomalous diffusion in cells?"
+        for question, reply in (
+            (question, "NAME: BRAPH 3"),
+            (topic, "NAME: anomalous diffusion"),
+        ):
+            with self.subTest(question=question, reply=reply):
+                self.assertEqual(
+                    tool.request_of(question, Mock(return_value=reply)),
+                    (question.strip(), ""),
+                )
+        # A statement reply is used as before.
+        self.assertEqual(
+            tool.request_of(
+                topic, Mock(return_value="anomalous diffusion in cells")
+            ),
+            ("anomalous diffusion in cells", ""),
+        )
+        # A pattern-recognized name needs no router call.
+        router = Mock()
+        self.assertEqual(
+            tool.request_of("cite for BRAPH2", router)[1], "BRAPH2"
+        )
+        router.assert_not_called()
+
+    def test_name_statement_has_both_spellings(self) -> None:
+        self.assertEqual(
+            tool.name_statement("BRAPH2"),
+            "BRAPH2 (BRAPH 2) was introduced (first presented) in this "
+            "work.",
+        )
+        self.assertEqual(
+            tool.name_statement("BRAPH 2"),
+            "BRAPH 2 (BRAPH2) was introduced (first presented) in this "
+            "work.",
+        )
+        self.assertEqual(
+            tool.name_statement("TrackMate"),
+            "TrackMate was introduced (first presented) in this work.",
+        )
+
+
 class TestSuggestReferenceRun(unittest.TestCase):
     """A full run on a small Markdown project."""
 
@@ -130,7 +215,7 @@ class TestSuggestReferenceRun(unittest.TestCase):
 
     def _run(
         self, question: str = f"suggest a reference for: {STATEMENT}",
-        choice: str = "continue", **settings: object,
+        choice: str = "continue", retrieve=None, **settings: object,
     ) -> tuple[object, SimpleNamespace]:
         def ask_model(system: str, prompt: str, tokens: int) -> str:
             if "(review.md)" in prompt:
@@ -155,6 +240,7 @@ class TestSuggestReferenceRun(unittest.TestCase):
             ask_router=Mock(return_value="NONE"),
             confirm=Mock(return_value=choice),
             trace=SimpleNamespace(emit=Mock()), trace_turn_id=None,
+            retrieve=retrieve,
         )
         request = ToolRequest(question, question)
         return tool.run(
@@ -163,13 +249,13 @@ class TestSuggestReferenceRun(unittest.TestCase):
 
     def test_suggestions_with_quotes(self) -> None:
         result, context = self._run()
-        # The draft contains the statement: left out, not judged.
-        self.assertEqual(context.ask_model.call_count, 3)
-        self.assertEqual(result.summary["left_out"], ["draft.md"])
+        # A verbatim match alone is not grounds to exclude a source.
+        self.assertEqual(context.ask_model.call_count, 4)
+        self.assertEqual(result.summary["left_out"], [])
         self.assertEqual(result.summary["suggested"], 2)
         answer = result.answer
         self.assertIn(f"**Statement:** “{STATEMENT}”", answer)
-        self.assertIn("**2 of the 3 papers checked could be cited", answer)
+        self.assertIn("**2 of the 4 papers checked could be cited", answer)
         self.assertIn("1. **Supported** · `review.md`", answer)
         self.assertIn("2. **Partly supported** · `repeat.md`", answer)
         self.assertLess(answer.index("review.md"), answer.index("repeat.md"))
@@ -182,25 +268,105 @@ class TestSuggestReferenceRun(unittest.TestCase):
         self.assertIn("States it (2).", answer)
         self.assertIn("citing (12)", answer)
         self.assertIn(
-            "Also checked: `other.md` (no matching passage).", answer
-        )
-        self.assertIn(
-            "Not checked, as they contain the statement word for word "
-            "(your draft, or the paper it comes from): `draft.md`.",
-            answer,
+            "Also checked: `draft.md` (no matching passage), "
+            "`other.md` (no matching passage).", answer
         )
         self.assertEqual(len(result.evidence), 1)
         self.assertEqual(result.evidence[0]["path"], Path("review.md"))
         context.confirm.assert_not_called()  # 3 papers: a small plan.
         events = [c.args[0] for c in context.trace.emit.call_args_list]
-        self.assertEqual(events.count("tool.suggest_reference.paper"), 3)
+        self.assertEqual(events.count("tool.suggest_reference.paper"), 4)
+
+    def test_displayed_scores_match_summary_and_trace(self) -> None:
+        result, context = self._run()
+        ratings = result.summary["suitability"]
+        self.assertEqual(ratings["review.md"], {"stars": 5, "score": 96})
+        self.assertEqual(ratings["repeat.md"], {"stars": 3.0, "score": 54})
+        self.assertIn("\u2605\u2605\u2605\u2605\u2605 (96/100)", result.answer)
+        self.assertIn("\u2605\u2605\u2605\u2606\u2606 (54/100)", result.answer)
+        for call in context.trace.emit.call_args_list:
+            if call.args[0] != "tool.suggest_reference.paper":
+                continue
+            item = call.kwargs["data"]
+            if item["suitability_score"] is not None:
+                self.assertIn(
+                    f"({item['suitability_score']}/100)", result.answer
+                )
+        self.assertNotIn("(0/100)", result.answer)
+        self.assertEqual(context.ask_model.call_count, 4)
+
+    def test_verbatim_independent_paper_is_not_excluded(self) -> None:
+        paper = chunk("v1", STATEMENT, path="published.md")
+        selected, excluded = tool.candidate_files(
+            STATEMENT, {paper.path: [paper]},
+            lambda _text: [SimpleNamespace(chunk=paper)], 5,
+        )
+        self.assertEqual(selected, [Path("published.md")])
+        self.assertEqual(excluded, [])
+
+    def test_explicitly_excluded_document(self) -> None:
+        paper = chunk("v1", STATEMENT, path="draft.md")
+        selected, excluded = tool.candidate_files(
+            STATEMENT, {paper.path: [paper]},
+            lambda _text: [SimpleNamespace(chunk=paper)], 5,
+            excluded=(Path("draft.md"),),
+        )
+        self.assertEqual(selected, [])
+        self.assertEqual(excluded, [Path("draft.md")])
 
     def test_no_supporting_paper(self) -> None:
         self.chunks = [chunk("o1", OTHER, path="other.md")]
         result, _ = self._run()
-        self.assertIn("None of the 1 papers most related", result.answer)
+        self.assertIn(
+            "No direct or partial support was established among the 1 "
+            "papers", result.answer,
+        )
         self.assertIn("add the paper you have in mind", result.answer)
         self.assertEqual(result.evidence, ())
+
+    def test_source_first_discovers_card_ranked_candidates(self) -> None:
+        discovery = Mock(return_value=RetrievalResult(
+            (self.chunks[3],),
+            (Path("other.md"), Path("review.md")),
+            {"mode": "bounded", "complete": True},
+        ))
+        result, context = self._run(
+            retrieve=discovery, discovery_strategy="source_first", files=2,
+        )
+        self.assertEqual(result.summary["discovery_strategy"],
+                         "source_first")
+        self.assertEqual(result.summary["papers_checked"], 2)
+        self.assertEqual(result.summary["discovery_passages"], 1)
+        self.assertEqual(result.summary["discovery_coverage"]["mode"],
+                         "bounded")
+        request = discovery.call_args.args[0]
+        self.assertEqual(request.strategy, "source_first")
+        self.assertEqual(request.limits.max_sources, 2)
+        self.assertEqual(request.card_kinds, ("scientific_paper",))
+        self.assertIn("review.md", result.answer)
+        self.assertIn("other.md", result.answer)
+        self.assertEqual(context.ask_model.call_count, 2)
+
+    def test_source_first_missing_callback_does_not_fallback(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "requires ToolContext"):
+            self._run(discovery_strategy="source_first")
+
+    def test_hybrid_remains_default_and_ignores_retrieve(self) -> None:
+        discovery = Mock(side_effect=AssertionError("Not called"))
+        result, _ = self._run(retrieve=discovery)
+        self.assertEqual(result.summary["discovery_strategy"], "hybrid")
+        discovery.assert_not_called()
+
+    def test_discovery_settings_validation(self) -> None:
+        for settings in (
+            {"discovery_strategy": "papers"},
+            {"discovery_tokens": 299},
+            {"discovery_tokens": 16001},
+            {"discovery_tokens": True},
+        ):
+            with self.subTest(settings=settings):
+                with self.assertRaises(ValueError):
+                    tool.parse_settings(settings, "test")
 
     def test_plan_quick_and_cancel(self) -> None:
         result, context = self._run(
@@ -208,10 +374,27 @@ class TestSuggestReferenceRun(unittest.TestCase):
         )
         context.confirm.assert_called_once()
         self.assertEqual(context.ask_model.call_count, 1)
-        self.assertIn("Only the 1 most related of 3 papers", result.answer)
+        self.assertIn("Only the 1 most related of 4 papers", result.answer)
         result, context = self._run(choice="cancel", confirmation="always")
         context.ask_model.assert_not_called()
         self.assertIn("Not checked (cancelled)", result.answer)
+
+    def test_named_subject_looks_for_the_introducing_paper(self) -> None:
+        result, context = self._run(
+            question="which paper should I cite for BRAPH2?"
+        )
+        context.ask_router.assert_not_called()
+        self.assertEqual(result.summary["name"], "BRAPH2")
+        statement = (
+            "BRAPH2 (BRAPH 2) was introduced (first presented) in this work."
+        )
+        self.assertEqual(result.summary["statement"], statement)
+        prompts = [c.args[1] for c in context.ask_model.call_args_list]
+        self.assertTrue(all(statement in prompt for prompt in prompts))
+        self.assertTrue(result.answer.startswith(
+            "**Looking for:** the paper that introduces BRAPH2\n"
+        ))
+        self.assertNotIn("**Statement:**", result.answer)
 
     def test_no_statement(self) -> None:
         result, context = self._run(question="suggest a reference")

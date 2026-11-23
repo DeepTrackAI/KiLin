@@ -3,19 +3,22 @@
 "Suggest a reference for: anomalous diffusion is common in living cells"
 is about one statement and the project's papers. The tool:
 
-1. Takes the statement from the question (``statement_of``): quoted text,
+1. Takes the statement from the question (``request_of``): quoted text,
    the text after a colon, or what the router model copies out of the
-   question, checked to be the user's own words.
-2. Ranks every passage of the project for the statement, and keeps the
-   few papers with the best-ranked passages (``candidate_files``). A file
-   that contains the statement word for word (the user's draft, or the
-   paper it was copied from) is not judged, and the answer names it.
+   question, checked to be the user's own words. A request for the paper
+   to cite for a named software, method or dataset ("which paper should
+   I cite for BRAPH2?", ``named_subject``, or a name the router model
+   reports) becomes the statement that the paper introduces it.
+2. Ranks project passages and keeps the papers with the best-ranked
+   passages (``candidate_files``). Only a document explicitly identified
+   as a draft is excluded; verbatim similarity does not prove identity.
 3. Judges each paper with the answering model (``_shared.claims``): its
    passages most related to the statement, a verdict, the passage sentence
    it rests on (checked to be in the passages), and a critical comment.
    The plan is shown first when it is large.
-4. Answers with papers that could be cited, best first, with comments
-   and confirmed quotations when available, then lists the others.
+4. Rates direct or partial support using the shared half-star rubric.
+   Contextual background papers are shown separately, not as evidence
+   directly establishing a claim.
 
 Only the project's files are searched: a paper that is not in the folder
 cannot be suggested, and the answer says so when none supports the
@@ -35,9 +38,15 @@ Key Features
     The model is told that a paper repeating a claim with a citation is
     not its source, and to say so.
 
-- **The user's draft left out**
+- **Papers that introduce a name**
 
-    A file containing the statement word for word is named, not judged.
+    "What should I cite for TrackMate?" asks for the paper that
+    introduces TrackMate, not for support of a claim, and is judged
+    that way.
+
+- **No false draft identification**
+
+    A paper containing the exact statement can still be verified.
 
 Module Structure
 ----------------
@@ -46,9 +55,15 @@ Module Structure
 
     Settings of ``suggest_reference`` in a project type.
 
-- ``statement_of``
+- ``request_of`` and ``statement_of``
 
-    The statement a question asks a reference for.
+    The statement a question asks a reference for, and any name whose
+    introducing paper it asks for.
+
+- ``named_subject`` and ``name_statement``
+
+    The software, method or dataset a question asks the paper for, and
+    the statement that a paper introduces it.
 
 - ``candidate_files``
 
@@ -56,7 +71,11 @@ Module Structure
 
 - ``chat_answer``
 
-    The answer, with the suggestions first.
+    The answer, with rated suggestions first.
+
+- ``_rating.citation_suitability``
+
+    Deterministic suitability score, with no extra model calls.
 
 - ``run``
 
@@ -64,6 +83,9 @@ Module Structure
 
 Examples
 --------
+This is an illustrative integration call, not a standalone doctest.
+KíLín supplies the required tool context and conversation state.
+
 ``context`` is the ``ToolContext`` that KíLín passes to a tool:
 
 >>> from kilin.tools import ToolRequest
@@ -85,7 +107,10 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin.tools._shared.model_results import partial_result
 from kilin.chunking import Chunk
+from kilin.retrievals.evidence_budget import EvidenceLimits
+from kilin.retrievals.requests import RetrievalRequest
 from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
@@ -108,6 +133,7 @@ from kilin.tools._shared.claims import (
     Support,
     claim_passages,
     judge_support,
+    quote_line_range,
     verdict_label,
 )
 from kilin.tools._shared.planning import (
@@ -119,12 +145,19 @@ from kilin.tools._shared.planning import (
     confirm_plan,
 )
 from kilin.tools.suggest_reference import _configuration as _config
+from kilin.tools._shared._rating import (
+    citation_suitability,
+    suitability_stars,
+)
 
 __all__ = [
     "SuggestReferenceSettings",
     "candidate_files",
     "chat_answer",
+    "name_statement",
+    "named_subject",
     "parse_settings",
+    "request_of",
     "run",
     "statement_of",
 ]
@@ -137,16 +170,43 @@ _SUGGESTED: Final[tuple[str, ...]] = (
 _ORDER: Final[dict[str, int]] = {
     verdict: index
     for index, verdict in enumerate((
-        *_SUGGESTED, VERDICT_CONTRADICTED, VERDICT_NOT_SUPPORTED,
+        *_SUGGESTED, VERDICT_BACKGROUND, VERDICT_CONTRADICTED,
+        VERDICT_NOT_SUPPORTED,
         VERDICT_NOT_FOUND, VERDICT_UNCLEAR, VERDICT_FAILED, VERDICT_NO_TEXT,
     ))
 }
 # Text in quotation marks: the statement, when the user quotes it.
-_QUOTED: Final[re.Pattern[str]] = re.compile(r"[\"“«]([^\"”»]+)[\"”»]")
+_QUOTED: Final[re.Pattern[str]] = re.compile(
+    r"[\"“«]([^\"”»]+)[\"”»]"
+)
+# A request for the paper that introduces a named software, method or
+# dataset: "which paper should I cite for BRAPH2?", "the reference for
+# TrackMate in my paper", "the article that introduced U-Net".
+_NAME_REQUEST: Final[re.Pattern[str]] = re.compile(
+    r"(?:\b(?:cite|citation|reference|source)s?\s+(?:for|of)\s+"
+    r"|\bcite\s+"
+    r"|\b(?:paper|article|publication|work|study)\s+(?:that\s+|which\s+)?"
+    r"(?:introduce[sd]?|present(?:s|ed)?|propose[sd]?)\s+)"
+    r"(?P<name>[^:\"“”«»?!]+?)"
+    r"(?:\s+(?:in|for)\s+(?:my|our|the|a|this)\s+\w+)?\s*[?!.]*\s*$",
+    re.IGNORECASE,
+)
+# Most words of a name ("the BRAPH 2 software").
+_NAME_WORDS: Final[int] = 4
+# Words a name may contain besides its own: what kind of thing it is.
+_NAME_KINDS: Final[frozenset[str]] = frozenset({
+    "software", "toolbox", "toolkit", "package", "library", "framework",
+    "tool", "method", "model", "algorithm", "dataset", "database",
+    "atlas", "pipeline", "platform", "program", "plugin", "plug-in",
+    "version", "network", "architecture",
+})
+# Words that point back at text rather than name something ("cite this").
+_NOT_NAMES: Final[frozenset[str]] = frozenset({
+    "this", "that", "these", "those", "it", "them", "my", "our", "its",
+    "i", "me",
+})
 # A word, for comparing the statement with texts.
 _WORD: Final[re.Pattern[str]] = re.compile(r"[^\W_]+")
-# A word hyphenated across lines in extracted text ("perfor- mance").
-_HYPHENATED: Final[re.Pattern[str]] = re.compile(r"(?<=[a-z])-\s+(?=[a-z])")
 # A bracketed number, which the chat would read as a link to evidence.
 _BRACKETED: Final[re.Pattern[str]] = re.compile(
     r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]"
@@ -165,12 +225,14 @@ class SuggestReferenceSettings:
         Most passages of each paper read (1-20).
     passage_tokens: int
         Most estimated tokens of those passages (300-16000).
-    answer_tokens: int
-        Longest verdict answer, in tokens (100-1000).
     quick_files: int
         Papers judged by the quick version (1-20).
     confirmation: ConfirmationPolicy
         When to ask before judging: always, when_large, or never.
+    discovery_strategy: "hybrid" | "source_first"
+        Candidate discovery strategy; hybrid preserves prior behavior.
+    discovery_tokens: int
+        Maximum estimated tokens in source-first discovery evidence.
     large_batches: int
         With ``when_large``, plans with more papers than this ask first
         (0-1000).
@@ -180,10 +242,11 @@ class SuggestReferenceSettings:
     files: int = _config.DEFAULT_FILES
     passages: int = _config.DEFAULT_PASSAGES
     passage_tokens: int = _config.DEFAULT_PASSAGE_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
     quick_files: int = _config.DEFAULT_QUICK_FILES
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
+    discovery_strategy: str = _config.DEFAULT_DISCOVERY_STRATEGY
+    discovery_tokens: int = _config.DEFAULT_DISCOVERY_TOKENS
 
 
 def parse_settings(data: dict, where: str) -> SuggestReferenceSettings:
@@ -212,8 +275,9 @@ def parse_settings(data: dict, where: str) -> SuggestReferenceSettings:
         where,
         data,
         (
-            "files", "passages", "passage_tokens", "answer_tokens",
+            "files", "passages", "passage_tokens",
             "quick_files", "confirmation", "large_batches",
+            "discovery_strategy", "discovery_tokens",
         ),
     )
     defaults = SuggestReferenceSettings()
@@ -224,9 +288,6 @@ def parse_settings(data: dict, where: str) -> SuggestReferenceSettings:
             where, data, "passage_tokens", defaults.passage_tokens, 300,
             16000,
         ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 100, 1000
-        ),
         quick_files=check_int(
             where, data, "quick_files", defaults.quick_files, 1, 20
         ),
@@ -236,6 +297,14 @@ def parse_settings(data: dict, where: str) -> SuggestReferenceSettings:
         ),
         large_batches=check_int(
             where, data, "large_batches", defaults.large_batches, 0, 1000
+        ),
+        discovery_strategy=check_choice(
+            where, data, "discovery_strategy",
+            defaults.discovery_strategy, ("hybrid", "source_first"),
+        ),
+        discovery_tokens=check_int(
+            where, data, "discovery_tokens",
+            defaults.discovery_tokens, 300, 16000,
         ),
     )
 
@@ -256,12 +325,49 @@ def statement_of(
     Returns
     -------
     str
-        The longest quoted text, or the text after the first colon, when
-        it has at least ``MIN_WORDS`` words; otherwise what the router
-        copies out of the question, when most of its words are the
-        question's; otherwise the whole question.
+        The statement of ``request_of``.
 
     """
+
+    return request_of(question, ask_router)[0]
+
+
+def request_of(
+    question: str, ask_router: Callable[[str, str, int], str] | None
+) -> tuple[str, str]:
+    """Return the statement a question asks a reference for, and any name.
+
+    Parameters
+    ----------
+    question: str
+        The question as typed.
+    ask_router: Callable[[str, str, int], str] | None
+        The router model (``ToolContext.ask_router``), asked only when the
+        question names nothing (``named_subject``) and the statement is
+        neither quoted nor after a colon.
+
+    Returns
+    -------
+    tuple[str, str]
+        The statement, and the name whose introducing paper the question
+        asks for, or ``""``. The statement is, in order:
+
+        - for a name the question asks the paper for ("cite for BRAPH2"),
+          that a paper introduces it (``name_statement``);
+        - the longest quoted text, or the text after the first colon,
+          when it has at least ``MIN_WORDS`` words;
+        - for a name the router model reports ("NAME: braph toolbox"),
+          that a paper introduces it, when the name is in the question
+          and looks like one (``_router_name``);
+        - what the router copies out of the question, when most of its
+          words are the question's;
+        - otherwise the whole question.
+
+    """
+
+    name = named_subject(question)
+    if name is not None:
+        return name_statement(name), name
 
     quoted = max(
         (match.group(1).strip() for match in _QUOTED.finditer(question)),
@@ -269,26 +375,35 @@ def statement_of(
         default="",
     )
     if len(quoted.split()) >= _config.MIN_WORDS:
-        return quoted
+        return quoted, ""
     _, colon, after = question.partition(":")
     if colon and len(after.split()) >= _config.MIN_WORDS:
-        return after.strip()
+        return after.strip(), ""
 
     copied = ""
     if ask_router is not None:
         system = "You copy text exactly, without comment."
         prompt = (
-            "A user asks for a reference for a statement:\n\n"
+            "A user asks for a reference:\n\n"
             f"{question}\n\n"
-            "Copy the statement that needs a reference exactly as written, "
+            "If the user asks for the paper to cite for a named software, "
+            "toolbox, method, model or dataset (the paper that introduced "
+            "it), answer NAME: and the name exactly as written. Otherwise "
+            "copy the statement that needs a reference exactly as written, "
             'without the request around it ("suggest a reference for", '
-            '"which paper supports"). If there is none, answer NONE.'
+            '"which paper supports"). A topic or a claim is a statement, '
+            "not a name. If there is neither, answer NONE."
         )
         try:
             copied = ask_router(system, prompt, _config.ROUTER_TOKENS)
         except Exception:  # The whole question is used instead.
             copied = ""
         copied = copied.strip().strip("\"“”'").strip()
+    if copied[:5].upper() == "NAME:":
+        name = _router_name(copied[5:], question)
+        if name:
+            return name_statement(name), name
+        copied = ""
     words = _words(copied)
     asked = set(_words(question))
     if (
@@ -297,8 +412,138 @@ def statement_of(
         and sum(word in asked for word in words) / len(words)
         >= _config.ROUTER_WORD_SHARE
     ):
-        return copied
-    return question.strip()
+        return copied, ""
+    return question.strip(), ""
+
+
+def _router_name(reply: str, question: str) -> str:
+    """Return the name the router reported, when it can be trusted.
+
+    Parameters
+    ----------
+    reply: str
+        The router's reply after "NAME:".
+    question: str
+        The question as typed.
+
+    Returns
+    -------
+    str
+        The name without quotes, an article or end punctuation, when it
+        has at most four words, is in the question (ignoring case, spaces
+        and punctuation), and looks like a name: a word with a capital
+        letter, a digit or a hyphen ("braph2", "scikit-learn"), or a word
+        for a kind of thing in the name or the question ("braph" in "the
+        braph toolbox"). Otherwise ``""``, so a topic the router took for
+        a name ("anomalous diffusion") stays a statement.
+
+    """
+
+    name = reply.strip(" \t\n\"“”'`‘’.,;?!")
+    name = re.sub(r"^(?:the|a|an)\s+", "", name, flags=re.IGNORECASE)
+    words = name.split()
+    if not 1 <= len(words) <= _NAME_WORDS:
+        return ""
+    if any(word.casefold() in _NOT_NAMES for word in words):
+        return ""
+    # "BRAPH 2" is in "cite braph2": spaces and punctuation are ignored.
+    if "".join(_words(name)) not in "".join(_words(question)):
+        return ""
+    if not any(
+        _looks_named(word) or "-" in word for word in words
+    ) and not _NAME_KINDS.intersection(_words(question)):
+        return ""
+    return name
+
+
+def named_subject(question: str) -> str | None:
+    """Return the name a question asks the paper to cite for.
+
+    Parameters
+    ----------
+    question: str
+        The question as typed.
+
+    Returns
+    -------
+    str | None
+        The software, method or dataset whose paper the question asks for
+        ("BRAPH2" in "which paper should I cite for BRAPH2?", "BRAPH 2
+        software" in "the reference for the BRAPH 2 software"), or
+        ``None`` when the question asks a reference for a statement.
+
+    Notes
+    -----
+    A name has at most four words and looks like one: each word has a
+    capital letter or a digit ("BRAPH2", "TrackMate", "U-Net"), or says
+    what kind of thing it is ("software", "dataset"). "What should I cite
+    for anomalous diffusion?" is a topic, not a name, and "cite this"
+    points back at text, so both stay statements. A lower-case name
+    ("scikit-learn") is not recognized and is handled as a statement.
+
+    """
+
+    match = _NAME_REQUEST.search(question.strip())
+    if match is None:
+        return None
+    name = match["name"].strip().strip("'`‘’").strip()
+    name = re.sub(r"^(?:the|a|an)\s+", "", name, flags=re.IGNORECASE)
+    words = name.split()
+    if not 1 <= len(words) <= _NAME_WORDS:
+        return None
+    if any(word.casefold() in _NOT_NAMES for word in words):
+        return None
+    named = [_looks_named(word) for word in words]
+    if not any(named) or not all(
+        is_name or word.casefold() in _NAME_KINDS
+        for word, is_name in zip(words, named)
+    ):
+        return None
+    return name
+
+
+def name_statement(name: str) -> str:
+    """Return the statement that a paper introduces a name.
+
+    Parameters
+    ----------
+    name: str
+        A software, method or dataset ("BRAPH2").
+
+    Returns
+    -------
+    str
+        "BRAPH2 (BRAPH 2) was introduced (first presented) in this work.":
+        with the other spelling of a name that joins or separates its
+        version number, so that passages written either way are found.
+
+    """
+
+    joined = re.sub(r"(?<=[A-Za-z]) (?=\d)", "", name)
+    spaced = re.sub(r"(?<=[A-Za-z])(?=\d)", " ", name)
+    other = joined if joined != name else spaced
+    shown = f"{name} ({other})" if other != name else name
+    return f"{shown} was introduced (first presented) in this work."
+
+
+def _looks_named(word: str) -> bool:
+    """Whether a word looks like part of a name.
+
+    Parameters
+    ----------
+    word: str
+        One word of a question.
+
+    Returns
+    -------
+    bool
+        True when it has a capital letter or a digit.
+
+    """
+
+    return any(
+        character.isupper() or character.isdigit() for character in word
+    )
 
 
 def candidate_files(
@@ -306,6 +551,7 @@ def candidate_files(
     by_file: dict[Path, list[Chunk]],
     rank: Callable[[str], list],
     count: int,
+    excluded: Sequence[Path] = (),
 ) -> tuple[list[Path], list[Path]]:
     """Return the papers most related to a statement.
 
@@ -320,23 +566,18 @@ def candidate_files(
         ``chunk``.
     count: int
         Most papers.
+    excluded: Sequence[pathlib.Path], optional
+        Explicitly identified draft paths to leave out. A verbatim
+        sentence match is not a reliable draft-identity check.
 
     Returns
     -------
     tuple[list[pathlib.Path], list[pathlib.Path]]
-        The papers in order of their best-ranked passage, and the files
-        left out because they contain the statement itself.
+        Ranked papers and explicitly excluded document paths.
 
     """
 
-    wanted = " ".join(_words(statement))
-    holding = [
-        path for path, chunks in by_file.items()
-        if wanted and wanted in " ".join(
-            word for chunk in chunks
-            for word in _words(_HYPHENATED.sub("", chunk.text))
-        )
-    ]
+    holding = [path for path in excluded if path in by_file]
     picked: list[Path] = []
     for result in rank(statement):
         path = result.chunk.path
@@ -348,7 +589,8 @@ def candidate_files(
 
 
 def chat_answer(
-    statement: str, supports: Sequence[Support], note: str = ""
+    statement: str, supports: Sequence[Support], note: str = "",
+    name: str = "",
 ) -> tuple[str, tuple[Chunk, ...]]:
     """Return the answer and the quoted passages it cites.
 
@@ -360,6 +602,9 @@ def chat_answer(
         Each paper's judgement, in any order.
     note: str, optional
         Why some papers were not judged. Defaults to ``""``.
+    name: str, optional
+        The name whose introducing paper the question asks for, shown
+        instead of the statement. Defaults to ``""``.
 
     Returns
     -------
@@ -368,10 +613,28 @@ def chat_answer(
 
     """
 
-    ordered = sorted(supports, key=lambda s: _ORDER.get(s.verdict, 99))
+    ratings = {
+        support.cited: citation_suitability(support)
+        for support in supports
+    }
+    ordered = sorted(
+        supports,
+        key=lambda s: (
+            _ORDER.get(s.verdict, 99),
+            -(ratings[s.cited].score if ratings[s.cited] else 0),
+        ),
+    )
     suggested = [s for s in ordered if s.verdict in _SUGGESTED]
-    others = [s for s in ordered if s.verdict not in _SUGGESTED]
-    lines = [f"**Statement:** “{_escape(statement)}”", ""]
+    background = [s for s in ordered if s.verdict == VERDICT_BACKGROUND]
+    others = [
+        s for s in ordered
+        if s.verdict not in _SUGGESTED and s.verdict != VERDICT_BACKGROUND
+    ]
+    lines = [
+        f"**Looking for:** the paper that introduces {_escape(name)}"
+        if name else f"**Statement:** “{_escape(statement)}”",
+        "",
+    ]
     evidence: list[Chunk] = []
 
     if suggested:
@@ -381,23 +644,64 @@ def chat_answer(
         )
         for index, support in enumerate(suggested, start=1):
             label = verdict_label(support.verdict).capitalize()
-            lines += ["", f"{index}. **{label}** · "
-                      f"`{support.cited.as_posix()}`"]
+            rating = ratings[support.cited]
+            assert rating is not None  # Each suggested verdict is rated.
+            stars = suitability_stars(rating)
+            lines += [
+                "", f"{index}. **{label}** · "
+                f"`{support.cited.as_posix()}` · {stars}"
+            ]
             if support.quote and support.quote_chunk is not None:
                 evidence.append(support.quote_chunk)
                 lines.append(
                     f"   *It says:* “{_escape(support.quote)}” "
                     f"[{len(evidence)}]"
                 )
+            if support.evidence_status in ("missing", "rejected"):
+                lines.append(
+                    "   *Provisional: no independently verified quotation "
+                    f"(evidence {support.evidence_status}).*"
+                )
+            elif support.evidence_status == "approximate":
+                lines.append("   *Evidence: approximate quotation match.*")
             if support.comment:
                 lines.append(f"   {_escape(support.comment)}")
+        lines += [
+            "",
+            "*Stars and scores in parentheses (out of 100) indicate "
+            "heuristic citation suitability, based on the support "
+            "verdict, confirmed evidence, and textual overlap; "
+            "they are not probabilities or paper-quality ratings.*",
+        ]
     else:
         lines.append(
-            f"None of the {len(ordered)} papers most related to it in the "
-            "project supports it. Only the project's files are searched: "
-            "add the paper you have in mind to the folder to check it."
+            "No direct or partial support was established among the "
+            f"{len(ordered)} papers checked. This does not establish "
+            "that none supports the statement. Only the project's files "
+            "are searched: add the paper you have in mind to the folder "
+            "to check it."
         )
 
+    if background:
+        listed = ", ".join(
+            f"`{s.cited.as_posix()}` ({suitability_stars(ratings[s.cited])})"
+            for s in background
+        )
+        lines += [
+            "", "**Contextual or methodological references, not direct "
+            f"claim support:** {listed}.",
+        ]
+    inconclusive = sum(
+        s.verdict in (VERDICT_UNCLEAR, VERDICT_FAILED, VERDICT_NO_TEXT,
+                      VERDICT_NOT_FOUND)
+        for s in ordered
+    )
+    if inconclusive:
+        label = "assessment was" if inconclusive == 1 else "assessments were"
+        lines += [
+            "", f"*{inconclusive} {label} inconclusive "
+            "(unclear, failed, no text, or no matching passage).*",
+        ]
     if others:
         listed = ", ".join(
             f"`{s.cited.as_posix()}` ({verdict_label(s.verdict)})"
@@ -434,9 +738,13 @@ def run(
     """
 
     summary: dict[str, object] = {"name": "suggest_reference"}
-    statement = statement_of(
+    # "Which paper should I cite for BRAPH2?" asks for the paper that
+    # introduces BRAPH2, judged as a statement that it does.
+    statement, name = request_of(
         request.question, getattr(context, "ask_router", None)
     )
+    if name:
+        summary["name"] = name
     summary["statement"] = statement
     if len(_words(statement)) < _config.MIN_WORDS:
         context.done("No statement", evidence_count=0)
@@ -455,7 +763,36 @@ def run(
     rank = cache(context.rank)
 
     context.progress("Finding the papers most related to the statement")
-    files, holding = candidate_files(statement, by_file, rank, settings.files)
+    if settings.discovery_strategy == "source_first":
+        retrieve = getattr(context, "retrieve", None)
+        if retrieve is None:
+            raise RuntimeError(
+                "source_first discovery requires ToolContext.retrieve."
+            )
+        discovery = retrieve(RetrievalRequest(
+            query=statement,
+            strategy="source_first",
+            limits=EvidenceLimits(
+                max_sources=settings.files,
+                passages_per_source=1,
+                max_passages=settings.files,
+                max_tokens=settings.discovery_tokens,
+            ),
+            card_kinds=("scientific_paper",),
+        ))
+        files = [
+            path for path in discovery.sources if path in by_file
+        ][:settings.files]
+        holding: list[Path] = []
+        summary["discovery_coverage"] = discovery.coverage
+        # Verification still ranks original chunks independently, so this
+        # opt-in strategy can incur an extra query embedding.
+        summary["discovery_passages"] = len(discovery.passages)
+    else:
+        files, holding = candidate_files(
+            statement, by_file, rank, settings.files
+        )
+    summary["discovery_strategy"] = settings.discovery_strategy
     summary["left_out"] = [path.as_posix() for path in holding]
     if not files:
         context.done("No paper to check", evidence_count=0)
@@ -502,9 +839,9 @@ def run(
         )
         support = judge_support(
             statement, path, passages, context.ask_model,
-            settings.answer_tokens,
         )
         supports.append(support)
+        rating = citation_suitability(support)
         context.trace.emit(
             "tool.suggest_reference.paper",
             component="tool",
@@ -512,6 +849,16 @@ def run(
                 "paper": path.as_posix(),
                 "verdict": support.verdict,
                 "quote_found": support.quote_chunk is not None,
+                "evidence_status": support.evidence_status,
+                "quote_passage_id": (
+                    support.quote_chunk.identifier
+                    if support.quote_chunk is not None else None
+                ),
+                "quote_lines": quote_line_range(
+                    support.quote, support.quote_chunk,
+                ),
+                "suitability_stars": rating.stars if rating else None,
+                "suitability_score": rating.score if rating else None,
             },
             turn_id=context.trace_turn_id,
         )
@@ -525,16 +872,36 @@ def run(
     if holding:
         left_out = ", ".join(f"`{path.as_posix()}`" for path in holding)
         notes.append(
-            f"Not checked, as they contain the statement word for word "
-            f"(your draft, or the paper it comes from): {left_out}."
+            f"Explicitly excluded draft document(s): {left_out}."
         )
-    answer, quoted = chat_answer(statement, supports, " ".join(notes))
+    failures = [
+        {"item": support.cited.as_posix(), "message": support.comment,
+         "reason": "model_result"}
+        for support in supports if support.verdict == VERDICT_FAILED
+    ]
+    answer, quoted = chat_answer(statement, supports, " ".join(notes), name)
     verdicts = Counter(support.verdict for support in supports)
     summary.update(
         {
             "papers_checked": len(supports),
+            "background": verdicts[VERDICT_BACKGROUND],
+            "inconclusive": sum(verdicts[v] for v in (
+                VERDICT_UNCLEAR, VERDICT_FAILED, VERDICT_NO_TEXT,
+                VERDICT_NOT_FOUND,
+            )),
+            "evidence_statuses": dict(Counter(
+                support.evidence_status for support in supports
+            )),
             "suggested": sum(verdicts[v] for v in _SUGGESTED),
             "verdicts": {v: verdicts[v] for v in VERDICTS if verdicts[v]},
+            "suitability": {
+                support.cited.as_posix(): {
+                    "stars": rating.stars,
+                    "score": rating.score,
+                }
+                for support in supports
+                if (rating := citation_suitability(support)) is not None
+            },
         }
     )
     context.done(
@@ -552,7 +919,10 @@ def run(
         }
         for number, chunk in enumerate(quoted, start=1)
     )
-    return ToolResult(answer, evidence, summary)
+    return partial_result(
+        ToolResult(answer, evidence, summary), failures,
+        completed=len(supports) > len(failures),
+    )
 
 
 def _paper_seconds(settings: SuggestReferenceSettings) -> float:
@@ -571,7 +941,8 @@ def _paper_seconds(settings: SuggestReferenceSettings) -> float:
     """
 
     prompt = _config.PROMPT_OVERHEAD_TOKENS + settings.passage_tokens
-    reply = settings.answer_tokens * _config.REPLY_SHARE
+    # Expected output is a planning estimate, never a generation cap.
+    reply = _config.JUDGE_REPLY_TOKENS * _config.REPLY_SHARE
     return (
         _config.CALL_SECONDS
         + prompt / _config.PROMPT_TOKENS_PER_SECOND

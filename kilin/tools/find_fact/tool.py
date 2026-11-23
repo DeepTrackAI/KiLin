@@ -12,10 +12,13 @@ The scope is the paper the question names or points at ("that paper"),
 otherwise every indexed file. Reading everything takes time, so by default
 the user always chooses first: read everything, a quick answer, or cancel.
 When the question names exact terms, the quick answer takes notes on only
-the passages that mention them; otherwise it answers from the best-ranked
-passages directly. Passages are numbered once across all files, so every
-citation is unambiguous, and citations to passages that do not exist are
-counted in the summary.
+the passages that mention them; otherwise, or when no passage mentions
+them, it answers from the best-ranked passages directly. Before that
+answer, the answering model checks whether those passages answer the
+question; if not, the next-ranked passages are added, up to
+``extra_searches`` times. Passages are numbered once across all files,
+so every citation is unambiguous, and citations to passages that do not
+exist are counted in the summary.
 
 Parts beyond ``max_model_calls`` are not read, and the answer says so. A
 failed notes call gives that part no notes; it is not retried. Only the
@@ -30,6 +33,11 @@ Key Features
     The user chooses between reading every passage in scope and a quick
     answer from exact-term hits or the best-ranked passages.
 
+- **Search again**
+
+    A quick answer from ranked passages reads further down the ranking
+    when the answering model says the passages found do not answer.
+
 - **Notes per file**
 
     Each file is read in parts with the shared document-notes service;
@@ -37,8 +45,10 @@ Key Features
 
 - **Checked citations**
 
-    One passage numbering across all files; invalid citations are counted,
-    and only cited passages become evidence.
+    One passage numbering across all files (the quick answer from ranked
+    passages numbers them 1, 2, 3...); a quoted phrase cited to the wrong
+    passage is moved to the one that contains it; invalid citations are
+    counted, and only cited passages become evidence.
 
 Module Structure
 ----------------
@@ -64,6 +74,9 @@ estimate the time; they are not part of the public API.
 
 Examples
 --------
+This is an illustrative integration call, not a standalone doctest.
+KíLín supplies the required tool context and conversation state.
+
 ``context`` is the ``ToolContext`` that KíLín passes to a tool:
 
 >>> from kilin.tools import ToolRequest
@@ -79,15 +92,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from time import perf_counter
 from typing import Final
 
+from kilin.tools._shared.model_results import partial_result
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools._shared.citations import inspect_citations
+from kilin.tools._shared.enough_evidence import rank_until_answered
 from kilin.tools._shared.document_notes import (
-    answer_citations,
     plan_parts,
+    quote_citations,
     take_notes,
 )
 from kilin.tools._shared.choose_document import document_scope
@@ -125,13 +140,6 @@ _REPLY_TOKENS_PER_SECOND: Final[float] = _config.REPLY_TOKENS_PER_SECOND
 _NOTES_PROMPT_TOKENS: Final[int] = _config.NOTES_PROMPT_TOKENS
 _CALL_SECONDS: Final[float] = _config.CALL_SECONDS
 _QUICK_ANSWER_SECONDS: Final[float] = _config.QUICK_ANSWER_SECONDS
-# A citation such as [3], [3, 5], or [3-5] (with a hyphen or an en dash).
-_CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
-    r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]"
-)
-_CITATION_RANGE: Final[re.Pattern[str]] = re.compile(
-    r"(\d+)(?:\s*[–-]\s*(\d+))?"
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,10 +150,6 @@ class FactSettings:
     ----------
     part_tokens: int
         Estimated tokens of passages per reading part (1000-16000).
-    note_tokens: int
-        Longest notes for one part, in tokens (100-1500).
-    answer_tokens: int
-        Longest answer, in tokens (100-4000).
     max_model_calls: int
         Most reading parts (1-500).
     confirmation: "always" | "when_large" | "never"
@@ -153,15 +157,22 @@ class FactSettings:
         chooses between a thorough and a quick answer.
     large_batches: int
         With ``when_large``, plans with more parts than this ask first.
+    extra_searches: int
+        For a quick answer from ranked passages, most times the next-ranked
+        passages are added when the answering model says the passages found
+        do not answer (0-5; 0 turns the check off).
+    max_check_characters: int
+        Maximum characters in the evidence-check prompt (128-100000).
+        Oversized checks are skipped without dropping evidence.
 
     """
 
     part_tokens: int = _config.DEFAULT_PART_TOKENS
-    note_tokens: int = _config.DEFAULT_NOTE_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
     max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
+    extra_searches: int = _config.DEFAULT_EXTRA_SEARCHES
+    max_check_characters: int = _config.DEFAULT_MAX_CHECK_CHARACTERS
 
 
 def parse_settings(data: dict, where: str) -> FactSettings:
@@ -188,11 +199,11 @@ def parse_settings(data: dict, where: str) -> FactSettings:
 
     names = (
         "part_tokens",
-        "note_tokens",
-        "answer_tokens",
         "max_model_calls",
         "confirmation",
         "large_batches",
+        "extra_searches",
+        "max_check_characters",
     )
     reject_unknown(where, data, names)
 
@@ -200,12 +211,6 @@ def parse_settings(data: dict, where: str) -> FactSettings:
     return FactSettings(
         part_tokens=check_int(
             where, data, "part_tokens", defaults.part_tokens, 1000, 16000
-        ),
-        note_tokens=check_int(
-            where, data, "note_tokens", defaults.note_tokens, 100, 1500
-        ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 100, 4000
         ),
         max_model_calls=check_int(
             where, data, "max_model_calls", defaults.max_model_calls, 1, 500
@@ -219,6 +224,13 @@ def parse_settings(data: dict, where: str) -> FactSettings:
         ),
         large_batches=check_int(
             where, data, "large_batches", defaults.large_batches, 0, 100
+        ),
+        extra_searches=check_int(
+            where, data, "extra_searches", defaults.extra_searches, 0, 5
+        ),
+        max_check_characters=check_int(
+            where, data, "max_check_characters",
+            defaults.max_check_characters, 128, 100000,
         ),
     )
 
@@ -330,15 +342,22 @@ def run(
     budget = all_parts[: settings.max_model_calls]
 
     order = {chunk.identifier: index for index, chunk in enumerate(passages)}
-    ranked = [
+    ranking = list(dict.fromkeys(
         order[result.chunk.identifier]
         for result in context.rank(request.text)
         if result.chunk.identifier in order
-    ][: context.retrieval_count]
+    ))
+    ranked = ranking[: context.retrieval_count]
 
     # Quick: when the question names exact terms, only the passages that
     # mention them (read in parts, per file); otherwise the ranked ones.
+    # Terms that no passage mentions are often the question's own wording
+    # ("metadata table C6", "modular software extension"), not the paper's,
+    # so the quick answer falls back to the ranked passages.
     terms, hits = term_hits(request.question, context, passages)
+    missing: tuple[str, ...] = ()
+    if terms and not hits:
+        missing, terms = terms, ()
     hit_set = set(hits)
     quick_by_file = [
         (
@@ -354,7 +373,7 @@ def run(
     if terms:
         label, note = term_label(terms, hits)
         quick_parts = [part for _, parts in quick_by_file for part in parts]
-        quick_seconds = _estimate(quick_parts, texts, settings)
+        quick_seconds = _estimate(quick_parts, texts)
     else:
         label = "Quick answer"
         note = (
@@ -362,11 +381,28 @@ def run(
             f"{'passage' if len(ranked) == 1 else 'passages'}; may miss a "
             "fact stated elsewhere"
         )
+        if missing:
+            note = f"{term_label(missing, ())[1]}. {note}"
+        # Estimate the worst-case selected passages, including the one
+        # optional check and further ranked pages, before confirmation.
+        quick_limit = min(
+            len(ranking),
+            context.retrieval_count * (settings.extra_searches + 1),
+        )
+        potential = ranking[:quick_limit]
+        if settings.extra_searches and len(ranking) > len(ranked):
+            note += f"; may inspect up to {len(potential)} passages"
         quick_seconds = (
             _QUICK_ANSWER_SECONDS
-            + sum(estimate_tokens(texts[index]) for index in ranked)
+            + sum(estimate_tokens(texts[index]) for index in potential)
             / _PROMPT_TOKENS_PER_SECOND
         )
+        if settings.extra_searches and len(ranking) > len(ranked):
+            quick_seconds += (
+                _CALL_SECONDS
+                + settings.max_check_characters
+                / 4 / _PROMPT_TOKENS_PER_SECOND
+            )
 
     plan = ToolPlan(
         tool="find_fact",
@@ -383,8 +419,8 @@ def run(
         items=len(passages),
         batches=len(all_parts),
         batches_to_run=len(budget),
-        estimated_seconds=round(_estimate(budget, texts, settings), 1),
-        quick_items=len(hits) if terms else len(ranked),
+        estimated_seconds=round(_estimate(budget, texts), 1),
+        quick_items=len(hits) if terms else len(potential),
         quick_seconds=round(quick_seconds, 1),
         details=(f"Model: {context.model_id}",),
         quick_label=label,
@@ -394,23 +430,19 @@ def run(
         plan, settings.confirmation, settings.large_batches, context
     )
     summary.update({"plan": plan.to_dict(), "choice": choice, "asked": asked})
+    if missing:
+        summary["terms_without_hits"] = list(missing)
     if choice == PLAN_CHOICE_CANCEL:
         context.done("Cancelled before reading", evidence_count=0)
         return ToolResult(
             "Cancelled; no model calls were made.", (), summary
         )
 
-    if choice == PLAN_CHOICE_QUICK and terms and not hits:
-        quoted = " or ".join(f"“{term}”" for term in terms)
-        context.done(f"No passage mentions {quoted}", evidence_count=0)
-        return ToolResult(
-            f"No passage mentions {quoted}; all {len(passages)} passages "
-            "in scope were checked for these words. Ask again and choose "
-            "Continue to read everything for related wording.",
-            (),
-            summary,
-        )
-
+    failures: list[dict[str, object]] = []
+    # Citation number -> passage index. Notes cite the shared numbering;
+    # ranked passages are numbered 1, 2, 3... in reading order, because
+    # small models confuse gapped numbers such as [1] and [10].
+    numbering = {index + 1: index for index in range(len(passages))}
     if choice == PLAN_CHOICE_QUICK and terms:
         material = _notes(
             request.question,
@@ -419,19 +451,38 @@ def run(
             settings,
             context,
             whole=False,
+            failures=failures,
         )
         read = len(hits)
+        given = sorted(hits)
     elif choice == PLAN_CHOICE_QUICK:
+        # The fact may rank just below the first page: when the answering
+        # model says the passages found do not answer, read further down.
+        ranked, searches = rank_until_answered(
+            request.question,
+            ranking,
+            texts,
+            page=context.retrieval_count,
+            rounds=settings.extra_searches,
+            ask=context.ask_check or context.ask_router,
+            max_characters=settings.max_check_characters,
+        )
+        summary["extra_searches"] = searches
+        numbering = {
+            number: index
+            for number, index in enumerate(sorted(ranked), start=1)
+        }
         material = []
         for path in files:
             lines = [
-                f"[{index + 1}] {texts[index].strip()}"
-                for index in sorted(ranked)
+                f"[{number}] {texts[index].strip()}"
+                for number, index in numbering.items()
                 if passages[index].path == path
             ]
             if lines:
                 material.append((path.name, lines))
         read = len(ranked)
+        given = sorted(ranked)
     else:
         # Parts beyond the model-call budget are left out.
         allowed = {id(part) for part in budget}
@@ -446,8 +497,18 @@ def run(
             settings,
             context,
             whole=True,
+            failures=failures,
         )
         read = sum(len(part) for part in budget)
+        given = sorted(index for part in budget for index in part)
+    read -= sum(int(item["passages"]) for item in failures)
+    if failures and not any(lines for _, lines in material):
+        return partial_result(
+            ToolResult(
+                "No usable notes are available to answer.", (), summary,
+            ),
+            failures, completed=False,
+        )
     context.done(
         f"Read {read} of {len(passages)} passages",
         evidence_count=read,
@@ -459,22 +520,36 @@ def run(
         request.guidance,
         quick=choice == PLAN_CHOICE_QUICK and not terms,
     )
-    answer = context.write(system, prompt, settings.answer_tokens)
-    invalid = answer_citations(answer, len(passages))
+    if failures:
+        prompt += (
+            "\n\nSome reading parts failed. Answer only from the supplied "
+            "notes; do not infer absence from missing notes."
+        )
+    answer = context.write(system, prompt, None)
+    number_of = {index: number for number, index in numbering.items()}
+    answer, quotes = quote_citations(
+        answer, {number_of[index]: texts[index] for index in given}
+    )
+    citation_report = inspect_citations(answer, len(numbering))
+    invalid = list(citation_report.invalid_numbers)
     if choice == PLAN_CHOICE_QUICK:
         which = (
             "passages that mention " + " or ".join(terms)
             if terms
             else "best-ranked passages"
         )
+        if missing:
+            which += " (no passage mentions " + " or ".join(
+                f"“{term}”" for term in missing
+            ) + ")"
         answer += (
             f"\n\n*Quick answer from the {read} {which}; ask again and "
             "choose Continue to read everything.*"
         )
     elif read < len(passages):
         answer += (
-            f"\n\n*Read {read} of {len(passages)} passages (the model-call "
-            "limit was reached).*"
+            f"\n\n*Read {read} of {len(passages)} passages; "
+            "reading coverage is incomplete.*"
         )
     summary.update(
         {
@@ -482,26 +557,37 @@ def run(
             "passages": len(passages),
             "passages_read": read,
             "invalid_citations": invalid,
+            "quote_citations": quotes,
             "seconds": round(perf_counter() - started, 1),
         }
     )
 
-    # Citations keep their numbers, so evidence ``n`` is passage ``n``.
-    cited = _cited(answer, len(passages))
+    if citation_report.invalid_groups:
+        summary["invalid_citation_groups"] = list(
+            citation_report.invalid_groups
+        )
+
+    # Evidence ``n`` is the passage the answer cites as [n].
+    cited = _cited(answer, len(numbering)) - {
+        number for failure in failures
+        for number in failure["passage_numbers"]
+    }
     evidence = tuple(
         {
-            "citation": index + 1,
-            "path": chunk.path,
-            "start_line": chunk.start_line,
-            "end_line": chunk.end_line,
-            "symbol": chunk.symbol,
-            "text": chunk.text,
-            "cell": chunk.cell,
+            "citation": number,
+            "path": passages[index].path,
+            "start_line": passages[index].start_line,
+            "end_line": passages[index].end_line,
+            "symbol": passages[index].symbol,
+            "text": passages[index].text,
+            "cell": passages[index].cell,
         }
-        for index, chunk in enumerate(passages)
-        if index + 1 in cited
+        for number, index in numbering.items()
+        if number in cited
     )
-    return ToolResult(answer, evidence, summary, streamed=True)
+    return partial_result(
+        ToolResult(answer, evidence, summary, streamed=True), failures,
+    )
 
 
 def _notes(
@@ -512,6 +598,7 @@ def _notes(
     context: ToolContext,
     *,
     whole: bool,
+    failures: list[dict[str, object]] | None = None,
 ) -> list[tuple[str, list[str]]]:
     """Take notes on each file's parts; return the note lines per file.
 
@@ -532,6 +619,8 @@ def _notes(
         Tool context for the current request.
     whole: bool
         Whether to use the complete source text.
+    failures: list[dict[str, object]] | None, optional
+        Collect failed parts while keeping validated notes from other parts.
 
     Returns
     -------
@@ -545,29 +634,15 @@ def _notes(
         if not parts:
             continue
 
-        if whole:
-            notes = take_notes(
-                question,
-                path.name,
-                texts,
-                parts,
-                settings.note_tokens,
-                context,
-                what="paper" if path.suffix.lower() == ".pdf" else "file",
-            )
-        else:
-            notes = take_notes(
-                question,
-                path.name,
-                texts,
-                parts,
-                settings.note_tokens,
-                context,
-                whole=False,
-            )
-        material.append(
-            (path.name, [line for _, lines in notes for line in lines])
+        notes = take_notes(
+            question, path.name, texts, parts, context,
+            what="paper" if path.suffix.lower() == ".pdf" else "file",
+            whole=whole, failures=failures,
         )
+        if notes:
+            material.append(
+                (path.name, [line for _, lines in notes for line in lines])
+            )
     return material
 
 
@@ -590,29 +665,14 @@ def _cited(answer: str, count: int) -> set[int]:
 
     """
 
-    numbers: set[int] = set()
-    for group in _CITATION_GROUP.findall(answer):
-        for piece in re.split(r"\s*,\s*", group):
-            match = _CITATION_RANGE.fullmatch(piece)
-            if match is None:
-                continue
-
-            first = int(match.group(1))
-            last = int(match.group(2) or first)
-            numbers.update(
-                number
-                for number in range(first, last + 1)
-                if 1 <= number <= count
-            )
-    return numbers
-
+    return set(inspect_citations(answer, count).valid)
 
 def _estimate(
-    parts: list[list[int]], texts: list[str], settings: FactSettings
+    parts: list[list[int]], texts: list[str]
 ) -> float:
     """Return the approximate seconds of the notes calls and the answer.
 
-    Replies are assumed to use half their token limit.
+    Reply estimates do not cap model generation.
 
     Parameters
     ----------
@@ -620,8 +680,6 @@ def _estimate(
         Parts of the document to process.
     texts: list[str]
         Text passages or fields to inspect.
-    settings: FactSettings
-        Settings used to configure the operation.
 
     Returns
     -------
@@ -636,6 +694,6 @@ def _estimate(
             estimate_tokens(texts[index]) for index in part
         )
         total += _CALL_SECONDS + prompt / _PROMPT_TOKENS_PER_SECOND
-        total += settings.note_tokens / 2 / _REPLY_TOKENS_PER_SECOND
-    total += settings.answer_tokens / 2 / _REPLY_TOKENS_PER_SECOND
+        total += _config.NOTE_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
+    total += _config.ANSWER_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
     return total

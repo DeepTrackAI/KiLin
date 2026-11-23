@@ -84,8 +84,8 @@ _DOCUMENT_PHRASE: Final[re.Pattern[str]] = re.compile(
 _TERM_EDGES: Final[str] = " '\"`“”?.,;:"
 
 # Router-model reply budgets: terms and a document, or also categories.
-TERMS_REPLY_TOKENS: Final[int] = 96
-CATEGORIES_REPLY_TOKENS: Final[int] = 160
+TERMS_REPLY_TOKENS: Final[int] = 128
+CATEGORIES_REPLY_TOKENS: Final[int] = 256
 
 # Extra field of the terms prompt when ``batch_classify`` needs categories.
 _CATEGORY_FIELD: Final[str] = """

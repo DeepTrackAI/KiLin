@@ -22,53 +22,123 @@ snapshot.
 
 ## Creating a project type
 
-The shipped examples are `code.json` and `literature.json`. A new type is a
-packaged `<type_id>.json` resource with validated `display_name`, `description`,
+Packaged JSON files serve as examples. A new type is a
+`<type_id>.json` resource with validated `display_name`, `description`,
 `extensions`, `max_file_bytes`, `retrieval_instruction`, `system_prompt`,
-optional `source_directory`, `answer_guidance`, `capabilities`, history
-settings, a valid
-`default_intent`, an `intents` object and optional empty-chat prompts. The
+optional `answer_guidance`, `capabilities`, history settings, optional
+`generation` defaults, a valid `default_intent`, an `intents` object and
+optional empty-chat prompts. The
 loader derives the type ID from the filename, rejects duplicate JSON keys,
 and validates **all** type files on load.
 
-The registry requires at least one valid definition, not either standard
-type. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
+`capabilities` accepts `code_graph` (`true`, `false` or `"auto"`) and
+`document_headers` (`true` or `false`, default `false`). With
+`document_headers`, document passages are indexed with title, author,
+section and page headers. The separate `capabilities.source_cards`
+policy controls whether eligible scientific papers receive card
+summaries and stored vectors; it is not implied by `document_headers`.
+See [Retrieval pipeline](retrieval_pipeline.md).
+
+The registry requires at least one valid definition, with no mandatory
+type ID. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
 is the filename-derived identifier. The GUI takes its initial selection
 from the first registry entry and derives labels and welcome content from
-each definition. Adding a packaged type needs no built-in-specific branch.
+each definition. Adding a packaged type needs no built-in-specific branch
+or public Python constant.
 External directories accepted by `load_project_types(directory)` are for
 explicit validation; they are not automatically registered or hot-loaded.
 
-`source_directory` controls the source folder created by initialize_project
-inside a fresh directory (default `sources`). It does not change the managed
-multi-source layout. See
-[configuration](configuration.md#new-project-source-convention) for validation
-and the current schema. A new type cannot bypass the core's creation-only
-ownership rules or authorize reuse of an occupied workspace. Empty projects are
+A project type does not name the source folder: every new project uses
+`sources/`. See
+[workspace source convention](project_workspaces.md#source-directory-convention)
+for the layout and how existing projects keep theirs. A new type cannot bypass
+the core's creation-only ownership rules or authorize reuse of an occupied
+workspace. Empty projects are
 supported for every type. Missing welcome content has generic fallbacks;
 project-type prompts, tools and retrieval policies still control answers.
 
 Each intent key names an operation. Its fields may supply a description,
-shortcuts, history policy, retrieval mode/strategy, instruction, and a tool
-reference. `Intent` is the validated in-memory record; its values are not
+shortcuts, wording `cues` that set the intent, `requires` patterns a
+question must match for the intent, history policy, retrieval
+mode/strategy, instruction, and a tool reference. `Intent` is the validated in-memory record; its values are not
 always a literal one-to-one copy of keys in JSON because the loader applies
 defaults. Supported history modes are `none`, `recent`, `relevant`; supported
 retrieval modes are `none`, `search`, `document`, `reuse`. The implemented
-retrieval strategy is `hybrid`. A missing tool name or an unregistered name
-fails validation rather than importing a module by string.
+retrieval strategies are `hybrid` and `source_first`. The generic
+`source_first` strategy uses the optional source-card vector index plus
+semantic, lexical and applicable graph source rankings. It can be selected
+in custom project-type JSON without enabling `document_headers`; the
+packaged literature answering intents already use `source_first`. A missing tool
+name or an unregistered name fails validation rather than importing a
+module by string.
+
+For new projects, the top-level `generation` object may specify
+`temperature` (finite and nonnegative) or `thinking` (a boolean), or
+both. Missing fields inherit the packaged `PROJECT_PROFILE` defaults.
+Explicit creation settings override these values, and opening a saved
+project never reapplies them. The active project's `profile.ini` owns
+subsequent user edits; see
+[initialization and precedence](configuration.md#new-project-generation-defaults).
+
+Ordinary intents can also declare `thinking: true`, `false`, or `null`.
+An omitted or null field inherits the configured chat setting; a boolean
+overrides only the direct answer request. Tool-backed intents must leave
+this field omitted or null, because their model calls are tool-owned.
+The parser rejects explicit overrides on tools. See the complete
+[thinking policy and precedence](configuration.md#per-intent-thinking-policy).
+
+The packaged project type is an inheritance baseline. Each project's
+optional `project_behavior.json` can override shared prompts, router
+settings, history, retrieval and existing intent behavior without changing
+intent IDs or tool bindings. It also stores the optional `code_graph` and
+`document_headers` index capabilities; source cards retain their profile
+ownership. The core validates each resolved type. See
+[project behavior overrides](configuration.md#project-behavior-overrides).
 
 Adding a new project type requires checking its source-selection defaults,
 router prompts, installed tool requirements, selected template resources,
 and how the GUI lists it. Merely adding a type ID is not proof that the
 entire pipeline supports its source formats or domain reasoning.
 
+## Metadata contract for configurable settings
+
+Shared setting explanations belong to `kilin/settings_info.json`. Each
+registered tool must provide `settings_info.json` with one record per
+normalized `SETTINGS` key from its `defaults.json`. Records have only
+`title`, `summary` and `description` and are served through KíLín's
+core `get_settings_info()` interface without importing the GUI. Values,
+validity and precedence remain owned by the existing settings parsers.
+The new metadata resource must be included in the tool package-data table
+and verified in wheel tests. See [configuration metadata](configuration.md#settings-information-explanations-not-configuration).
+
+## Source access by built-in tools
+
+Source readers operate on the validated selection produced by the
+repository scanner/importer. Built-in tools that subsequently open source
+files must apply the same authorization, including when an indexed file
+names another file. `tools/_shared/source_access.py` provides a reusable
+selected-source resolver: it checks the active inventory, saved source
+root, workspace containment and symlinks, returning no path when an item
+is unavailable. It does not silently search other project folders.
+
+The LaTeX reference checker uses that helper for both `.tex` and selected
+`.bib`/`.bbl` files. For same-named bibliographies in several directories,
+it prefers the referring `.tex` file's directory and rejects ambiguous
+fallbacks. Consult the [security policy](security.md#workspace-source-access-policy)
+for explicit import exceptions and the limits of these checks.
+
 ## Source reader/extractor contract
 
 `sources/sources.py` dispatches by supported extension to modules under
 `sources/extensions/`. A reader may implement `read_source_file(path,
-relative_path)` to load non-UTF-8-backed content (the PDF reader does).
-An extractor implements `extract_source_units(...)` using the signature
-expected by the dispatcher. Returned records must use consistent relative
+relative_path)` to load non-UTF-8-backed content (as the PDF and Word
+`.doc`/`.docx` readers do). An extractor implements
+`extract_source_units(...)` using the signature
+expected by the dispatcher. A format that can be read either as text or as
+code, such as HTML, also implements `extract_code_units(source_file)`:
+when the project reads files as code (`as_code=True`), its
+`read_source_file` is skipped, the file is kept as written, and
+`extract_code_units` splits it. Returned records must use consistent relative
 paths, exact text, inclusive source-coordinate ranges and valid symbol,
 section and cell fields. Reading a file does not execute its code.
 
@@ -84,10 +154,63 @@ When adding a suffix:
 6. Update project-type suffix defaults **only if** the project type should select
    the new format automatically; explicit files follow different policy.
 
-Code relationship extractors for Python and MATLAB live under
-`retrievals/code_graph/extensions/`; their results are heuristic, not
-execution or complete semantic analysis. Adding another language may also
-require source-unit conventions, graph entity typing and retrieval tests.
+Code relationship extractors for Python, MATLAB, JavaScript, R and HTML
+live under `retrievals/code_graph/extensions/`; their results are
+heuristic, not execution or complete semantic analysis. A plain call is
+matched only to names of the caller's own language (notebooks count as
+Python). A hook that calls into another language declares
+`CALLS_INTO`, mapping the prefix it writes before such a call to that
+language's file type: MATLAB's `{"py": ".py"}` links
+`py.helpers.smooth(x)` to the Python function, and HTML's `{"": ".js"}`
+lets inline handlers reach JavaScript by plain name.
+
+A new language's passage kinds belong in `sources/source_kinds.py`: add
+its functions and methods to `CALLABLE_KINDS` (methods also to
+`METHOD_KINDS`), its classes to `CLASS_KINDS`, its top-level file code to
+`MODULE_CONTEXT_KINDS`, and its prefix to `CODE_KIND_PREFIXES`. Retrieval
+then follows its functions through the code graph and searches its
+passages with their file path, like Python's. Kinds left out still index
+and retrieve; they only miss that behaviour.
+
+## Source-card kind contract
+
+`retrievals/source_cards/` defines the active, optional whole-source
+card contract. A `SourceDescriptor` carries the file's
+identity and existing chunk identifiers, without assigning a content kind
+from a filename suffix. `SourceCard` holds immutable metadata, substantive
+statements with original-chunk provenance, and source/generation/validation
+fingerprints. `SourceCardResult` records `valid`, `not_applicable` or
+`failed` separately from card content.
+
+A trusted Python `SourceCardKind` supplies `identifier`, `schema_version`,
+`validation_version`, `precheck(source)` and `validate(card)`.
+`precheck` must be conservative: `False` means definitely ineligible, while
+`True` does not establish eligibility. It is not a model inference call.
+`SourceCardRegistry` refuses duplicate/unknown names and obsolete card
+versions, verifies generic provenance, then delegates to the kind's own
+schema checks. Kind registration must be explicit in source code; project
+JSON must not contain executable import paths.
+
+The kind registry, provenance records, card/vector index, generation
+adapter and automatic indexing coordinator are operational. The packaged
+literature intents use `source_first`, which searches source-card
+vectors as one of its four ranking channels. A new project type can
+select trusted registered card kinds without loading arbitrary modules. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts).
+
+The `scientific_paper` kind keeps a consistent research-oriented schema,
+including bibliographic metadata and cited aims, methods, data, findings,
+and limitations. Its candidate check does not classify a PDF as a paper.
+The generation response confirms or rejects the kind in the same inference
+call that writes the card. Only supplied chunk IDs may support statements.
+
+The design permits other registered kinds as requirements emerge: grant
+proposals could emphasize objectives and work packages; patents, claims and
+applications; technical manuals, procedures; presentations, main topics;
+policy decisions, rationale and scope. These are **extension possibilities**,
+not implemented kinds or implicit eligibility rules. Each future kind owns
+its own validation, fields and instructions while reusing the same generic
+card representation, indexing and persistence. See
+[Scientific-paper cards](retrieval_pipeline.md#scientific-paper-cards).
 
 ## Implementing a built-in tool
 
@@ -95,26 +218,35 @@ require source-unit conventions, graph entity typing and retrieval tests.
 
 *Figure: The tool registry, request/context contract, optional confirmation callbacks and answer persistence are explicitly owned interfaces.*
 
-All tools are registered under `kilin/tools/`. Existing packages demonstrate
-the expected structure:
+The [standard tool layout](tool_packages.md#standard-tool-layout) specifies
+the package, configuration and resource files. `tools/_registry.py` pairs a
+canonical `TOOL_*` identifier with its parser, runner, optional `follows_up`
+or `follows_up_when` behavior, optional `routing` callback and optional
+`workspace_resources` callback. `routing(settings, project_root, others)`
+returns a `ToolRouting` (cues and router description) built from the
+project's own files, which `with_project_routing` adds to the intent before
+each question is routed (`generate_paper_summary` describes the project's
+report templates this way). Project-type JSON can select an existing entry,
+not load another implementation by string.
 
-```text
-kilin/tools/<name>/
-    __init__.py
-    tool.py                 # Settings dataclass, parse_settings(), run()
-    _configuration.py       # Validate owned defaults
-    defaults.json
-    README.md
-    [templates/ or other packaged assets, if needed]
-```
+Implement an extension in this order:
 
-`tools/_registry.py` defines canonical `TOOL_*` identifiers and an entry for
-each tool. Registration pairs the ID with its parser and runner, optional
-`follows_up` behavior and optional `workspace_resources` callback. A project
-type may **select** an existing registered tool, but cannot register another
-implementation from JSON. Each package owns its settings validation and
-its own documentation; shared services belong in `tools/_shared/` rather
-than imports from a sibling tool.
+1. Create the package, validated settings/parser and `run()` implementation.
+   Document every owned default and supported request in its README.
+2. Reuse private shared services where semantics match; do not import an
+   executable sibling tool to reuse its policy.
+3. Register the parser/runner and optional resources, then select the tool
+   in an intended project-type intent. Registration and selection differ.
+4. Add deterministic tests under `tests/kilin/tools/<name>/test_tool.py`
+   for parsing, invalid inputs, results, registry selection and optional
+   resource declarations. Shared helpers have their own `_shared/` tests.
+5. Include JSON, README and resources in `pyproject.toml` package data and
+   verify an installed wheel. Source-checkout imports alone miss this step.
+
+The request/result contract below defines the integration boundary;
+[tool generation settings](tool_packages.md#generation-settings-for-tools)
+define the supplied model services. Extend the smallest necessary boundary
+rather than building a parallel settings, retry or filesystem subsystem.
 
 ### Request and context
 
@@ -155,8 +287,11 @@ callback, so document the default policy and cost.
 | `find_fact` | Find one fact or a complete set across a document/corpus. | [README](../kilin/tools/find_fact/README.md) |
 | `find_passages` | Locate relevant literal passages/sentences. | [README](../kilin/tools/find_passages/README.md) |
 | `paper_overview` | Produce a structured overview of a paper. | [README](../kilin/tools/paper_overview/README.md) |
+| `project_summary` | Write one report on every document of a project from a project template, with per-document entries assembled in code. | [README](../kilin/tools/project_summary/README.md) |
 | `reference_check` | Check a paper's references against the project's files, find their citations, and judge each claim against the cited paper. | [README](../kilin/tools/reference_check/README.md) |
 | `suggest_reference` | Suggest papers for a statement from model-assessed passages; include checked quotations when available. | [README](../kilin/tools/suggest_reference/README.md) |
+| `writing_check` | Check a document's grammar and style paragraph by paragraph, with consistency checks in code; suggest changes and save the report. | [README](../kilin/tools/writing_check/README.md) |
+| `assistant_guide` | Answer "What can you do for me?" with one ready-to-send example question per kind of request, about the project's own files. | [README](../kilin/tools/assistant_guide/README.md) |
 | `show_source` | Display requested exact source context. | [README](../kilin/tools/show_source/README.md) |
 | `generate_paper_summary` | Create template-driven reports and saved artifacts. | [README](../kilin/tools/generate_paper_summary/README.md) |
 
@@ -166,20 +301,16 @@ assuming reusable behavior.
 
 ## Workspace resources are declared, not blindly copied
 
-A tool may declare a tuple of `WorkspaceResource` records from
-`workspace_resources(settings)`. The project layout planner validates the
-owning package, source regular-file status, destination, containment and
-conflicting declarations. The core creates `templates/` and copies only
-missing declared resources for a **new** project. Existing user files are
-not overwritten on reopening. The `generate_paper_summary` tool currently
-ships Markdown templates installed according to active literature intents;
-other current tools do not require installed workspace files.
+Register `workspace_resources(settings)` when a tool needs packaged files.
+It returns `WorkspaceResource` declarations; the tool does not install them.
+The [resource contract](project_workspaces.md#tool-resource-contract) owns
+package containment, safe destinations, conflict detection and preservation
+of existing files.
 
-A new optional report template must not be copied into every project simply
-because it is shipped in a package. The configured tool/intent should
-request it, and an opt-in repair operation can restore a missing file without
-silently overwriting an edited one. See
-[Project workspaces](project_workspaces.md).
+A new template must be requested by the configured intent/tool, not copied
+to every project merely because it ships in a package. Test both fresh
+creation and reopening after a user edits or deletes the installed resource.
+Explicit repair remains distinct from ordinary opening.
 
 ## Shared private services
 
@@ -191,8 +322,21 @@ modules are private implementation helpers. Prefer them when semantics match,
 but do not silently move a tool's policy into a shared service unless
 multiple tools really need the same contract.
 
+Document-reading tools validate passage citations through
+`tools/_shared/citations.py`. Valid individual references and bounded
+ranges may contribute evidence; invalid range parts never contribute
+partial evidence. Numeric missing references remain in
+`invalid_citations`, while malformed or invalid ranges appear in
+`invalid_citation_groups` when present. Citation validation checks
+identifiers, not factual support. The maximum expansion of an individual
+citation range is 100 passages.
+
+
 The report-generation package has an additional `_report_template.py` and
-`_report_format.py` to validate Markdown templates and report formatting.
+`_report_format.py` to validate Markdown templates and report formatting;
+the template format, parser and report checks themselves are shared in
+`kilin/tools/_shared/report_templates.py`, which each report tool calls with
+its own limits (`TemplateRules`).
 The GUI offers PDF rendering through its optional `_report_pdf.py`; core
 tools should still function without Qt (Markdown output remains available).
 
@@ -220,11 +364,19 @@ an index file format.
 - Test both project creation and reopened profiles; no unintended migration.
 - Update tool README, local module docstrings and the module map.
 
-The tool architecture tests are under `tests/kilin/tools/`; each tool also
-has dedicated tests. For platform-specific GUI adapters, run appropriate
-Qt smoke tests separately. See [Development](development.md).
+Use [tool dependency checks](../tests/kilin/tools/test__architecture.py),
+[resource contracts](../tests/kilin/tools/test__resources.py),
+[project-type contracts](../tests/kilin/test__project_type_contract.py) and
+the affected package's tests. Update the consuming intent, module docstrings,
+local README, package-data declaration and [module map](module_map.md)
+together. Source-format changes also require coordinate/citation and cache
+checks, as described in [Source pipeline](source_pipeline.md#change-impact-and-verification).
+For optional GUI adapters, run supported-host Qt smoke tests separately.
+See [Development](development.md) for full verification.
 
-Related: [Tool packages](tool_packages.md),
+## Related
+
+[Tool packages](tool_packages.md),
 [Answering pipeline](answering_pipeline.md),
 [Source pipeline](source_pipeline.md),
 [Configuration](configuration.md).

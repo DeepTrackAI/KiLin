@@ -6,20 +6,32 @@ paper) and the other files of the project (the cited works). The tool:
 1. Chooses the citing paper with ``choose_document``: a paper the question
    names, the paper the earlier turns discussed, or the user's choice.
 2. Reads its reference list (``numbered_reference_entries``; for a PDF, in
-   column order) and numbers each entry as printed.
+   column order) and numbers each entry as printed. A paper with several
+   lists (a main and a supplementary one, ``reference_lists``) has one
+   checked: the list the question names, otherwise the user's choice. The
+   list ends at the next heading, a table or figure caption, or numbering
+   that starts again; a number inside an entry ("…919–\\n927.") starts no
+   entry.
 3. Matches every entry to the project's other files (``_matching``): by
    DOI, title and first author, or first page. Entries without a file are
    reported as missing, so the user knows which cited works to add.
-4. Finds the numbered in-text citations (``_citations``) and the sentence
-   each appears in, and reports references never cited and citations of
-   numbers beyond the list (usually a sign the list was split wrongly).
+4. Finds the in-text citations (``_citations``), numbered or, for a list
+   that prints no numbers, author-year, and the sentence each appears in,
+   and reports references never cited, citations of numbers beyond the
+   list (usually a sign the list was split wrongly), and author-year
+   citations not in the list or matching several references.
 5. Checks each *claim* (a citing sentence and one cited work that is in
    the project) with the answering model (``_shared.claims``): the cited
    file's most related passages, a verdict, the passage sentence it rests
-   on (checked to be in the passages), and a critical comment. The plan is
-   shown first, and the user can run all claims, a few, or none.
+   on (checked to be in the passages), a heuristic suitability rating,
+   and a critical comment. A sentence citing several references is first
+   given a model-proposed retrieval hint (``focus_claims``), but the
+   original sentence is the only authoritative claim; a claim not
+   supported by the passages read is read again
+   with more passages before deciding. The plan is shown first, and the
+   user can run all claims, a few, or none.
 6. Saves the full report, with every reference, the sentences citing it
-   and their verdicts, to ``outputs/<paper>_reference_check.md``, and
+   and their verdicts, context, and ratings to the project report, and
    answers in the chat with the counts, the references, the problems, and
    the claims that are not fully supported, citing the quoted passages.
 
@@ -29,11 +41,12 @@ reason for every decision. Step 5 uses the answering model, whose verdicts
 can be wrong; its quotes are checked, and a reference is called
 contradicted only with a confirmed quote.
 
-Limits: author-year citations ("Smith et al., 2020") are not recognised;
-superscript citations are recognised only in PDFs (the font sizes and
-positions confirm them); an unusual layout can still split or join
-reference entries; a claim is judged from a few passages of the cited
-work, not all of it.
+Limits: author-year citations are read from common forms ("(Smith et al.,
+2020; Lee 2019a)", "Smith and Lee (2020)"), and only cite references they
+match by first author and year; superscript citations are recognised only
+in PDFs (the font sizes and positions confirm them); an unusual layout can
+still split or join reference entries; a claim is judged from a few
+passages of the cited work, not all of it.
 
 Key Features
 ------------
@@ -48,12 +61,13 @@ Key Features
 
 - **Checked claims**
 
-    Each claim gets a verdict, a quote found in the cited work, and a
-    comment; the user confirms the model calls first.
+    Each claim gets a verdict, a quote found in the cited work, a
+    suitability rating where justified, and a comment.
 
 - **Full report saved**
 
-    Every reference with its file, citing sentences and verdicts.
+    Every reference with its file, citing sentences, verdicts,
+    ratings and the context used by the model.
 
 Module Structure
 ----------------
@@ -81,6 +95,9 @@ Module Structure
 
 Examples
 --------
+This is an illustrative integration call, not a standalone doctest.
+KíLín supplies the required tool context and conversation state.
+
 ``context`` is the ``ToolContext`` that KíLín passes to a tool:
 
 >>> from kilin.tools import ToolRequest
@@ -94,12 +111,17 @@ Examples
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from functools import cache, partial
 from pathlib import Path
 import re
 from typing import Final
 
+from kilin.tools._shared.model_results import (
+    incomplete_notice,
+    partial_result,
+)
 from kilin.chunking import Chunk
 from kilin.tools._contract import (
     ToolContext,
@@ -111,23 +133,39 @@ from kilin.tools._contract import (
     reject_unknown,
 )
 from kilin.tools._shared.choose_document import choose_document
+from kilin.tools._shared._rating import (
+    citation_suitability,
+    suitability_stars,
+)
 from kilin.tools._shared.outputs import save_output_file
 from kilin.tools._shared.planning import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
+    CONFIRMATION_ALWAYS,
     ConfirmationPolicy,
     ToolPlan,
+    ask_choice,
     confirm_plan,
 )
 from kilin.tools._shared.references import (
     ReferenceEntry,
+    ReferenceList,
     numbered_reference_entries,
     reference_body,
+    reference_lists,
 )
 from kilin.tools._shared.sentences import Sentence, split_sentences
 from kilin.tools.reference_check import _configuration as _config
+from kilin.tools.reference_check._resolution import (
+    LookupPermission,
+    ReferenceLink,
+    offline_link,
+    linkable_entry,
+    resolve_links,
+)
 from kilin.tools.reference_check._citations import (
+    STYLE_AUTHOR_YEAR,
     STYLE_BRACKETS,
     STYLE_NONE,
     STYLE_PARENTHESES,
@@ -137,6 +175,7 @@ from kilin.tools.reference_check._citations import (
     find_citations,
     superscript_runs,
 )
+from kilin.tools.reference_check._latex import latex_references
 from kilin.tools.reference_check._matching import (
     MATCH_FOUND,
     MATCH_MISSING,
@@ -149,12 +188,25 @@ from kilin.tools.reference_check._matching import (
     settle_duplicates,
 )
 from kilin.tools._shared.claims import (
+    VERDICT_BACKGROUND,
+    VERDICT_CONTRADICTED,
+    VERDICT_FAILED,
+    VERDICT_NOT_FOUND,
+    VERDICT_NOT_SUPPORTED,
+    VERDICT_PARTLY,
+    VERDICT_SUPPORTED,
     VERDICTS,
     Claim,
     Verdict,
     claim_passages,
+    focus_claims,
     verdict_label,
     verify_claim,
+    quote_line_range,
+)
+from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
+from kilin.tools._shared.source_access import (
+    selected_paths, selected_source_file,
 )
 
 __all__ = [
@@ -171,9 +223,19 @@ __all__ = [
 # Order of the checked claims in the chat and the report: those needing
 # attention first, most serious first.
 _ORDER: Final[dict[str, int]] = {
-    verdict: index for index, verdict in enumerate(
-        ("contradicted", "not supported", "partly supported", "not found",
-         "unclear", "failed", "no text", "supported", "background")
+    verdict: index
+    for index, verdict in enumerate(
+        (
+            "contradicted",
+            "not supported",
+            "partly supported",
+            "not found",
+            "unclear",
+            "failed",
+            "no text",
+            "supported",
+            "background",
+        )
     )
 }
 # Digits and separators as superscripts, to show citation markers as
@@ -199,6 +261,27 @@ _ATTRIBUTION: Final[re.Pattern[str]] = re.compile(
 )
 # Most words of the phrase a reference is cited for.
 _CITED_FOR_WORDS: Final[int] = 15
+# Surrounding context is bounded, and never crosses an explicit paragraph
+# break or a source section. Retrieval remains two queries per claim.
+_CONTEXT_BEFORE: Final[int] = 2
+_CONTEXT_AFTER: Final[int] = 1
+_CONTEXT_WORDS: Final[int] = 140
+# Anaphoric claims need the antecedent to retrieve relevant passages.
+_ANAPHORA: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:this|these|those|such|its|their|it|they)\b",
+    flags=re.I,
+)
+# Source-attribution sentences must be matched to the actual study, not
+# to a passage containing the otherwise uninformative word "published".
+_PUBLICATION_ATTRIBUTION: Final[re.Pattern[str]] = re.compile(
+    r"^(?:the\s+)?(?:"
+    r"(?:results|findings)\s+of\s+(?:this|the)\s+"
+    r"(?:study|analysis|work)\s+(?:were|was|have been|has been)|"
+    r"(?:this|the)\s+(?:study|analysis|work)\s+"
+    r"(?:was|were|has been|have been)"
+    r")\s+published\b",
+    flags=re.I,
+)
 # Longest citing sentence shown whole; longer ones (often a table read as
 # one sentence) are shown around the marker, in characters.
 _SHOWN_CHARACTERS: Final[int] = 320
@@ -208,6 +291,13 @@ _UNMARKED: Final[re.Pattern[str]] = re.compile(r"\s?\[[\d,–\- ]+\]")
 _NUMBERED: Final[re.Pattern[str]] = re.compile(
     r"\[(\d{1,3}(?:\s*[,–-]\s*\d{1,3})*)\]"
 )
+# A request for bibliographic links must not run the expensive claim audit.
+_LINK_REQUEST: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:links?|urls?|dois?|online|web)\b",
+    flags=re.I,
+)
+# A link-search request only consults the missing bibliography entries.
+_QUICK_LOOKUPS: Final[int] = 5
 # A word broken across lines by extraction ("eConnec- tome").
 _BROKEN_WORD: Final[re.Pattern[str]] = re.compile(r"(?<=[a-z])- (?=[a-z])")
 
@@ -227,10 +317,15 @@ class ReferenceCheckSettings:
         Most passages of the cited work read per claim (1-20).
     passage_tokens: int
         Most estimated tokens of those passages (300-16000).
-    answer_tokens: int
-        Longest verdict answer, in tokens (100-1000).
-    max_model_calls: int
+    retry_passages: int
+        Further passages read in a second model call when a claim comes
+        out not supported or not found (0-20; 0 turns it off).
+    focus_claims: bool
+        Whether to generate reference-specific retrieval hints for
+        multi-reference sentences, without replacing the original claim.
+    max_checked_claims: int
         Most claims checked (1-1000); later ones are reported unchecked.
+        Focusing and second-look calls do not consume this limit.
     quick_claims: int
         Claims checked by the quick version (1-100).
     confirmation: ConfirmationPolicy
@@ -238,6 +333,12 @@ class ReferenceCheckSettings:
     large_batches: int
         With ``when_large``, plans with more claims than this ask first
         (0-1000).
+    online_lookup: bool
+        Offer online reference resolution even without a link request.
+        Never grants network permission by itself.
+    max_online: int
+        Most missing entries offered for resolution in one operation
+        (1-1000).
 
     """
 
@@ -245,11 +346,14 @@ class ReferenceCheckSettings:
     verify: bool = _config.DEFAULT_VERIFY
     passages: int = _config.DEFAULT_PASSAGES
     passage_tokens: int = _config.DEFAULT_PASSAGE_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
-    max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
+    retry_passages: int = _config.DEFAULT_RETRY_PASSAGES
+    focus_claims: bool = _config.DEFAULT_FOCUS_CLAIMS
+    max_checked_claims: int = _config.DEFAULT_MAX_CHECKED_CLAIMS
     quick_claims: int = _config.DEFAULT_QUICK_CLAIMS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
+    online_lookup: bool = _config.DEFAULT_ONLINE_LOOKUP
+    max_online: int = _config.DEFAULT_MAX_ONLINE
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,12 +374,33 @@ class ReferenceReport:
     cited_by: dict[int, tuple[Sentence, ...]]
         For each reference number, the sentences citing it, in order.
     before: dict[Sentence, str]
-        For each citing sentence, the sentence before it, with its markers
-        in brackets.
+        Up to two preceding sentences of the same paragraph, with
+        markers in brackets, within the shared context word budget.
+    after: dict[Sentence, str]
+        Up to one following sentence of the same paragraph, within
+        the shared context word budget.
     verdicts: tuple[Verdict, ...]
-        The checked claims, in reading order.
+        The checked claims, in reading order; ratings are derived
+        from their checked evidence, not stored independently.
     verification: str
         Why claims were not checked, or not all of them; empty otherwise.
+    links: dict[int, ReferenceLink]
+        Preferred offline or resolved links for missing entries and short
+        entries with usable journal coordinates or a DOI.
+    lookup_note: str
+        Whether optional online resolution was authorized or declined.
+    list_note: str
+        Which reference list was checked when the paper has several;
+        empty otherwise.
+    model_calls: dict[str, int]
+        Logical requests to the answering-model adapter for focusing,
+        initial verification, and second looks, plus their total.
+    model_attempts: dict[str, int] | None
+        Actual generation attempts by stage, including recovery and failed
+        attempts; ``None`` without adapter-level accounting.
+    source_note: str
+        For a LaTeX paper, where its references come from and the keys
+        cited but missing from its bibliography; empty otherwise.
 
     """
 
@@ -285,8 +410,15 @@ class ReferenceReport:
     scan: CitationScan
     cited_by: dict[int, tuple[Sentence, ...]] = field(default_factory=dict)
     before: dict[Sentence, str] = field(default_factory=dict)
+    after: dict[Sentence, str] = field(default_factory=dict)
     verdicts: tuple[Verdict, ...] = ()
     verification: str = ""
+    links: dict[int, ReferenceLink] = field(default_factory=dict)
+    lookup_note: str = ""
+    list_note: str = ""
+    model_calls: dict[str, int] = field(default_factory=dict)
+    model_attempts: dict[str, int] | None = None
+    source_note: str = ""
 
     def count(self, status: str) -> int:
         """Return how many entries have a match status.
@@ -332,9 +464,18 @@ def parse_settings(data: dict, where: str) -> ReferenceCheckSettings:
         where,
         data,
         (
-            "max_listed", "verify", "passages", "passage_tokens",
-            "answer_tokens", "max_model_calls", "quick_claims",
-            "confirmation", "large_batches",
+            "max_listed",
+            "verify",
+            "passages",
+            "passage_tokens",
+            "retry_passages",
+            "focus_claims",
+            "max_checked_claims",
+            "quick_claims",
+            "confirmation",
+            "large_batches",
+            "online_lookup",
+            "max_online",
         ),
     )
     defaults = ReferenceCheckSettings()
@@ -345,25 +486,45 @@ def parse_settings(data: dict, where: str) -> ReferenceCheckSettings:
         verify=check_bool(where, data, "verify", defaults.verify),
         passages=check_int(where, data, "passages", defaults.passages, 1, 20),
         passage_tokens=check_int(
-            where, data, "passage_tokens", defaults.passage_tokens, 300,
+            where,
+            data,
+            "passage_tokens",
+            defaults.passage_tokens,
+            300,
             16000,
         ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 100, 1000
+        retry_passages=check_int(
+            where, data, "retry_passages", defaults.retry_passages, 0, 20
         ),
-        max_model_calls=check_int(
-            where, data, "max_model_calls", defaults.max_model_calls, 1,
+        focus_claims=check_bool(
+            where, data, "focus_claims", defaults.focus_claims
+        ),
+        max_checked_claims=check_int(
+            where,
+            data,
+            "max_checked_claims",
+            defaults.max_checked_claims,
+            1,
             1000,
         ),
         quick_claims=check_int(
             where, data, "quick_claims", defaults.quick_claims, 1, 100
         ),
         confirmation=check_choice(
-            where, data, "confirmation", defaults.confirmation,
+            where,
+            data,
+            "confirmation",
+            defaults.confirmation,
             CONFIRMATION_CHOICES,
         ),
         large_batches=check_int(
             where, data, "large_batches", defaults.large_batches, 0, 1000
+        ),
+        online_lookup=check_bool(
+            where, data, "online_lookup", defaults.online_lookup
+        ),
+        max_online=check_int(
+            where, data, "max_online", defaults.max_online, 1, 1000
         ),
     )
 
@@ -373,6 +534,9 @@ def check_references(
     passages: Sequence[Chunk],
     file: Path | None,
     others: Sequence[PaperIdentity],
+    which: int = -1,
+    *,
+    bibliography_files: Mapping[Path, Path] | None = None,
 ) -> ReferenceReport:
     """Check one paper's references against the project's files.
 
@@ -385,10 +549,17 @@ def check_references(
     passages: Sequence[Chunk]
         Its passages, in order.
     file: pathlib.Path | None
-        It on disk, for a PDF's column order and superscripts; None when
-        unknown.
+        Authorized citing document on disk, for PDF column order and
+        superscripts or the LaTeX setup; None when unavailable.
     others: Sequence[PaperIdentity]
         The project's other files.
+    which: int, optional
+        The reference list to check, as an index into the paper's lists
+        (``ReferenceList.index``); ``-1``, the default, is the last.
+        Citations are looked for in the text that cites that list.
+    bibliography_files: Mapping[pathlib.Path, pathlib.Path] | None, optional
+        Only explicitly selected and validated LaTeX bibliography sources,
+        keyed by their source-relative path. Defaults to ``None``.
 
     Returns
     -------
@@ -399,8 +570,28 @@ def check_references(
 
     """
 
-    entries = tuple(
-        numbered_reference_entries(passages, _config.REFERENCE_LAYOUT, file)
+    # A LaTeX paper's \cite commands and bibliography are read as such:
+    # its references become numbered entries, its citations numbers.
+    latex = (
+        latex_references(
+            passages, file, paper=paper,
+            bibliography_files=bibliography_files,
+        )
+        if paper.suffix.lower() == ".tex"
+        else None
+    )
+    entries = (
+        latex.entries
+        if latex is not None
+        else tuple(
+            numbered_reference_entries(
+                passages,
+                _config.REFERENCE_LAYOUT,
+                file,
+                accept_short=linkable_entry,
+                which=which,
+            )
+        )
     )
     matches = settle_duplicates(
         [
@@ -415,12 +606,18 @@ def check_references(
         if file is not None and file.suffix.lower() == ".pdf"
         else None
     )
-    body = reference_body(passages)
+    body = latex.body if latex is not None else reference_body(passages, which)
     scan = find_citations(
         body,
         max((entry.number for entry in entries), default=0),
         superscripts,
         _config.CITATION_RULES,
+        # An unnumbered list may be cited by author and year.
+        entries=(
+            tuple((entry.number, entry.text) for entry in entries)
+            if latex is None and not any(entry.printed for entry in entries)
+            else ()
+        ),
     )
 
     cited_by: dict[int, list[Sentence]] = defaultdict(list)
@@ -433,12 +630,14 @@ def check_references(
     for citation in scan.citations:
         markers[citation.sentence].append(citation)
     sentences = split_sentences(body, min_words=1)
-    before = {
-        sentence: _marked(previous, markers.get(previous, ()))
-        for previous, sentence in zip(sentences, sentences[1:])
-        if sentence in markers
-    }
+    before, after = _citation_context(sentences, markers)
 
+    links = {
+        entry.number: offline_link(entry.number, entry.text)
+        for entry, match in zip(entries, matches)
+        if match.status == MATCH_MISSING
+        or (match.status == MATCH_UNREADABLE and linkable_entry(entry.text))
+    }
     return ReferenceReport(
         paper=paper,
         entries=entries,
@@ -446,7 +645,105 @@ def check_references(
         scan=scan,
         cited_by={number: tuple(found) for number, found in cited_by.items()},
         before=before,
+        after=after,
+        links=links,
+        source_note=latex.note if latex is not None else "",
     )
+
+
+def _citation_context(
+    sentences: Sequence[Sentence],
+    markers: dict[Sentence, list[Citation]],
+) -> tuple[dict[Sentence, str], dict[Sentence, str]]:
+    """Collect bounded neighboring sentences from the same paragraph.
+
+    Parameters
+    ----------
+    sentences: Sequence[Sentence]
+        Sentences in source reading order.
+    markers: dict[Sentence, list[Citation]]
+        Citation markers identified in each citing sentence.
+
+    Returns
+    -------
+    tuple[dict[Sentence, str], dict[Sentence, str]]
+        Preceding and following contexts keyed by citing sentence. The
+        target sentence also counts toward the word budget.
+
+    """
+
+    before: dict[Sentence, str] = {}
+    after: dict[Sentence, str] = {}
+    for index, sentence in enumerate(sentences):
+        if sentence not in markers:
+            continue
+        budget = max(0, _CONTEXT_WORDS - len(sentence.text.split()))
+        previous: list[Sentence] = []
+        for earlier in range(
+            index - 1,
+            max(-1, index - _CONTEXT_BEFORE - 1),
+            -1,
+        ):
+            adjacent = sentences[earlier + 1]
+            if not _same_paragraph(sentences[earlier], adjacent):
+                break
+            previous.insert(0, sentences[earlier])
+        words = " ".join(
+            _marked(s, markers.get(s, ())) for s in previous
+        ).split()
+        # Retain the nearest preceding text when the budget is tight.
+        chosen = words[-budget:] if budget else []
+        if chosen:
+            before[sentence] = " ".join(chosen)
+        budget -= len(chosen)
+        following: list[Sentence] = []
+        for later in range(
+            index + 1,
+            min(
+                len(sentences),
+                index + 1 + _CONTEXT_AFTER,
+            ),
+        ):
+            if not _same_paragraph(sentences[later - 1], sentences[later]):
+                break
+            following.append(sentences[later])
+        words = " ".join(
+            _marked(s, markers.get(s, ())) for s in following
+        ).split()
+        if budget and words:
+            after[sentence] = " ".join(words[:budget])
+    return before, after
+
+
+def _same_paragraph(left: Sentence, right: Sentence) -> bool:
+    """Check whether neighboring source sentences share a paragraph.
+
+    Parameters
+    ----------
+    left: Sentence
+        Earlier sentence.
+    right: Sentence
+        Following sentence.
+
+    Returns
+    -------
+    bool
+        True when their source text supports a continuous paragraph.
+
+    """
+
+    if left.path != right.path or left.chunk.section != right.chunk.section:
+        return False
+    if left.chunk is not right.chunk:
+        # Do not infer a paragraph across unrelated indexed passages.
+        return False
+    first = " ".join(left.text.split()).casefold()
+    second = " ".join(right.text.split()).casefold()
+    for paragraph in re.split(r"\n\s*\n", left.chunk.text):
+        passage = " ".join(paragraph.split()).casefold()
+        if first in passage and second in passage:
+            return passage.index(first) < passage.index(second)
+    return False
 
 
 def report_claims(report: ReferenceReport) -> list[Claim]:
@@ -463,14 +760,14 @@ def report_claims(report: ReferenceReport) -> list[Claim]:
         For each citation in reading order, one claim per cited reference
         whose file is in the project (found or probable), each sentence
         and reference once; ``also_cited`` holds the sentence's other
-        references, ``before`` the sentence before it, ``marked`` the
-        sentence with its markers in brackets, and ``cited_for`` the
-        phrase the reference is cited for.
+        references, ``before`` up to two preceding sentences, ``after``
+        one following sentence, ``marked`` the sentence with its markers
+        in brackets, and ``cited_for`` the phrase cited for.
 
     """
 
     files = {
-        entry.number: match.path
+        entry.number: (match.path, match.status)
         for entry, match in zip(report.entries, report.matches)
         if match.status in (MATCH_FOUND, MATCH_PROBABLE)
         and match.path is not None
@@ -492,11 +789,15 @@ def report_claims(report: ReferenceReport) -> list[Claim]:
             if number in files:
                 claims.append(
                     Claim(
-                        number, sentence, files[number],
+                        number,
+                        sentence,
+                        files[number][0],
                         tuple(n for n in numbers if n != number),
                         report.before.get(sentence, ""),
                         marked,
                         _cited_for(sentence, markers[sentence], number),
+                        report.after.get(sentence, ""),
+                        files[number][1],
                     )
                 )
     return claims
@@ -526,21 +827,30 @@ def report_markdown(report: ReferenceReport) -> str:
         (MATCH_FOUND, "In the project"),
         (MATCH_PROBABLE, "Probably in the project"),
         (MATCH_MISSING, "Missing from the project"),
-        (MATCH_UNREADABLE, "Entries too short to identify"),
+        (MATCH_UNREADABLE, "Entries too short for reliable matching"),
     ):
         listed = _listed(report, status, None)
         if listed:
             lines += [f"## {heading}", "", *listed, ""]
 
+    if report.source_note:
+        lines += [f"*{report.source_note}*", ""]
+    if report.lookup_note:
+        lines += [f"*{report.lookup_note}*", ""]
     problems = _problems(report)
     if problems:
         lines += ["## Citation problems", "", *problems, ""]
 
     if report.verdicts or report.verification:
         lines += ["## Claims checked against the cited papers", ""]
+        if report.model_calls:
+            lines += [_model_call_line(report), ""]
         lines += [*_verdict_table(report), ""]
         for index, verdict in enumerate(_attention(report, None), start=1):
-            lines += [*_claim_block(report, index, verdict, None), ""]
+            lines += [
+                *_claim_block(report, index, verdict, None, show_context=True),
+                "",
+            ]
 
     verdicts = {
         (verdict.claim.number, verdict.claim.sentence): verdict
@@ -550,6 +860,9 @@ def report_markdown(report: ReferenceReport) -> str:
     for entry, match in zip(report.entries, report.matches):
         number = "" if entry.printed else " (number inferred)"
         lines += [f"### {entry.number}.{number} {_escape(entry.text)}", ""]
+        link = report.links.get(entry.number)
+        if link is not None:
+            lines.append(f"**Link:** {_link_markdown(link)}")
         if match.path is not None:
             lines.append(
                 f"**File:** `{match.path.as_posix()}` ({match.status}: "
@@ -600,6 +913,8 @@ def chat_answer(
     """
 
     name = report.paper.name
+    if not report.entries and report.source_note:
+        return f"I found no references in {name}. {report.source_note}", ()
     if not report.entries:
         return (
             f"I found no reference list in {name}: no “References” (or "
@@ -608,10 +923,13 @@ def chat_answer(
         )
 
     lines = [f"**Reference check of {name}**", "", _overview(report)]
+    if report.source_note:
+        lines += ["", f"*{report.source_note}*"]
     for status, heading in (
         (MATCH_FOUND, "In the project"),
         (MATCH_PROBABLE, "Probably in the project, please check"),
         (MATCH_MISSING, "Missing from the project"),
+        (MATCH_UNREADABLE, "Too short for local matching; search possible"),
     ):
         listed = _listed(report, status, max_listed)
         if listed:
@@ -624,6 +942,8 @@ def chat_answer(
     evidence: list[Chunk] = []
     if report.verdicts or report.verification:
         lines += ["", "**Claims checked against the cited papers**", ""]
+        if report.model_calls:
+            lines += [_model_call_line(report), ""]
         lines += _verdict_table(report)
         attention = _attention(report, max_listed)
         for index, verdict in enumerate(attention, start=1):
@@ -638,6 +958,8 @@ def chat_answer(
             claims = "claim" if hidden == 1 else "claims"
             lines += ["", f"*… and {hidden} more {claims} in the report.*"]
 
+    if report.lookup_note:
+        lines += ["", f"*{report.lookup_note}*"]
     if saved is not None:
         lines += [
             "",
@@ -676,17 +998,26 @@ def run(
         request,
         context,
         question="Which paper's references should I check?",
-        example="check the references of smith2020.pdf",
-        prefer=(".pdf",),
+        example="check the references of smith2020.pdf or paper.tex",
+        prefer=(".pdf", ".tex"),
     )
     summary: dict[str, object] = {"name": "reference_check"}
     if isinstance(chosen, str):
         context.done("No paper chosen", evidence_count=0)
         return ToolResult(chosen, (), summary)
     path, reason, guessed = chosen
+    selected = selected_paths(context)
     summary.update(
         {"paper": path.as_posix(), "reason": reason, "guessed": guessed}
     )
+    if path not in selected:
+        context.done("Paper not selected", evidence_count=0)
+        summary["status"] = "incomplete"
+        return ToolResult(
+            "That paper is no longer in the project's selected sources. "
+            "Select it and refresh the indexes before checking references.",
+            (), summary,
+        )
 
     by_file: dict[Path, list[Chunk]] = defaultdict(list)
     for chunk in context.chunks:
@@ -695,25 +1026,74 @@ def run(
     context.progress("Identifying the project's files")
     others = [
         paper_identity(
-            other, passages, _source_file(other, context),
+            other,
+            passages,
+            _source_file(other, context, selected),
             _config.MATCH_RULES,
         )
         for other, passages in by_file.items()
-        if other != path
+        if (
+            other != path and other in selected
+            and other.suffix.lower() not in {".bib", ".bbl"}
+        )
     ]
 
-    context.progress(f"Reading the references and citations of {path.name}")
-    report = check_references(
-        path, by_file.get(path, []), _source_file(path, context), others
+    context.progress(f"Finding the reference lists of {path.name}")
+    lists = reference_lists(
+        by_file.get(path, []),
+        _config.REFERENCE_LAYOUT,
+        _source_file(path, context, selected),
+        accept_short=linkable_entry,
     )
-    if settings.verify:
+    chosen_list = _choose_list(lists, path, request.question, context)
+    if isinstance(chosen_list, str):
+        context.done("No reference list chosen", evidence_count=0)
+        return ToolResult(chosen_list, (), summary)
+    which, list_note = chosen_list
+
+    context.progress(f"Reading the references and citations of {path.name}")
+    bibliography_files = {}
+    if path.suffix.lower() == ".tex":
+        for name in selected:
+            if name.suffix.lower() not in {".bib", ".bbl"}:
+                continue
+            found = _source_file(name, context, selected)
+            if found is not None:
+                bibliography_files[name] = found
+    report = check_references(
+        path,
+        by_file.get(path, []),
+        _source_file(path, context, selected),
+        others,
+        which,
+        bibliography_files=bibliography_files,
+    )
+    if list_note:
+        report = replace(report, list_note=list_note)
+        summary["reference_list"] = list_note
+    link_request = bool(_LINK_REQUEST.search(request.question))
+    if settings.online_lookup or link_request:
+        report = _lookup(report, settings, context)
+    if settings.verify and not link_request:
         report = _verify(report, by_file, settings, context)
 
+    failures = [
+        {
+            "item": (
+                f"Reference {v.claim.number}, "
+                f"line {v.claim.sentence.line}"
+            ),
+            "message": v.comment,
+            "reason": "model_result",
+        }
+        for v in report.verdicts
+        if v.verdict == VERDICT_FAILED
+    ]
     saved = (
         save_output_file(
             context.project_root,
             f"{path.stem}_reference_check.md",
-            report_markdown(report),
+            report_markdown(report) + incomplete_notice(failures),
         )
         if report.entries
         else None
@@ -732,9 +1112,43 @@ def run(
             "citations": len(report.scan.citations),
             "uncited": list(report.scan.uncited),
             "beyond_list": list(report.scan.beyond_list),
+            "ambiguous": len(report.scan.ambiguous),
+            "unresolved": list(report.scan.unresolved),
             "claims_checked": len(report.verdicts),
+            "model_calls": report.model_calls,
+            **(
+                {"model_attempts": report.model_attempts}
+                if report.model_attempts is not None
+                else {}
+            ),
+            "suitability": [
+                {
+                    "reference": verdict.claim.number,
+                    "line": verdict.claim.sentence.line,
+                    "verdict": verdict.verdict,
+                    "evidence_status": verdict.evidence_status,
+                    "match_status": verdict.claim.match_status,
+                    "stars": rating.stars if rating else None,
+                    "score": rating.score if rating else None,
+                }
+                for verdict in report.verdicts
+                for rating in (citation_suitability(verdict),)
+            ],
             "verdicts": {v: verdicts[v] for v in VERDICTS if verdicts[v]},
             "verification": report.verification,
+            "links": {
+                str(number): {
+                    "url": link.url,
+                    "kind": link.kind,
+                    "doi": link.doi,
+                    "pdf_url": link.pdf_url,
+                    "license": link.license,
+                    "version": link.version,
+                }
+                for number, link in report.links.items()
+            },
+            "lookup_note": report.lookup_note,
+            "source_note": report.source_note,
             "report": saved.as_posix() if saved else None,
         }
     )
@@ -761,7 +1175,259 @@ def run(
         }
         for number, chunk in enumerate(quoted, start=1)
     )
-    return ToolResult(answer, evidence, summary)
+    return partial_result(
+        ToolResult(answer, evidence, summary),
+        failures,
+        completed=bool(report.entries),
+    )
+
+
+# Words of a reference-list heading that do not tell lists apart.
+_LIST_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "references",
+        "reference",
+        "and",
+        "notes",
+        "bibliography",
+        "literature",
+        "cited",
+        "works",
+    }
+)
+# Words that mean the paper's first, main list.
+_MAIN_LIST_WORDS: Final[frozenset[str]] = frozenset({"main", "primary"})
+
+
+def _choose_list(
+    lists: Sequence[ReferenceList],
+    path: Path,
+    question: str,
+    context: ToolContext,
+) -> tuple[int, str] | str:
+    """Choose the reference list to check, asking when there are several.
+
+    A citation number means a different entry in each list, so only one
+    list is checked.
+
+    Parameters
+    ----------
+    lists: Sequence[ReferenceList]
+        The paper's reference lists with entries (``reference_lists``).
+    path: pathlib.Path
+        The paper.
+    question: str
+        The user's question; a list it names ("the supplementary
+        references", "the main reference list") is taken without asking.
+    context: ToolContext
+        KíLín's services; ``context.choose`` asks the user.
+
+    Returns
+    -------
+    tuple[int, str] | str
+        The list's index (``which``) and a note naming it when there are
+        several (empty otherwise); or, when the user cancels, the answer
+        to give. When nobody can be asked, the first list (usually the
+        main one) is checked and the note says so.
+
+    """
+
+    if len(lists) < 2:
+        return (lists[0].index if lists else -1), ""
+
+    labels = tuple(found.label for found in lists)
+    words = set(re.findall(r"[a-z]+", question.casefold()))
+    named = [
+        found
+        for found in lists
+        if set(re.findall(r"[a-z]+", found.heading.casefold())) - _LIST_WORDS
+        & words
+    ]
+    if len(named) == 1:
+        picked = lists.index(named[0])
+    elif words & _MAIN_LIST_WORDS:
+        picked = 0
+    else:
+        picked = None
+    if picked is not None:
+        return lists[picked].index, (
+            f"{path.name} has {len(lists)} reference lists; the question "
+            f"names {labels[picked]}."
+        )
+    if context.choose is None:
+        return lists[0].index, (
+            f"{path.name} has {len(lists)} reference lists; the first, "
+            f"{labels[0]}, was checked. Name the list in the question "
+            '("the supplementary references") to check another.'
+        )
+    picked = ask_choice(
+        f"{path.name} has {len(lists)} reference lists. Which one should I "
+        "check?",
+        labels,
+        context,
+    )
+    if picked is None:
+        return (
+            f"No reference list was chosen, so I stopped. {path.name} has "
+            f"{len(lists)}: " + "; ".join(labels) + "."
+        )
+    return lists[picked].index, (
+        f"{path.name} has {len(lists)} reference lists; you chose "
+        f"{labels[picked]}."
+    )
+
+
+def _lookup(
+    report: ReferenceReport,
+    settings: ReferenceCheckSettings,
+    context: ToolContext,
+) -> ReferenceReport:
+    """Offer online lookup for missing entries, never silently granting it.
+
+    Parameters
+    ----------
+    report: ReferenceReport
+        Local reference check, including offline links.
+    settings: ReferenceCheckSettings
+        Limits for a single optional lookup operation.
+    context: ToolContext
+        Provides the interactive approval callback and tracing.
+
+    Returns
+    -------
+    ReferenceReport
+        With resolved links when approved, otherwise offline links.
+
+    """
+
+    missing = [
+        entry for entry in report.entries if entry.number in report.links
+    ][: settings.max_online]
+    if not missing:
+        return report
+    if context.confirm is None:
+        return replace(
+            report,
+            lookup_note=(
+                "Online lookup was not performed: explicit interactive "
+                "approval was unavailable. Search links work offline."
+            ),
+        )
+
+    quick = min(_QUICK_LOOKUPS, len(missing))
+    plan = ToolPlan(
+        tool="reference_check",
+        summary=(
+            f"Look up {len(missing)} locally unavailable references "
+            "online? "
+            "This sends their bibliography entries to Crossref and "
+            "their verified DOIs to OpenAlex. No PDFs are downloaded."
+        ),
+        scope=(
+            "Only locally unavailable references of "
+            + report.paper.name
+            + "; services: api.crossref.org and api.openalex.org. "
+            "Approval applies to this operation only."
+        ),
+        items=len(missing),
+        batches=len(missing),
+        batches_to_run=len(missing),
+        estimated_seconds=0,
+        quick_items=quick,
+        quick_seconds=0,
+        quick_label=f"Look up first {quick}",
+        operation="network",
+    )
+    choice, asked = confirm_plan(plan, CONFIRMATION_ALWAYS, 0, context)
+    if not asked or choice == PLAN_CHOICE_CANCEL:
+        return replace(
+            report, lookup_note="Online lookup declined; offline links shown."
+        )
+    chosen = missing[:quick] if choice == PLAN_CHOICE_QUICK else missing
+    records = {entry.number: entry.text for entry in chosen}
+    permission = LookupPermission(tuple(records))
+    context.progress(f"Resolving {len(records)} references online")
+    resolved = resolve_links(records, permission)
+    context.trace.emit(
+        "tool.reference_check.lookup",
+        component="tool",
+        data={
+            "approved": True,
+            "services": list(permission.services),
+            "references": len(records),
+            "verified": sum(
+                link.kind == "verified_doi" for link in resolved.values()
+            ),
+        },
+        turn_id=context.trace_turn_id,
+    )
+    note = (
+        f"Online lookup approved for {len(records)} references; "
+        "links are not proof of download permission."
+    )
+    remaining = len(report.links) - len(chosen)
+    if remaining:
+        note += f" {remaining} references retain offline links."
+    return replace(
+        report, links={**report.links, **resolved}, lookup_note=note
+    )
+
+
+def _link_markdown(link: ReferenceLink) -> str:
+    """Show the preferred publication or search link without ambiguity.
+
+    Parameters
+    ----------
+    link: ReferenceLink
+        Publication or search location for a reference.
+
+    Returns
+    -------
+    str
+        Markdown link with a label identifying its confidence.
+
+    """
+
+    label = {
+        "search": "Search Google Scholar",
+        "printed_doi": "DOI (as printed; unverified)",
+        "verified_doi": "Crossref-matched publication",
+    }.get(link.kind, "Search publication")
+    return f"[{label}]({link.url})"
+
+
+def _model_call_line(report: ReferenceReport) -> str:
+    """Distinguish logical model requests from generation attempts.
+
+    Parameters
+    ----------
+    report: ReferenceReport
+        The verified report with per-stage call counts.
+
+    Returns
+    -------
+    str
+        Markdown showing requests and known attempts by verification stage.
+
+    """
+
+    requests = report.model_calls
+    line = (
+        f"**Model requests:** {requests['total']} "
+        f"({requests['focusing']} focusing, "
+        f"{requests['initial']} initial, "
+        f"{requests['second_look']} second looks)."
+    )
+    if report.model_attempts is None:
+        return line
+    attempts = report.model_attempts
+    return (
+        line + "\n\n"
+        f"**Generation attempts:** {attempts['total']} "
+        f"({attempts['focusing']} focusing, "
+        f"{attempts['initial']} initial, "
+        f"{attempts['second_look']} second looks), counting any recovery."
+    )
 
 
 def _verify(
@@ -770,7 +1436,7 @@ def _verify(
     settings: ReferenceCheckSettings,
     context: ToolContext,
 ) -> ReferenceReport:
-    """Check the report's claims with the answering model, after a plan.
+    """Check claims with the answering model, after an explicit cost plan.
 
     Parameters
     ----------
@@ -779,15 +1445,15 @@ def _verify(
     by_file: dict[pathlib.Path, list[Chunk]]
         Every file's passages.
     settings: ReferenceCheckSettings
-        For the passages, limits and confirmation policy.
+        Passage selection, claim limit, and confirmation policy.
     context: ToolContext
         KíLín's services.
 
     Returns
     -------
     ReferenceReport
-        With the verdicts of the claims checked, and ``verification``
-        saying why none or not all were checked.
+        Verdicts, the reason for unchecked claims, request counts and,
+        when available, actual generation-attempt counts by stage.
 
     """
 
@@ -795,29 +1461,85 @@ def _verify(
     if not claims:
         return report
 
-    limit = min(len(claims), settings.max_model_calls)
-    quick = min(len(claims), settings.quick_claims)
+    limit = min(len(claims), settings.max_checked_claims)
+    quick = min(limit, settings.quick_claims)
     files = len({claim.cited for claim in claims})
+
+    def planned_focus_calls(count: int) -> int:
+        """Count the distinct multi-reference sentences in a selection.
+
+        Parameters
+        ----------
+        count: int
+            Number of initial claims selected in reading order.
+
+        Returns
+        -------
+        int
+            Maximum focusing calls needed for that selection.
+
+        """
+
+        if not settings.focus_claims:
+            return 0
+        return len(
+            {claim.sentence for claim in claims[:count] if claim.also_cited}
+        )
+
+    def planned_calls(count: int) -> int:
+        """Bound model calls including focusing and possible rereading.
+
+        Parameters
+        ----------
+        count: int
+            Number of claims checked.
+
+        Returns
+        -------
+        int
+            Worst-case number of model calls for the claim selection.
+
+        """
+
+        reads = count * (2 if settings.retry_passages else 1)
+        return reads + planned_focus_calls(count)
+
+    focus = planned_focus_calls(limit)
+    possible = planned_calls(limit)
+    normal = limit + focus
+    summary = (
+        f"Check {limit} of {len(claims)} claims of {report.paper.name} "
+        f"against {files} cited papers; up to {normal} model requests "
+        f"before second looks, or {possible} with all second looks."
+    )
     plan = ToolPlan(
         tool="reference_check",
-        summary=(
-            f"Check {len(claims)} claims of {report.paper.name} against "
-            f"the {files} cited papers in the project, one model call each."
-        ),
+        summary=summary,
         scope=(
             f"Sentences citing a reference whose file is in the project; "
             f"{settings.passages} passages of the cited paper per claim."
         ),
         items=len(claims),
-        batches=len(claims),
-        batches_to_run=limit,
-        estimated_seconds=limit * _claim_seconds(settings),
+        batches=planned_calls(len(claims)),
+        batches_to_run=possible,
+        estimated_seconds=possible * _claim_seconds(settings),
         quick_items=quick,
-        quick_seconds=quick * _claim_seconds(settings),
+        quick_seconds=planned_calls(quick) * _claim_seconds(settings),
         quick_label=f"The first {quick} claims",
+        details=(
+            "Estimated model time without second looks: "
+            f"{normal * _claim_seconds(settings):.1f} seconds; "
+            "including all possible second looks: "
+            f"{possible * _claim_seconds(settings):.1f} seconds. "
+            "Recovery attempts can increase actual model usage.",
+        ),
     )
+    # The confirmation threshold has always been in checked claims.
+    # Translate it to the plan's call upper bound without changing when
+    # the user is asked to confirm a run.
+    threshold = planned_calls(min(len(claims), settings.large_batches))
     choice, _asked = confirm_plan(
-        plan, settings.confirmation, settings.large_batches, context
+        plan, settings.confirmation, threshold, context
     )
     if choice == PLAN_CHOICE_CANCEL:
         return replace(
@@ -829,23 +1551,113 @@ def _verify(
 
     to_check = claims[: quick if choice == PLAN_CHOICE_QUICK else limit]
     verdicts: list[Verdict] = []
+    rank = cache(context.rank)
+    calls: Counter[str] = Counter()
+    attempts: Counter[str] = Counter()
+    read_attempts = getattr(context, "model_attempt_count", None)
+
+    def counted_ask(
+        system: str, prompt: str, tokens: int | None, *, kind: str
+    ) -> str:
+        """Count requests and observable attempts even when a call fails.
+
+        Parameters
+        ----------
+        system: str
+            System instructions to the answering model.
+        prompt: str
+            User prompt for the current stage.
+        tokens: int | None
+            Optional output-token limit.
+        kind: str
+            The focusing, initial, or second-look stage.
+
+        Returns
+        -------
+        str
+            The model response, as returned by the context service.
+
+        """
+
+        calls[kind] += 1
+        before = read_attempts() if read_attempts is not None else None
+        try:
+            return context.ask_model(system, prompt, tokens)
+        finally:
+            if before is not None and read_attempts is not None:
+                # The adapter counts every attempt before inference, even
+                # when its one eligible nonthinking recovery also fails.
+                attempts[kind] += read_attempts() - before
+
+    focus_model = partial(counted_ask, kind="focusing")
+    initial_model = partial(counted_ask, kind="initial")
+    retry_model = partial(counted_ask, kind="second_look")
+
+    # Focus each multi-reference sentence only once for this selection.
+    numbers: dict[Sentence, list[int]] = defaultdict(list)
+    for claim in to_check:
+        numbers[claim.sentence].append(claim.number)
+    focused: dict[Sentence, dict[int, str]] = {}
     for index, claim in enumerate(to_check, start=1):
         context.progress(
             f"Checking claim {index} of {len(to_check)} "
             f"(reference [{claim.number}])"
         )
-        plain = _UNMARKED.sub("", claim.marked or claim.sentence.text)
+        calls_before = sum(calls.values())
+        attempts_before = sum(attempts.values())
+        if settings.focus_claims and claim.also_cited:
+            if claim.sentence not in focused:
+                focused[claim.sentence] = focus_claims(
+                    claim.marked or claim.sentence.text,
+                    claim.before,
+                    claim.after,
+                    numbers[claim.sentence],
+                    focus_model,
+                )
+            claim = replace(
+                claim, focus=focused[claim.sentence].get(claim.number, "")
+            )
+        queries = _claim_queries(claim)
+        cited = by_file.get(claim.cited, [])
         passages = claim_passages(
-            (plain, claim.cited_for),
-            by_file.get(claim.cited, []),
-            context.rank,
+            queries,
+            cited,
+            rank,
             settings.passages,
             settings.passage_tokens,
         )
-        verdict = verify_claim(
-            claim, passages, context.ask_model, settings.answer_tokens
-        )
+        # The focus is only a retrieval hint. The original citing sentence
+        # remains the sole claim given to the verification model.
+        verdict = verify_claim(claim, passages, initial_model)
+        second_accepted = False
+        if (
+            verdict.verdict in (VERDICT_NOT_SUPPORTED, VERDICT_NOT_FOUND)
+            and settings.retry_passages
+        ):
+            verdict, second_accepted = _second_look(
+                verdict,
+                queries,
+                cited,
+                rank,
+                settings,
+                context,
+                retry_model,
+            )
         verdicts.append(verdict)
+        more = verdict.passages[len(passages) :]
+        readings = [
+            {
+                "stage": "initial",
+                "passage_ids": [passage.identifier for passage in passages],
+            }
+        ]
+        if more:
+            readings.append(
+                {
+                    "stage": "second_look",
+                    "passage_ids": [passage.identifier for passage in more],
+                }
+            )
         context.trace.emit(
             "tool.reference_check.claim",
             component="tool",
@@ -855,6 +1667,46 @@ def _verify(
                 "line": claim.sentence.line,
                 "verdict": verdict.verdict,
                 "quote_found": verdict.quote_chunk is not None,
+                "evidence_status": verdict.evidence_status,
+                "match_status": claim.match_status,
+                "quote_lines": quote_line_range(
+                    verdict.quote,
+                    verdict.quote_chunk,
+                ),
+                "citation_sentence": claim.marked or claim.sentence.text,
+                "preceding_context": claim.before,
+                "following_context": claim.after,
+                "cited_for": claim.cited_for,
+                "retrieval_queries": list(queries),
+                "passages": [
+                    {
+                        "id": passage.identifier,
+                        "path": passage.path.as_posix(),
+                        "start_line": passage.start_line,
+                        "end_line": passage.end_line,
+                    }
+                    for passage in verdict.passages
+                ],
+                "readings": readings,
+                "verdict_stage": (
+                    "second_look" if second_accepted else "initial"
+                ),
+                "model_calls": sum(calls.values()) - calls_before,
+                "model_attempts": (
+                    sum(attempts.values()) - attempts_before
+                    if read_attempts is not None
+                    else None
+                ),
+                "quote_passage_id": (
+                    verdict.quote_chunk.identifier
+                    if verdict.quote_chunk is not None
+                    else None
+                ),
+                "suitability": (
+                    {"stars": rating.stars, "score": rating.score}
+                    if (rating := citation_suitability(verdict))
+                    else None
+                ),
             },
             turn_id=context.trace_turn_id,
         )
@@ -863,11 +1715,153 @@ def _verify(
     note = ""
     if unchecked:
         why = (
-            "the quick version" if choice == PLAN_CHOICE_QUICK
-            else "the model-call limit"
+            "the quick version"
+            if choice == PLAN_CHOICE_QUICK
+            else "the checked-claims limit"
         )
         note = f"{unchecked} of {len(claims)} claims were not checked ({why})."
-    return replace(report, verdicts=tuple(verdicts), verification=note)
+    counts = {
+        kind: calls[kind] for kind in ("focusing", "initial", "second_look")
+    }
+    counts["total"] = sum(counts.values())
+    attempt_counts = None
+    if read_attempts is not None:
+        attempt_counts = {
+            kind: attempts[kind]
+            for kind in ("focusing", "initial", "second_look")
+        }
+        attempt_counts["total"] = sum(attempt_counts.values())
+    return replace(
+        report,
+        verdicts=tuple(verdicts),
+        verification=note,
+        model_calls=counts,
+        model_attempts=attempt_counts,
+    )
+
+
+# Verdicts of a second, wider reading that replace a first "not supported"
+# or "not found".
+_FOUND_ON_SECOND_LOOK: Final[frozenset[str]] = frozenset(
+    {
+        VERDICT_SUPPORTED,
+        VERDICT_PARTLY,
+        VERDICT_CONTRADICTED,
+        VERDICT_BACKGROUND,
+    }
+)
+
+
+def _second_look(
+    first: Verdict,
+    queries: Sequence[str],
+    cited: Sequence[Chunk],
+    rank: Callable[[str], list],
+    settings: ReferenceCheckSettings,
+    context: ToolContext,
+    ask_model: Callable[[str, str, int | None], str],
+) -> tuple[Verdict, bool]:
+    """Read more of the cited work before calling a claim unsupported.
+
+    Parameters
+    ----------
+    first: Verdict
+        The not supported or not found verdict from the best passages.
+    queries: Sequence[str]
+        The claim's ranking texts.
+    cited: Sequence[Chunk]
+        The cited work's passages.
+    rank: Callable[[str], list]
+        KíLín's ranking, cached for the run.
+    settings: ReferenceCheckSettings
+        For ``retry_passages`` and ``passage_tokens``.
+    context: ToolContext
+        KíLín's services.
+    ask_model: Callable[[str, str, int | None], str]
+        The answering model, counted as a second-look call.
+
+    Returns
+    -------
+    tuple[Verdict, bool]
+        The verdict and whether the second reading was accepted.
+        The second verdict when the next ``settings.retry_passages``
+        best-ranked passages support, partly support or contradict the
+        claim, or name the reference as background; otherwise the first,
+        noting that more passages were read. The first verdict alone when
+        the work has no further passages.
+
+    """
+
+    more = claim_passages(
+        queries,
+        cited,
+        rank,
+        settings.retry_passages,
+        settings.passage_tokens,
+        skip={chunk.identifier for chunk in first.passages},
+    )
+    if not more:
+        return first, False
+
+    context.progress(
+        f"Reading {len(more)} more passages for reference "
+        f"[{first.claim.number}]"
+    )
+    second = verify_claim(first.claim, more, ask_model)
+    if second.verdict in _FOUND_ON_SECOND_LOOK:
+        return (
+            replace(
+                second,
+                comment=(
+                    f"{second.comment} (Found in a second, wider reading of "
+                    f"{len(more)} more passages.)"
+                ),
+                passages=first.passages + second.passages,
+            ),
+            True,
+        )
+    return (
+        replace(
+            first,
+            comment=(
+                f"{first.comment} (A second reading of {len(more)} more "
+                "passages found no support either.)"
+            ),
+            passages=first.passages + more,
+        ),
+        False,
+    )
+
+
+def _claim_queries(claim: Claim) -> tuple[str, ...]:
+    """Form the retrieval queries for one citing sentence.
+
+    Parameters
+    ----------
+    claim: Claim
+        A citation and its bounded paragraph context.
+
+    Returns
+    -------
+    tuple[str, ...]
+        The substantive context takes priority for a publication
+        attribution; otherwise anaphora adds the preceding sentences.
+        The independent cited-for phrase remains the second query, and
+        the focused claim (``Claim.focus``), when there is one, the
+        third; empty queries are ignored by ``claim_passages``.
+
+    """
+
+    sentence = _UNMARKED.sub("", claim.marked or claim.sentence.text)
+    if claim.before and _PUBLICATION_ATTRIBUTION.match(sentence.strip()):
+        # Cited-for text such as "the study was published" contains no
+        # distinctive evidence; it must not dilute the antecedent rank.
+        return (_UNMARKED.sub("", claim.before),)
+    if claim.before and _ANAPHORA.search(sentence):
+        query = f"{_UNMARKED.sub('', claim.before)} {sentence}"
+    else:
+        query = sentence
+    return (query, claim.cited_for, claim.focus)
 
 
 def _claim_seconds(settings: ReferenceCheckSettings) -> float:
@@ -886,7 +1880,8 @@ def _claim_seconds(settings: ReferenceCheckSettings) -> float:
     """
 
     prompt = _config.PROMPT_OVERHEAD_TOKENS + settings.passage_tokens
-    reply = settings.answer_tokens * _config.REPLY_SHARE
+    # Expected output is a planning estimate, never a generation cap.
+    reply = _config.JUDGE_REPLY_TOKENS * _config.REPLY_SHARE
     return (
         _config.CALL_SECONDS
         + prompt / _config.PROMPT_TOKENS_PER_SECOND
@@ -913,32 +1908,40 @@ def _overview(report: ReferenceReport) -> str:
     total = len(report.entries)
     printed = sum(entry.printed for entry in report.entries)
     numbering = (
-        "numbered as printed" if printed == total
+        "numbered as printed"
+        if printed == total
+        else "unnumbered, numbered in list order"
+        if not printed
         else f"{printed} numbered as printed, the others inferred"
     )
     if report.scan.style == STYLE_NONE:
         cited = (
-            "In-text citations were not recognised (only numbered "
-            "citations are, and superscripts only in PDFs)."
+            "In-text citations were not recognised (only numbered and "
+            "author-year citations are, and superscripts only in PDFs)."
         )
     else:
         style = {
             STYLE_BRACKETS: "bracketed",
             STYLE_PARENTHESES: "parenthesized",
             STYLE_WRITTEN: "written-out",
+            STYLE_AUTHOR_YEAR: "author-year",
         }.get(report.scan.style, "superscript")
+        uncited = set(report.scan.uncited)
         cited = (
             f"{len(report.scan.citations)} {style} citations in the text "
-            f"cite {total - len(report.scan.uncited)} of them."
+            f"cite {sum(e.number not in uncited for e in report.entries)} "
+            "of them."
         )
     return (
-        f"{total} references ({numbering}). In the project: "
+        (f"{report.list_note} " if report.list_note else "")
+        + f"{total} references ({numbering}). In the project: "
         f"{report.count(MATCH_FOUND)} found, "
         f"{report.count(MATCH_PROBABLE)} probable, "
         f"{report.count(MATCH_MISSING)} missing"
         + (
             f", {report.count(MATCH_UNREADABLE)} too short to identify"
-            if report.count(MATCH_UNREADABLE) else ""
+            if report.count(MATCH_UNREADABLE)
+            else ""
         )
         + f". {cited}"
     )
@@ -971,6 +1974,11 @@ def _listed(
         (entry, match)
         for entry, match in zip(report.entries, report.matches)
         if match.status == status
+        and (
+            status != MATCH_UNREADABLE
+            or limit is None
+            or entry.number in report.links
+        )
     ]
     shown = items if limit is None else items[:limit]
     lines = []
@@ -980,6 +1988,8 @@ def _listed(
             line += f" → `{match.path.as_posix()}`"
         elif status == MATCH_PROBABLE and match.path is not None:
             line += f" → `{match.path.as_posix()}` ({match.reason})"
+        if entry.number in report.links:
+            line += f" — {_link_markdown(report.links[entry.number])}"
         lines.append(line)
     if len(items) > len(shown):
         lines.append(f"- … and {len(items) - len(shown)} more")
@@ -997,9 +2007,10 @@ def _problems(report: ReferenceReport) -> list[str]:
     Returns
     -------
     list[str]
-        References never cited in the text, and numbers cited beyond the
-        reference list; empty when there are none or citations were not
-        recognised.
+        References never cited in the text, numbers cited beyond the
+        reference list, and author-year citations not in the list or
+        matching several references; empty when there are none or
+        citations were not recognised.
 
     """
 
@@ -1019,6 +2030,17 @@ def _problems(report: ReferenceReport) -> list[str]:
             "- Cited but not in the reference list: "
             + ", ".join(str(number) for number in report.scan.beyond_list)
             + " (the list may have been split wrongly)"
+        )
+    if report.scan.unresolved:
+        problems.append(
+            "- Cited but not in the reference list: "
+            + "; ".join(_escape(work) for work in report.scan.unresolved)
+        )
+    for work, numbers in report.scan.ambiguous:
+        problems.append(
+            f"- Ambiguous citation “{_escape(work)}”: it matches references "
+            + ", ".join(str(number) for number in numbers)
+            + " (a year suffix such as 2020a would tell them apart)"
         )
     return problems
 
@@ -1044,20 +2066,30 @@ def _verdict_table(report: ReferenceReport) -> list[str]:
     if report.verdicts:
         listed = " · ".join(
             f"{counts[verdict]} {verdict_label(verdict)}"
-            for verdict in VERDICTS if counts[verdict]
+            for verdict in VERDICTS
+            if counts[verdict]
         )
         claims = "claim" if len(report.verdicts) == 1 else "claims"
         lines.append(f"**{len(report.verdicts)} {claims} checked:** {listed}")
-    if report.verification:
-        lines += ["", f"*{report.verification}*"] if lines else [
-            f"*{report.verification}*"
+        lines += [
+            "",
+            "*Stars and scores in parentheses (out of 100) indicate "
+            "heuristic citation suitability, not a probability or "
+            "journal-quality score. Unfilled stars "
+            "marked 'unrated' mean the verdict does not justify a "
+            "suitability rating; they do not prove that the cited paper "
+            "offers no support.*",
         ]
+    if report.verification:
+        lines += (
+            ["", f"*{report.verification}*"]
+            if lines
+            else [f"*{report.verification}*"]
+        )
     return lines
 
 
-def _attention(
-    report: ReferenceReport, limit: int | None
-) -> list[Verdict]:
+def _attention(report: ReferenceReport, limit: int | None) -> list[Verdict]:
     """Return the checked claims, those needing attention first.
 
     Parameters
@@ -1088,6 +2120,8 @@ def _claim_block(
     index: int,
     verdict: Verdict,
     citation: int | None,
+    *,
+    show_context: bool = False,
 ) -> list[str]:
     """Return one claim needing attention as a Markdown block.
 
@@ -1101,24 +2135,64 @@ def _claim_block(
         The judged claim.
     citation: int | None
         The evidence number of its quote in the chat; None in the report.
+    show_context: bool
+        Include surrounding context and retrieval inputs in the full report.
 
     Returns
     -------
     list[str]
-        A heading line (number, verdict, reference and cited file), the
+        A heading line (number, verdict, reference, stars and file), the
         citing sentence as a quotation with the cited marker in bold and
         its place, the comment, and the cited paper's sentence.
 
     """
 
     claim = verdict.claim
+    stars = suitability_stars(citation_suitability(verdict))
     lines = [
         f"**{index}. {verdict_label(verdict.verdict).capitalize()}** · "
         "reference "
-        f"{claim.number} → `{claim.cited.name}`",
+        f"{claim.number} → `{claim.cited.name}` · {stars}",
         f"> {_display(report, claim.sentence, claim.number)}",
         f"> — {report.paper.name}, {_where(claim.sentence)}",
     ]
+    if show_context:
+        if claim.before:
+            lines += [
+                "",
+                "*Preceding context used:*",
+                f"> {_escape(claim.before)}",
+            ]
+        if claim.after:
+            lines += [
+                "",
+                "*Following context used:*",
+                f"> {_escape(claim.after)}",
+            ]
+        queries = tuple(query for query in _claim_queries(claim) if query)
+        if queries:
+            lines += [
+                "",
+                "*Evidence retrieval queries:*",
+                *[f"> {_escape(query)}" for query in queries],
+            ]
+    if claim.match_status == MATCH_PROBABLE:
+        lines += [
+            "",
+            "*Provisional: the cited file is only a probable "
+            "bibliography match; confirm its identity.*",
+        ]
+    if verdict.evidence_status in ("missing", "rejected"):
+        lines += [
+            "",
+            f"*Evidence {verdict.evidence_status}: the model verdict "
+            "was not independently supported by a validated quotation.*",
+        ]
+    elif verdict.evidence_status == "approximate":
+        lines += [
+            "",
+            "*Evidence: approximate text match; check source wording.*",
+        ]
     if verdict.comment:
         lines += ["", f"*Why:* {_comment(verdict.comment)}"]
     if verdict.quote:
@@ -1141,20 +2215,28 @@ def _judgement(verdict: Verdict) -> list[str]:
     Returns
     -------
     list[str]
-        "**Verdict:** supported — comment", then the cited paper's
+        "**Verdict:** supported · stars — comment", then the paper's
         sentence with its file and place.
 
     """
 
-    line = f"**Verdict:** {verdict_label(verdict.verdict)}"
+    stars = suitability_stars(citation_suitability(verdict))
+    line = f"**Verdict:** {verdict_label(verdict.verdict)} · {stars}"
+    if verdict.claim.match_status == MATCH_PROBABLE:
+        line += " · provisional bibliography match"
+    if verdict.evidence_status in ("missing", "rejected", "approximate"):
+        line += f" · evidence {verdict.evidence_status}"
     if verdict.comment:
         line += f" — {_comment(verdict.comment)}"
     lines = [line]
     if verdict.quote and verdict.quote_chunk is not None:
         chunk = verdict.quote_chunk
+        line_range = quote_line_range(verdict.quote, chunk)
+        first, last = line_range or (chunk.start_line, chunk.end_line)
         place = (
-            f"{chunk.section}, lines {chunk.start_line}-{chunk.end_line}"
-            if chunk.section else f"lines {chunk.start_line}-{chunk.end_line}"
+            f"{chunk.section}, lines {first}-{last}"
+            if chunk.section
+            else f"lines {first}-{last}"
         )
         lines += [
             "",
@@ -1180,7 +2262,8 @@ def _marked(sentence: Sentence, citations: Sequence[Citation]) -> str:
         The sentence with each superscript or parenthesized marker written
         " [5,40,88–91]" where it stands (extraction glues superscripts to
         the word: "method5,40,88–91"); bracketed and written-out markers
-        are kept as they are.
+        are kept as they are; author-year markers are kept and followed by
+        the numbers they resolve to ("(Smith et al., 2020) [12]").
 
     """
 
@@ -1190,13 +2273,17 @@ def _marked(sentence: Sentence, citations: Sequence[Citation]) -> str:
     for citation in sorted(citations, key=lambda c: c.start):
         if citation.start < position or citation.end <= citation.start:
             continue
-        shown = text[citation.start:citation.end]
-        if shown[:1] != "[" and not shown[:1].isalpha():
+        shown = text[citation.start : citation.end]
+        if citation.author_year:
+            numbers = ",".join(str(number) for number in citation.numbers)
+            shown = f"{shown} [{numbers}]"
+            parts.append(text[position : citation.start])
+        elif shown[:1] != "[" and not shown[:1].isalpha():
             numbers = shown.strip("()").replace(" ", "")
             shown = f" [{numbers}]"
-            parts.append(text[position:citation.start].rstrip())
+            parts.append(text[position : citation.start].rstrip())
         else:
-            parts.append(text[position:citation.start])
+            parts.append(text[position : citation.start])
         parts.append(shown)
         position = citation.end
     parts.append(text[position:])
@@ -1224,10 +2311,12 @@ def _cited_for(
         marker and the last comma, semicolon, colon or opening
         parenthesis, after the last word such as "using", "with" or "such
         as", and without a leading "and", "or" or "but"; at most
-        ``_CITED_FOR_WORDS`` words. Empty when the reference has no marker
-        in the sentence, no words precede it, or they only attribute the
-        sentence ("already observed in ..."), so the whole sentence is
-        what it is cited for.
+        ``_CITED_FOR_WORDS`` words. A marker citing several references
+        ("[11-18]") cites a comma list as a whole, so its text is not cut
+        at commas, and is empty when longer than ``_CITED_FOR_WORDS``
+        words. Empty when the reference has no marker in the sentence, no
+        words precede it, or they only attribute the sentence ("already
+        observed in ..."), so the whole sentence is what it is cited for.
 
     """
 
@@ -1236,24 +2325,23 @@ def _cited_for(
     if marker is None:
         return ""
 
-    start = max(
-        (c.end for c in ordered if c.end <= marker.start), default=0
-    )
-    phrase = sentence.text[start:marker.start]
-    clause = re.split(r"[,;:(]", phrase)[-1]
+    start = max((c.end for c in ordered if c.end <= marker.start), default=0)
+    phrase = sentence.text[start : marker.start]
+    shared = len(marker.numbers) > 1
+    clause = re.split(r"[;:(]" if shared else r"[,;:(]", phrase)[-1]
     if _ATTRIBUTION.match(clause.strip()):
         return ""
     if len(clause.split()) >= 2:
         phrase = clause
     phrase = _CITED_FOR_START.sub("", phrase) or phrase
     phrase = re.sub(r"^\s*(?:and|or|but)\s+", "", phrase, flags=re.I)
-    words = _BROKEN_WORD.sub("", phrase).split()[-_CITED_FOR_WORDS:]
-    return " ".join(words).strip(" .")
+    words = _BROKEN_WORD.sub("", phrase).split()
+    if shared and len(words) > _CITED_FOR_WORDS:
+        return ""
+    return " ".join(words[-_CITED_FOR_WORDS:]).strip(" .")
 
 
-def _display(
-    report: ReferenceReport, sentence: Sentence, number: int
-) -> str:
+def _display(report: ReferenceReport, sentence: Sentence, number: int) -> str:
     """Return a citing sentence for display.
 
     Parameters
@@ -1269,8 +2357,9 @@ def _display(
     -------
     str
         The sentence with its numeric markers written as superscripts
-        ("NN⁸²", "⁽¹³⁾" for a bracketed or parenthesized "[13]"), the
-        markers citing ``number`` in bold, words broken across lines
+        ("NN⁸²", "⁽¹³⁾" for a bracketed or parenthesized "[13]") and
+        author-year markers as printed, the markers citing ``number`` in
+        bold, words broken across lines
         joined, and Markdown characters escaped. A sentence longer than
         ``_SHOWN_CHARACTERS`` is cut, at spaces, to that length around the
         first bold marker, with "…" where text is left out.
@@ -1284,9 +2373,7 @@ def _display(
     )
     first, last = 0, len(text)
     if len(text) > _SHOWN_CHARACTERS:
-        bold = next(
-            (c for c in citations if number in c.numbers), None
-        )
+        bold = next((c for c in citations if number in c.numbers), None)
         centre = bold.start if bold is not None else 0
         first = max(0, centre - _SHOWN_CHARACTERS // 2)
         last = min(len(text), first + _SHOWN_CHARACTERS)
@@ -1294,9 +2381,11 @@ def _display(
         if first:
             first = text.find(" ", first) + 1 or first
         if last < len(text):
-            last = text.rfind(" ", first, last) if " " in text[
-                first:last
-            ] else last
+            last = (
+                text.rfind(" ", first, last)
+                if " " in text[first:last]
+                else last
+            )
     parts: list[str] = ["… "] if first else []
     position = first
     for citation in citations:
@@ -1305,10 +2394,12 @@ def _display(
         if citation.start < position or citation.end <= citation.start:
             continue
         parts.append(
-            _escape(_BROKEN_WORD.sub("", text[position:citation.start]))
+            _escape(_BROKEN_WORD.sub("", text[position : citation.start]))
         )
-        shown = sentence.text[citation.start:citation.end]
-        if shown[:1] in "[(":
+        shown = sentence.text[citation.start : citation.end]
+        if citation.author_year:
+            shown = _escape(shown)
+        elif shown[:1] in "[(":
             inner = shown[1:-1].replace(" ", "")
             shown = f"⁽{inner.translate(_SUPERSCRIPT)}⁾"
         elif shown[:1].isdigit():
@@ -1405,34 +2496,43 @@ def _where(sentence: Sentence) -> str:
     """
 
     section = sentence.chunk.section
-    return f"{section}, line {sentence.line}" if section else (
-        f"line {sentence.line}"
+    return (
+        f"{section}, line {sentence.line}"
+        if section
+        else (f"line {sentence.line}")
     )
 
 
-def _source_file(path: Path, context: ToolContext) -> Path | None:
-    """Return a project file on disk.
+def _source_file(
+    path: Path,
+    context: ToolContext,
+    selected: frozenset[Path] | None = None,
+) -> Path | None:
+    """Return one authorized indexed source within the project workspace.
 
     Parameters
     ----------
     path: pathlib.Path
-        The file, as indexed.
+        Source-relative file path as indexed.
     context: ToolContext
-        For the project folder.
+        Tool services, source root and active source manifest.
+    selected: frozenset[pathlib.Path] | None, optional
+        Previously read source inventory. Defaults to ``None``, which
+        reads the current selection from the context.
 
     Returns
     -------
     pathlib.Path | None
-        The file under the project folder or its ``sources/`` folder; None
-        when neither exists.
+        Selected regular file under the saved source root, or ``None``.
+        No path outside the workspace or unselected candidate is opened.
 
     """
 
-    for candidate in (
-        context.project_root / path,
-        context.project_root / "sources" / path,
-    ):
-        if candidate.is_file():
-            return candidate
-
-    return None
+    root = Path(context.project_root)
+    source = getattr(context, "source_root", None)
+    if source is None:
+        source = root / PROJECT_SOURCES_DIRECTORY
+    return selected_source_file(
+        root, Path(source), path,
+        selected if selected is not None else selected_paths(context),
+    )

@@ -28,6 +28,6 @@
 <rect x="0" y="775" width="1280" height="50" fill="#F8FAFC"/>
 <line x1="44" y1="775" x2="1236" y2="775" stroke="#E2E8F0"/>
 <text x="45" y="805" font-size="13" fill="#475569" font-family="Inter,Arial,sans-serif">Tool packages are statically registered and own their defaults/resources · tool results remain part of one answer lifecycle</text>
-<text x="1235" y="805" text-anchor="end" font-size="12" fill="#64748B" font-family="Inter,Arial,sans-serif">KíLín · PR9b</text>
+<text x="1235" y="805" text-anchor="end" font-size="12" fill="#64748B" font-family="Inter,Arial,sans-serif">KíLín</text>
 
 </svg>

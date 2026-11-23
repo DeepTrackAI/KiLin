@@ -1,8 +1,9 @@
 """Provide exclusive write ownership for one conversation JSON path.
 
 ``ConversationFileLock`` protects an authoritative conversation record using a
-companion ``.json.lock`` file. Holding an operating-system advisory lock on the
-companion, rather than on the JSON inode, survives atomic JSON replacement.
+hidden companion ``.<conversation_filename>.lock`` file. Holding an
+operating-system advisory lock on the companion, rather than on the JSON
+inode, survives atomic JSON replacement.
 A process-local registry also rejects duplicate owners before opening another
 file descriptor. Canonical paths make aliases such as ``/var`` and
 ``/private/var`` refer to the same writer on macOS.
@@ -133,7 +134,8 @@ class ConversationFileLock:
     Parameters
     ----------
     path: str | pathlib.Path
-        Conversation JSON path; the sidecar is ``<path>.lock``.
+        Conversation JSON path; the hidden sidecar is
+        ``.<conversation_filename>.lock`` in the same directory.
 
     Attributes
     ----------
@@ -169,7 +171,7 @@ class ConversationFileLock:
         """
 
         self.path = Path(path).expanduser().resolve()
-        self.lock_path = self.path.with_name(self.path.name + ".lock")
+        self.lock_path = self.path.with_name(f".{self.path.name}.lock")
         self._descriptor: int | None = None
 
     def acquire(self) -> None:
@@ -286,7 +288,23 @@ class ConversationFileLock:
                     _ACTIVE_PATHS.discard(self.path)
 
     def __enter__(self) -> ConversationFileLock:
-        """Acquire and return this ownership token."""
+        """Acquire and return this ownership token.
+
+        Returns
+        -------
+        ConversationFileLock
+            This token, with exclusive write ownership acquired.
+
+        Raises
+        ------
+        ConversationLockedError
+            If another writer owns the conversation file.
+        RuntimeError
+            If this token has already acquired its lock.
+        OSError
+            If the operating system cannot acquire the file lock.
+
+        """
 
         self.acquire()
         return self

@@ -1,0 +1,35 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "part_tokens": {
+      "title": "Part token budget",
+      "summary": "Sets the token budget for one part of a multi-part operation.",
+      "description": "Constrains the context provided for each model call when work is split into parts."
+    },
+    "max_model_calls": {
+      "title": "Maximum model calls",
+      "summary": "Caps model calls permitted for one tool operation.",
+      "description": "Limits computational cost and processing time. Work may stop early before every candidate is examined."
+    },
+    "confirmation": {
+      "title": "Confirmation policy",
+      "summary": "Controls when user confirmation is required before a tool runs.",
+      "description": "Depending on the selected policy, the tool may ask before processing large or otherwise costly workloads."
+    },
+    "large_batches": {
+      "title": "Large workload threshold",
+      "summary": "Sets the batch threshold used by the confirmation policy.",
+      "description": "Used to decide whether a planned multi-batch operation is large enough to request confirmation."
+    },
+    "extra_searches": {
+      "title": "Extra searches",
+      "summary": "Sets how many times a quick answer reads further down the search results.",
+      "description": "Before a quick answer from the best-ranked passages, the answering model checks whether they answer the question. If not, the next-ranked passages are added, up to this many times. Zero turns the check off."
+    },
+    "max_check_characters": {
+      "title": "Maximum check characters",
+      "summary": "Caps evidence-check prompt length for quick answers.",
+      "description": "An oversized evidence-check prompt is skipped; the selected passages are not truncated."
+    }
+  }
+}

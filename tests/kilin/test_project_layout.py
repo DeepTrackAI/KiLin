@@ -39,6 +39,9 @@ from kilin.tools.generate_paper_summary import (
     SHIPPED_TEMPLATES_DIR,
 )
 from kilin.tools._registry import TOOL_REGISTRY, ToolUse
+from kilin.tools.project_summary import (
+    SHIPPED_TEMPLATES_DIR as PROJECT_TEMPLATES_DIR,
+)
 from kilin.workspace import prepare_sources_workspace
 from kilin.repository import scan_repository
 from kilin.workspace_resources import (
@@ -116,19 +119,23 @@ class TestProjectLayout(unittest.TestCase):
         """All core directories exist even without configured templates."""
 
         root = self._project("code")
-        for name in ("indexes", "logs", "outputs", "templates"):
+        for name in ("indexes", "logs", "memory", "outputs",
+                     "templates"):
             with self.subTest(directory=name):
                 self.assertTrue((root / name).is_dir())
         self.assertEqual(list((root / "templates").iterdir()), [])
         self.assertEqual(plan_project_layout("code").resources, ())
 
     def test_literature_installs_exactly_its_four_templates(self) -> None:
-        """Install just the tool templates selected by literature intents."""
+        """Install the literature templates and the guide to the format."""
 
         root = self._project("literature")
         expected = (
+            "README.md",
             "experimental_protocol.md",
+            "literature_table.md",
             "popular_science_summary.md",
+            "project_overview.md",
             "research_briefing.md",
             "technical_summary.md",
         )
@@ -136,11 +143,14 @@ class TestProjectLayout(unittest.TestCase):
             sorted(path.name for path in (root / "templates").iterdir())
         )
         self.assertEqual(actual, expected)
-        self.assertEqual(len(plan_project_layout("literature").resources), 4)
+        self.assertEqual(len(plan_project_layout("literature").resources), 7)
         for name in expected:
+            shipped = SHIPPED_TEMPLATES_DIR / name
+            if not shipped.exists():  # A project report template.
+                shipped = PROJECT_TEMPLATES_DIR / name
             self.assertEqual(
                 (root / "templates" / name).read_bytes(),
-                (SHIPPED_TEMPLATES_DIR / name).read_bytes(),
+                shipped.read_bytes(),
             )
 
     def test_reopening_preserves_edited_deleted_and_added_templates(
@@ -196,7 +206,7 @@ class TestProjectLayout(unittest.TestCase):
         self.assertTrue((project.root / "sources/paper.md").is_file())
         self.assertTrue((project.root / "outputs").is_dir())
         self.assertEqual(
-            len(list((project.root / "templates").glob("*.md"))), 4
+            len(list((project.root / "templates").glob("*.md"))), 7
         )
 
     def test_mirrored_workspace_installs_selected_templates(self) -> None:
@@ -210,7 +220,7 @@ class TestProjectLayout(unittest.TestCase):
         self.assertTrue((workspace.root / "outputs").is_dir())
         self.assertTrue((workspace.root / "templates").is_dir())
         self.assertEqual(
-            len(list((workspace.root / "templates").glob("*.md"))), 4
+            len(list((workspace.root / "templates").glob("*.md"))), 7
         )
         # Repeated synchronization cannot replace an edited template.
         modified = workspace.root / "templates/research_briefing.md"
@@ -237,7 +247,8 @@ class TestProjectLayout(unittest.TestCase):
 
         root = self._project("code")
         listed = list_project_files(open_project(root))
-        for name in ("indexes", "logs", "outputs", "templates"):
+        for name in ("indexes", "logs", "memory", "outputs",
+                     "templates"):
             self.assertIn(f"{name}/", listed)
             self.assertNotIn(name, listed)
 
@@ -250,7 +261,7 @@ class TestProjectLayout(unittest.TestCase):
         profile = root / "profile.ini"
         profile.write_text(
             profile.read_text(encoding="utf-8").replace(
-                "source = repository", "source = ."
+                "source = sources", "source = ."
             ), encoding="utf-8",
         )
         project = configure_project(
@@ -281,18 +292,52 @@ class TestProjectLayout(unittest.TestCase):
         )
 
 
+    def test_managed_source_versions_are_not_automatically_scanned(
+        self,
+    ) -> None:
+        """Only recorded historical copies enter the retrieval scan."""
+
+        source = self.root / "external"
+        source.mkdir()
+        (source / "a.py").write_text("value = 1\n", encoding="utf-8")
+        project = prepare_sources_workspace(
+            [source], "code", self.root / "managed"
+        )
+        self.assertEqual(
+            source_scan_exclusions(project.root, project.source),
+            (".kilin_versions",),
+        )
+        folder = project.source / ".kilin_versions" / "untracked"
+        folder.mkdir(parents=True)
+        (folder / "untracked.py").write_text(
+            "untracked = True\n", encoding="utf-8"
+        )
+        report = scan_repository(
+            project.source,
+            extensions=project.profile.extensions,
+            exclude_paths=source_scan_exclusions(
+                project.root, project.source
+            ),
+        )
+        self.assertNotIn(
+            ".kilin_versions/untracked/untracked.py",
+            report["selected_files"],
+        )
+
     def test_root_source_excludes_managed_templates_from_scans(self) -> None:
         """Template Markdown is not indexed when source equals project root."""
 
         root = self._project("literature")
         profile = root / "profile.ini"
         text = profile.read_text(encoding="utf-8")
-        text = text.replace("source = documents", "source = .")
-        text = text.replace("source = repository", "source = .")
+        text = text.replace("source = sources", "source = .")
         profile.write_text(text, encoding="utf-8")
         opened = open_project(root)
         self.assertEqual(opened.source.resolve(), root.resolve())
         (root / "study.md").write_text("# Source", encoding="utf-8")
+        (root / "memory/feedback.json").write_text(
+            '{"records": "not a source"}', encoding="utf-8"
+        )
         excluded = source_scan_exclusions(opened.root, opened.source)
         report = scan_repository(
             opened.source,
@@ -300,6 +345,7 @@ class TestProjectLayout(unittest.TestCase):
             exclude_paths=excluded,
         )
         self.assertEqual(report["selected_files"], ["study.md"])
+        self.assertIn("memory", excluded)
         # An unrelated source directory named target is not managed.
         target = root / "target"
         target.mkdir()

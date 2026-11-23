@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -93,9 +94,7 @@ class TestGUIPreferences(unittest.TestCase):
                 "router_models": {"mlx": "Qwen/Qwen3-8B"},
             },
         )
-        self.assertEqual(
-            default_project_profile("code"), original_profile
-        )
+        self.assertEqual(default_project_profile("code"), original_profile)
 
     def test_restoring_defaults_removes_only_matching_overrides(self) -> None:
         """Do not erase unrelated changes when a default is restored."""
@@ -109,9 +108,7 @@ class TestGUIPreferences(unittest.TestCase):
             {"query_format": "plain"},
         )
         preferences.write_defaults({"query_format": "qwen3"})
-        self.assertEqual(
-            json.loads(self.path.read_text(encoding="utf-8")), {}
-        )
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")), {})
 
     def test_preferences_can_override_one_backend(self) -> None:
         """Retain other backend models while changing one preference."""
@@ -122,9 +119,7 @@ class TestGUIPreferences(unittest.TestCase):
             encoding="utf-8",
         )
         effective = preferences.app_defaults()
-        self.assertEqual(
-            effective["embedding_models"]["mlx"], "Qwen/Qwen3-4B"
-        )
+        self.assertEqual(effective["embedding_models"]["mlx"], "Qwen/Qwen3-4B")
         self.assertEqual(
             effective["embedding_models"]["torch"],
             preferences.built_in_defaults()["embedding_models"]["torch"],
@@ -226,6 +221,73 @@ class TestGUIPreferences(unittest.TestCase):
         after = open_project(project_root)
         self.assertEqual(after.profile, original.profile)
         self.assertEqual(profile_path.read_bytes(), before)
+
+    def test_projects_folder_is_absolute_or_default(self) -> None:
+        """Save an absolute folder; "" goes back to the standard one."""
+
+        check = preferences.validate_workspace_folder
+        self.assertEqual(check(""), "")
+        self.assertEqual(check("  /Users/me/Projects "), "/Users/me/Projects")
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            check("Projects")
+        with self.assertRaises(TypeError):
+            check(None)
+        self.assertEqual(preferences.app_defaults()["workspace_folder"], "")
+        preferences.write_defaults({"workspace_folder": "/Users/me/Projects"})
+        self.assertEqual(
+            preferences.app_defaults()["workspace_folder"],
+            "/Users/me/Projects",
+        )
+        # Use default removes the saved choice from the file.
+        preferences.write_defaults({"workspace_folder": ""})
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertNotIn("workspace_folder", saved)
+
+    def test_backend_for_new_projects_is_a_preference(self) -> None:
+        """Save auto, mlx or torch; the default is not written."""
+
+        self.assertEqual(preferences.default_backend(), "auto")
+        preferences.write_defaults({"backend": "torch"})
+        self.assertEqual(preferences.default_backend(), "torch")
+        with self.assertRaises(ValueError):
+            preferences.write_defaults({"backend": "cuda"})
+        preferences.write_defaults({"backend": "auto"})
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertNotIn("backend", saved)
+
+    def test_copyright_names_every_package_author(self) -> None:
+        """The Settings line lists the pyproject.toml authors, in order."""
+
+        manifest = Path(preferences.__file__).parents[2] / "pyproject.toml"
+        authors = tomllib.loads(manifest.read_text(encoding="utf-8"))[
+            "project"
+        ]["authors"]
+        names = [author["name"] for author in authors]
+        expected = f"{', '.join(names[:-1])}, and {names[-1]}"
+        self.assertEqual(
+            preferences.copyright_notice(),
+            f"Copyright © {preferences.COPYRIGHT_YEAR} {expected}",
+        )
+
+    def test_terms_are_agreed_to_once_per_version(self) -> None:
+        """Only the current version counts; older ones ask again."""
+
+        self.assertTrue(preferences.terms_text())
+        self.assertFalse(preferences.terms_accepted())
+        preferences.write_defaults({"terms_accepted": "an older version"})
+        # Still a valid file, but the user is asked again.
+        self.assertFalse(preferences.terms_accepted())
+        preferences.write_defaults(
+            {"terms_accepted": preferences.TERMS_VERSION}
+        )
+        self.assertTrue(preferences.terms_accepted())
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["terms_accepted"], preferences.TERMS_VERSION)
+        with self.assertRaises(ValueError):
+            preferences.write_defaults({"terms_accepted": 1})
+        # A broken preferences file counts as not agreed.
+        self.path.write_text("{", encoding="utf-8")
+        self.assertFalse(preferences.terms_accepted())
 
     def test_empty_update_does_not_write(self) -> None:
         """Do not create a preference file for a no-op update."""

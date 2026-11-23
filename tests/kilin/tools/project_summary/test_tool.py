@@ -1,0 +1,1252 @@
+"""Test the project_summary tool without a live model.
+
+Check its settings, templates and routing, the parts of the report written
+by code, and full runs on a small project with a stub model.
+
+"""
+
+# pylint: disable=C0115:missing-class-docstring
+# pylint: disable=C0116:missing-function-docstring
+# pylint: disable=C0103:invalid-name
+
+from __future__ import annotations
+
+from pathlib import Path
+import re
+import shutil
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+
+from kilin.answering import _cued_intent
+from kilin.tools._shared.report_templates import parse_template
+from kilin.tools.project_summary import _configuration as _config
+from kilin.project_type import project_type, with_project_routing
+from kilin.tools._contract import ToolRequest
+from kilin.tools._registry import TOOL_REGISTRY
+from kilin.tools.project_summary import (
+    SHIPPED_TEMPLATES_DIR,
+    TEMPLATE_CHOOSE,
+    ProjectSummarySettings,
+    choose_template,
+    parse_settings,
+    project_templates,
+    routing,
+    run,
+    workspace_resources,
+)
+from kilin.tools.project_summary._documents import ProjectDocument
+from kilin.tools.project_summary._mapping import Check, DocumentNotes
+from kilin.tools.project_summary._reduce import (
+    agreement_problem,
+    chosen_numbers,
+    citation_problem,
+    statement_citation_problem,
+    cite_document_names,
+    clean_citations,
+    coverage_problem,
+    fitted_headline,
+    support_problem,
+    documents_line,
+    documents_list,
+    note_groups,
+    numeric_support_problem,
+    per_document_markdown,
+)
+from kilin.tools._shared.report_templates import TemplateSection
+from tests.kilin.tools._shared._support import chunk
+
+LAB = """---
+title: Lab Overview
+description: What our papers say together.
+max_words: 200
+scope: project
+---
+
+# Headline (max 80 characters)
+
+**Documents:** {documents}
+
+## Themes (3-40 words)
+
+The themes the documents share.
+
+## Models (per document)
+
+When: the document trains a deep-learning model.
+Do: name the architecture (max 6 words).
+
+## Datasets (per document, table)
+
+When: the document uses a public dataset.
+Do: | Dataset | Size |
+
+## Start Here (1-2 items)
+
+The best first reads, chosen from {key_documents}.
+"""
+PAPERS = {
+    "a.md": "Paper A. We trained a U-Net on the public BBBC dataset of 40 "
+            "images.",
+    "b.md": "Paper B. A review of microscopy segmentation methods.",
+    "c.md": "Paper C. We trained a ResNet classifier on private data.",
+}
+
+
+def _model(system: str, prompt: str, tokens: int | None) -> str:
+    """Answer like a model, by the kind of prompt.
+
+    Parameters
+    ----------
+    system: str
+        The system prompt.
+    prompt: str
+        The user prompt.
+    tokens: int | None
+        Unused.
+
+    Returns
+    -------
+    str
+        Notes and checks for a document, a section, chosen numbers or a
+        headline.
+
+    """
+
+    if "Document [1]" in prompt:
+        return (
+            "NOTE 1: Segments nuclei with deep learning.\n"
+            "CHECK A: YES\nQUOTE A: trained a U-Net\nENTRY A: U-Net\n"
+            "CHECK B: YES\nQUOTE B: the public BBBC dataset\n"
+            "ENTRY B: BBBC | 40 images\n"
+        )
+    if "Document [2]" in prompt:
+        return (
+            "NOTE 1: Reviews segmentation methods.\n"
+            "CHECK A: NO\nQUOTE A: A review\nCHECK B: NO\nQUOTE B: x\n"
+        )
+    if "Document [3]" in prompt:
+        return (
+            "NOTE 1: Classifies cells.\n"
+            "CHECK A: YES\nQUOTE A: we trained a transformer\n"
+            "ENTRY A: Transformer\nCHECK B: NO\nQUOTE B: private data\n"
+        )
+    if "Condense" in prompt:
+        return "Deep learning for nuclei [1, 3]. Reviews [2]."
+    if "NUMBERS" in prompt:
+        return "NUMBERS: 2"
+    if "Write the headline" in prompt:
+        return "Deep learning dominates our microscopy papers."
+    return "## Themes\n\nDeep learning for nuclei and cells [1, 3], " \
+        "reviewed in [2]."
+
+
+class _Project(unittest.TestCase):
+
+    def setUp(self) -> None:
+        self.folder = TemporaryDirectory()
+        self.root = Path(self.folder.name)
+        self.templates = self.root / "templates"
+        self.templates.mkdir()
+        (self.templates / "lab_overview.md").write_text(LAB)
+        self.chunks = [
+            chunk(name[0], text, path=name) for name, text in PAPERS.items()
+        ]
+
+    def tearDown(self) -> None:
+        self.folder.cleanup()
+
+    def _run(self, question="write a lab overview of the project",
+             model=_model, confirm=None, choose=None, **settings):
+        context = SimpleNamespace(
+            project_root=self.root, chunks=self.chunks, progress=Mock(),
+            done=Mock(), trace=SimpleNamespace(emit=Mock()),
+            trace_turn_id=None, ask_model=Mock(side_effect=model),
+            confirm=confirm, choose=choose,
+            card=lambda path: {"title": "Study A"} if path.name == "a.md"
+            else None,
+        )
+        values = {"confirmation": "never", **settings}
+        result = run(ProjectSummarySettings(**values),
+                     ToolRequest(question, question), context)
+        return result, context
+
+
+class TestRun(_Project):
+
+    def test_report(self) -> None:
+        result, context = self._run()
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertEqual(result.summary["report"],
+                         "outputs/lab_overview_project_report.md")
+        self.assertTrue(report.startswith(
+            "# Deep learning dominates our microscopy papers\n\n"
+            "> **Partial report:** Evidence, validation, or document "
+        ))
+        self.assertIn(
+            "**Documents:** 3 documents, listed at the end of the report "
+            "[1–3].\n\n## Themes\n\nDeep learning for nuclei and cells "
+            "[1, 3], reviewed in [2].",
+            report,
+        )
+        self.assertIn(
+            "## Models\n\n1 of 3 documents. Unclear: [2] (no explicit "
+            "source-backed negative evidence), [3] (the quoted words "
+            "are not in the document).\n\n- **Study A**: U-Net [1]",
+            report,
+        )
+        self.assertIn(
+            "## Datasets\n\n1 of 3 documents. Unclear: [2] (no explicit "
+            "source-backed negative evidence), [3] (no explicit "
+            "source-backed negative evidence).\n\n"
+            "| Document | Dataset | "
+            "Size |\n| --- | --- | --- |\n| Study A [1] | BBBC | 40 images |",
+            report,
+        )
+        self.assertIn("## Start Here\n\n- b.md [2]", report)
+        self.assertTrue(report.rstrip().endswith(
+            "**Documents**\n\n[1] Study A (`a.md`)  \n[2] b.md  \n[3] c.md"
+        ))
+        self.assertFalse(result.summary["valid"])
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertEqual(len(result.summary["uncertain_checks"]), 4)
+        self.assertIn("**Check**", report)
+        self.assertIn("unresolved evidence check(s)", report)
+        self.assertEqual([e["citation"] for e in result.evidence],
+                         [1, 2, 3])
+        self.assertEqual(result.evidence[0]["path"], Path("a.md"))
+        self.assertIn("*Saved to `outputs/lab_overview_project_report.md`",
+                      result.answer)
+        # Three documents, one section, one choice, one headline.
+        # Source-grounding repairs use the existing bounded repair policy.
+        self.assertEqual(context.ask_model.call_count, 8)
+
+    def test_complete_requires_source_supported_statements(self) -> None:
+        report_template = """---
+title: Lab Overview
+description: A verified project report.
+max_words: 200
+scope: project
+---
+
+**Documents:** {documents}
+
+## Findings (3-60 words)
+
+What the documents report.
+"""
+        (self.templates / "lab_overview.md").write_text(report_template)
+        self.chunks = [chunk(
+            "a", "The measured change was -5%. The sample had 40 images.",
+            path="a.md",
+        )]
+
+        for statement, complete, problem in (
+            ("The measured change was -5% [1].", True, ""),
+            ("The measured change was +5% [1].", False, "Value +5%"),
+            (
+                "The sample had 40 images [1]. The secret dataset "
+                "contained 999 million samples.",
+                False, "Uncited statement",
+            ),
+            (
+                "The sample had 40 images [1]; the secret dataset "
+                "contained 999 million samples.",
+                False, "Uncited statement",
+            ),
+        ):
+            with self.subTest(statement=statement):
+                def model(system, prompt, tokens):
+                    if "Document [1]" in prompt:
+                        return "NOTE 1: The sample had 40 images."
+                    if "Section: Findings" in prompt:
+                        return statement
+                    raise AssertionError(prompt)
+
+                result, _ = self._run(
+                    model=model, repair_attempts=0
+                )
+                saved = (self.root / result.summary["report"]).read_text()
+                self.assertIs(result.summary["valid"], complete)
+                self.assertEqual(
+                    result.summary["status"],
+                    "complete" if complete else "partial",
+                )
+                if problem:
+                    self.assertIn(problem, saved)
+                    self.assertIn("**Check**", saved)
+                    self.assertIn("> **Partial report:**", saved)
+                else:
+                    self.assertNotIn("**Check**", saved)
+                    self.assertNotIn("> **Partial report:**", saved)
+
+    def test_negative_report_stays_partial_without_clear_absence(
+        self,
+    ) -> None:
+        (self.templates / "lab_overview.md").write_text("""---
+title: Lab Overview
+description: A single-model classification report.
+max_words: 100
+scope: project
+---
+
+**Documents:** {documents}
+
+## Models (per document)
+
+When: the document trains a deep-learning model.
+Do: name the model.
+""")
+        for quote, complete in (
+            ("We did not fail to train a deep-learning model.", False),
+            ("The model was not trained on labeled data.", False),
+            ("Not all documents trained a deep-learning model.", False),
+            ("We did not train all deep-learning models.", False),
+            ("We did not train a deep-learning model but later trained one.",
+             False),
+            ("We did not train any deep-learning model.", True),
+        ):
+            with self.subTest(quote=quote):
+                self.chunks = [chunk("a", quote, path="a.md")]
+
+                def model(system, prompt, tokens):
+                    if "Document [1]" in prompt:
+                        return f"CHECK A: NO\nQUOTE A: {quote}"
+                    raise AssertionError(prompt)
+
+                result, _ = self._run(
+                    model=model, repair_attempts=0,
+                )
+                saved = (self.root / result.summary["report"]).read_text()
+                self.assertIs(result.summary["valid"], complete)
+                self.assertEqual(
+                    result.summary["status"],
+                    "complete" if complete else "partial",
+                )
+                if complete:
+                    self.assertEqual(result.summary["uncertain_checks"], [])
+                    self.assertIn("None of the 1 documents", saved)
+                    self.assertNotIn("**Partial report:**", saved)
+                else:
+                    self.assertEqual(
+                        result.summary["uncertain_checks"][0]["document"],
+                        1,
+                    )
+                    self.assertIn("> **Partial report:**", saved)
+                    self.assertIn(
+                        "No confirmed matches in 1 document.", saved,
+                    )
+                    self.assertIn("Unclear: [1]", saved)
+                    self.assertIn(
+                        "no explicit source-backed negative evidence", saved,
+                    )
+                    self.assertNotIn("None of the 1 documents", saved)
+
+    def test_shared_citations_validate_each_assertion(self) -> None:
+        (self.templates / "lab_overview.md").write_text("""---
+title: Lab Overview
+description: A project report with shared citations.
+max_words: 200
+scope: project
+---
+
+**Documents:** {documents}
+
+## Findings (3-60 words)
+
+Compare the documents, with citations.
+""")
+        cases = (
+            (
+                "Study A enrolled 40 patients, while Study B enrolled "
+                "20 patients [1, 2].",
+                ("Study A enrolled 40 patients.",
+                 "Study B enrolled 20 patients."),
+                True,
+            ),
+            (
+                "Study A enrolled 40 patients, while Study B enrolled "
+                "20 patients [1, 2].",
+                ("Study A enrolled 40 patients.",
+                 "Study B enrolled 99 patients."),
+                False,
+            ),
+            (
+                "Study A measured +5%, and Study B measured -5% [1, 2].",
+                ("Study A measured -5%.", "Study B measured +5%."),
+                False,
+            ),
+            (
+                "Both studies enrolled 40 patients [1, 2].",
+                ("Study A enrolled 40 patients.",
+                 "Study B enrolled 20 patients."),
+                False,
+            ),
+            (
+                "The papers describe brain graph methods, and show a "
+                "guaranteed cure for a rare disease [1, 2].",
+                ("Brain graph methods support connectivity research.",
+                 "Rare disease genetics remains under investigation."),
+                False,
+            ),
+        )
+        for claim, sources, complete in cases:
+            with self.subTest(claim=claim, sources=sources):
+                self.chunks = [
+                    chunk("a", sources[0], path="a.md"),
+                    chunk("b", sources[1], path="b.md"),
+                ]
+
+                def model(system, prompt, tokens):
+                    if "Document [1]" in prompt:
+                        return f"NOTE 1: {sources[0]}"
+                    if "Document [2]" in prompt:
+                        return f"NOTE 1: {sources[1]}"
+                    if "Section: Findings" in prompt:
+                        return claim
+                    raise AssertionError(prompt)
+
+                result, _ = self._run(model=model, repair_attempts=0)
+                saved = (self.root / result.summary["report"]).read_text()
+                self.assertIs(result.summary["valid"], complete)
+                self.assertEqual(
+                    result.summary["status"],
+                    "complete" if complete else "partial",
+                )
+                if complete:
+                    self.assertNotIn("**Check**", saved)
+                    self.assertNotIn("**Partial report:**", saved)
+                else:
+                    self.assertIn("**Check**", saved)
+                    self.assertTrue(any(
+                        problem in saved for problem in (
+                            "Shared citation", "shared citation",
+                            "Value 40 cited",
+                        )
+                    ))
+                    self.assertIn("**Partial report:**", saved)
+
+    def test_failed_document_and_groups(self) -> None:
+        def model(system, prompt, tokens):
+            if "Document [2]" in prompt:
+                raise RuntimeError("model stopped")
+            return _model(system, prompt, tokens)
+        with patch(
+            "kilin.tools.project_summary._configuration.GROUP_TOKENS", 1
+        ):
+            result, context = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertEqual(result.summary["failed"], [2])
+        self.assertFalse(result.summary["valid"])
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertEqual(result.summary["coverage"]["read"], 2)
+        self.assertEqual(result.summary["coverage"]["failed"], [2])
+        self.assertIn("Not read: [2].", report)
+        self.assertIn("Not read: [2].", result.answer)
+        prompts = [c.args[1] for c in context.ask_model.call_args_list]
+        self.assertEqual(sum("Condense" in p for p in prompts), 2)
+
+    def test_citations_are_repaired_or_removed(self) -> None:
+        def model(system, prompt, tokens):
+            if "Section: Themes" in prompt:
+                return "Networks are studied [n1], and plants [n3]."
+            if "has a problem" in prompt:
+                return "Networks are studied [1, 3], and plants [2]."
+            return _model(system, prompt, tokens)
+        result, context = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertIn("## Themes\n\nNetworks are studied [1, 3], and "
+                      "plants [2].", report)
+        fix = next(c.args[1] for c in context.ask_model.call_args_list
+                   if "has a problem" in c.args[1])
+        self.assertIn("[n1], [n3]", fix)
+        # The synthetic claim about plants is absent from both sources.
+        self.assertFalse(result.summary["valid"])
+        self.assertIn("source passages", result.answer)
+
+        def stubborn(system, prompt, tokens):
+            if "Section: Themes" in prompt or "has a problem" in prompt:
+                return "Document 1 studies networks [n1] and plants [2]."
+            return _model(system, prompt, tokens)
+        result, _ = self._run(model=stubborn)
+        report = (self.root / result.summary["report"]).read_text()
+        # "Document 1" is written as a citation; the bad bracket removed.
+        self.assertIn("## Themes\n\n[1] studies networks and plants [2].",
+                      report)
+        self.assertIn("Themes: 1 citation(s) of no document removed.",
+                      result.answer)
+        # The check is saved with the report, before the documents.
+        self.assertIn(
+            "---\n\n**Check**\n\n- Themes: 1 citation(s) of no document "
+            "removed.", report,
+        )
+        self.assertIn("source passages", report)
+        self.assertNotIn("names documents in the text", result.answer)
+        self.assertFalse(result.summary["valid"])
+
+    def test_citation_of_the_wrong_document_is_repaired(self) -> None:
+        def model(system, prompt, tokens):
+            if "Section: Themes" in prompt:
+                return ("U-Net models segment nuclei [1], and transformers "
+                        "classify cells [2].")
+            if "has a problem" in prompt:
+                return ("U-Net models segment nuclei [1], and ResNet "
+                        "classifiers use private data [3].")
+            return _model(system, prompt, tokens)
+        result, context = self._run(model=model)
+        fix = next(c.args[1] for c in context.ask_model.call_args_list
+                   if "has a problem" in c.args[1])
+        self.assertIn("“and transformers classify cells” cites [2] "
+                      "without a recognizable anchor", fix)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertIn("ResNet classifiers use private data [3].", report)
+
+    def test_headline_and_coverage(self) -> None:
+        (self.templates / "lab_overview.md").write_text(LAB.replace(
+            "## Themes (3-40 words)", "## Themes (3-40 words, all documents)"
+        ).replace("(max 80 characters)", "(max 40 characters)"))
+
+        def model(system, prompt, tokens):
+            if "Section: Themes" in prompt:
+                return "Nuclei are segmented with deep learning [1]."
+            if "has a problem" in prompt:
+                return "Nuclei are segmented [1], cells classified [3], " \
+                    "and methods reviewed [2]."
+            if "Write the headline" in prompt:
+                return "Deep learning dominates the segmentation of nuclei " \
+                    "in our papers"
+            if "shorter headline" in prompt:
+                return "Deep learning segments nuclei and the cells we study"
+            return _model(system, prompt, tokens)
+        result, context = self._run(model=model)
+        fix = next(c.args[1] for c in context.ask_model.call_args_list
+                   if "has a problem" in c.args[1])
+        self.assertIn("leaves out [2], [3]", fix)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertIn("and methods reviewed [2].", report)
+        # Still too long after asking: cut at a word, without a final
+        # "and the".
+        self.assertTrue(report.startswith(
+            "# Deep learning segments nuclei\n"
+        ))
+
+    def test_all_documents_include_those_without_a_note(self) -> None:
+        (self.templates / "lab_overview.md").write_text(LAB.replace(
+            "## Themes (3-40 words)", "## Themes (3-40 words, all documents)"
+        ))
+
+        def model(system, prompt, tokens):
+            if "Document [2]" in prompt:  # Nothing on the themes.
+                return "NOTE 1: NONE\nCHECK A: NO\nQUOTE A: x\nCHECK B: NO"
+            if "Section: Themes" in prompt:
+                return "Nuclei are segmented [1] and cells classified [3]."
+            if "has a problem" in prompt:
+                return ("Nuclei are segmented [1], cells classified [3], and "
+                        "methods reviewed [2].")
+            if "Write the headline" in prompt:
+                return "Deep learning for nuclei [1, 3]"
+            return _model(system, prompt, tokens)
+        result, context = self._run(model=model)
+        prompts = [c.args[1] for c in context.ask_model.call_args_list]
+        themes = next(p for p in prompts if "Section: Themes" in p)
+        # The document without a note is there, by its title.
+        self.assertIn("[2] b.md.", themes)
+        fix = next(p for p in prompts if "has a problem" in p)
+        self.assertIn("leaves out [2]", fix)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertTrue(report.startswith("# Deep learning for nuclei\n"))
+        self.assertIn("and methods reviewed [2].", report)
+
+    def test_evidence_excerpt_follows_checked_original_quote(self) -> None:
+        self.chunks = [
+            chunk("first", "Introduction with no dataset details.",
+                  path="a.md", line=1),
+            chunk("second", PAPERS["a.md"], path="a.md", line=20),
+        ]
+        result, _ = self._run()
+        self.assertEqual(len(result.evidence), 1)
+        self.assertEqual(result.evidence[0]["start_line"], 20)
+        self.assertIn("public BBBC dataset", result.evidence[0]["text"])
+
+    def test_fabricated_table_values_are_never_published_as_valid(
+        self,
+    ) -> None:
+        def model(system, prompt, tokens):
+            if "Document [1]" in prompt:
+                return (
+                    "NOTE 1: U-Net on BBBC.\n"
+                    "CHECK A: YES\nQUOTE A: trained a U-Net\n"
+                    "ENTRY A: U-Net\nCHECK B: YES\n"
+                    "QUOTE B: public BBBC dataset\n"
+                    "VALUE B1 Dataset: FraudData\n"
+                    "VALUE B2 Size: 999 million images"
+                )
+            return _model(system, prompt, tokens)
+
+        result, _ = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertFalse(result.summary["valid"])
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertNotIn("FraudData", report)
+        self.assertNotIn("999 million", report)
+        self.assertIn("unverified table value(s): Dataset, Size", report)
+        self.assertTrue(any(
+            item["document"] == 1 and item["section"] == "Datasets"
+            for item in result.summary["uncertain_checks"]
+        ))
+
+    def test_fabricated_model_name_is_not_published(self) -> None:
+        def model(system, prompt, tokens):
+            if "Document [1]" in prompt:
+                return (
+                    "NOTE 1: U-Net on BBBC.\n"
+                    "CHECK A: YES\nQUOTE A: trained a U-Net\n"
+                    "ENTRY A: FraudNet\n"
+                    "CHECK B: YES\nQUOTE B: public BBBC dataset\n"
+                    "VALUE B1 Dataset: BBBC\nVALUE B2 Size: 40 images"
+                )
+            return _model(system, prompt, tokens)
+
+        result, _ = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertFalse(result.summary["valid"])
+        self.assertNotIn("FraudNet", report)
+        self.assertIn("entry's wording is not in the original source", report)
+
+    def test_unverified_numeric_citation_is_visible_and_partial(self) -> None:
+        def model(system, prompt, tokens):
+            if "Section: Themes" in prompt or "has a problem" in prompt:
+                return "BBBC includes 999 million images [1]."
+            return _model(system, prompt, tokens)
+
+        result, _ = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertFalse(result.summary["valid"])
+        self.assertIn("Value 999 cited as [1]", report)
+        self.assertIn("**Check**", report)
+
+    def test_source_citation_not_verified_by_generated_notes(self) -> None:
+        def model(system, prompt, tokens):
+            if "Document [1]" in prompt:
+                return (
+                    "NOTE 1: Quantum photonic systems are investigated.\n"
+                    "CHECK A: NO\nCHECK B: NO"
+                )
+            if "Section: Themes" in prompt or "has a problem" in prompt:
+                return "Quantum photonic systems are investigated [1]."
+            return _model(system, prompt, tokens)
+
+        result, _ = self._run(model=model)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertFalse(result.summary["valid"])
+        self.assertIn("without a recognizable anchor", report)
+
+    def test_cancel_and_quick(self) -> None:
+        result, context = self._run(confirm=Mock(return_value="cancel"),
+                                    confirmation="always")
+        self.assertEqual(result.answer,
+                         "The Lab Overview was not written (cancelled).")
+        context.ask_model.assert_not_called()
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual((plan.items, plan.batches), (3, 6))
+        self.assertIn("3 documents of the project, 1 with a card",
+                      plan.scope)
+        result, _ = self._run(confirm=Mock(return_value="quick"),
+                              confirmation="always")
+        self.assertEqual(result.summary["choice"], "quick")
+
+    def test_document_limit_disclosed_in_saved_report(self) -> None:
+        result, context = self._run(max_documents=1)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertFalse(result.summary["valid"])
+        self.assertEqual(result.summary["status"], "partial")
+        self.assertEqual(result.summary["left_out"], 2)
+        self.assertEqual(result.summary["coverage"], {
+            "indexed": 3, "selected": 1, "read": 1,
+            "omitted": ["b.md", "c.md"], "failed": [],
+        })
+        self.assertIn("**Coverage**", report)
+        self.assertIn("1 of 3 indexed documents", report)
+        self.assertIn("`max_documents=1`", report)
+        self.assertIn("`b.md`, `c.md`", report)
+        self.assertIn("**Documents**\n\n[1] Study A", report)
+        self.assertEqual([e["citation"] for e in result.evidence], [1])
+
+    def test_large_omitted_list_is_bounded_in_the_report(self) -> None:
+        self.chunks.extend(
+            chunk(str(i), "Additional indexed document.",
+                  path=f"extra_{i:02d}.md")
+            for i in range(13)
+        )
+        result, _ = self._run(max_documents=1)
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertEqual(result.summary["left_out"], 15)
+        self.assertEqual(len(result.summary["coverage"]["omitted"]), 15)
+        self.assertIn("and 5 more (all paths in result metadata)", report)
+        self.assertNotIn("`extra_12.md`", report)
+        self.assertFalse(result.summary["valid"])
+
+    def test_no_documents_or_templates(self) -> None:
+        self.chunks = []
+        result, _ = self._run()
+        self.assertIn("no indexed documents", result.answer)
+        (self.templates / "lab_overview.md").unlink()
+        result, _ = self._run()
+        self.assertIn("no project report template", result.answer)
+
+
+class TestTemplates(_Project):
+
+    def test_settings_and_registry(self) -> None:
+        self.assertEqual(parse_settings({}, "x"), ProjectSummarySettings())
+        for bad in ({"template": "../x"}, {"document_tokens": 10},
+                    {"unknown": 1}):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                parse_settings(bad, "x")
+        self.assertIn("project_summary", TOOL_REGISTRY)
+        shipped = {r.destination for r in workspace_resources(
+            ProjectSummarySettings())}
+        self.assertEqual(shipped, {"templates/project_overview.md",
+                                   "templates/literature_table.md"})
+
+    def test_shipped_templates(self) -> None:
+        for path in SHIPPED_TEMPLATES_DIR.glob("*.md"):
+            shutil.copy(path, self.templates)
+        found = {name: template for name, template, error in
+                 project_templates(self.templates)}
+        self.assertEqual(set(found),
+                         {"lab_overview", "literature_table",
+                          "project_overview"})
+        self.assertTrue(all(found.values()))
+
+    def test_choose(self) -> None:
+        self.assertEqual(
+            choose_template("write the lab overview", self.templates,
+                            TEMPLATE_CHOOSE).name, "lab_overview",
+        )
+        self.assertEqual(
+            choose_template("summarize the project", self.templates,
+                            TEMPLATE_CHOOSE).name, "lab_overview",
+        )
+        shutil.copy(SHIPPED_TEMPLATES_DIR / "project_overview.md",
+                    self.templates)
+        choose = Mock(return_value=1)
+        self.assertEqual(
+            choose_template("summarize the project", self.templates,
+                            TEMPLATE_CHOOSE, choose).name,
+            "project_overview",
+        )
+        with self.assertRaisesRegex(ValueError, "Which project report"):
+            choose_template("summarize the project", self.templates,
+                            TEMPLATE_CHOOSE)
+
+    def test_overlapping_template_names_and_ambiguous_requests(
+        self,
+    ) -> None:
+        (self.templates / "lab.md").write_text(
+            LAB.replace("Lab Overview", "Lab")
+        )
+        (self.templates / "lab_notes.md").write_text(
+            LAB.replace("Lab Overview", "Lab Notes")
+        )
+        for question, expected in (
+            ("write lab_notes.md for the project", "lab_notes"),
+            ("make Lab Notes report", "lab_notes"),
+            ("write LAB-NOTES.MD", "lab_notes"),
+            ("use templates/lab_notes.md", "lab_notes"),
+            ("make lab.md report", "lab"),
+            ("write the lab report", "lab"),
+            ("make a collaboration report", "lab_overview"),
+        ):
+            with self.subTest(question=question):
+                actual = choose_template(
+                    question, self.templates, "lab_overview"
+                )
+                self.assertEqual(actual.name, expected)
+        with self.assertRaisesRegex(
+            ValueError, "Several project report templates match"
+        ) as error:
+            choose_template(
+                "use lab_notes and lab", self.templates, TEMPLATE_CHOOSE
+            )
+        self.assertIn("`lab.md`", str(error.exception))
+        self.assertIn("`lab_notes.md`", str(error.exception))
+
+    def test_invalid_choice_does_not_start_generation(self) -> None:
+        shutil.copy(
+            SHIPPED_TEMPLATES_DIR / "project_overview.md", self.templates
+        )
+        for value in (-1, 999, True, "1", None):
+            with self.subTest(value=value):
+                choice = Mock(return_value=value)
+                self.assertIsNone(choose_template(
+                    "write a project report", self.templates,
+                    TEMPLATE_CHOOSE, choice,
+                ))
+                result, context = self._run(
+                    question="write a project report", choose=choice,
+                )
+                self.assertEqual(result.answer, "No template was chosen.")
+                context.ask_model.assert_not_called()
+                self.assertEqual(
+                    context.trace.emit.call_args_list[1].args[0],
+                    "tool.choice.decided",
+                )
+                self.assertIsNone(
+                    context.trace.emit.call_args_list[1].kwargs["data"]
+                    ["index"]
+                )
+
+    def test_choice_announced_to_gui_before_callback(self) -> None:
+        shutil.copy(
+            SHIPPED_TEMPLATES_DIR / "project_overview.md", self.templates
+        )
+        seen = []
+
+        def progress(message, **details):
+            seen.append(("progress", message, details))
+
+        def choose(question, options):
+            self.assertEqual(seen[0][0], "progress")
+            self.assertEqual(seen[0][1], "Waiting for your choice")
+            self.assertEqual(
+                seen[0][2]["choice"],
+                {"question": question, "options": list(options)},
+            )
+            return 0
+
+        context = SimpleNamespace(
+            project_root=self.root, chunks=[], progress=progress,
+            done=Mock(), trace=SimpleNamespace(emit=Mock()),
+            trace_turn_id="turn-1", choose=choose,
+        )
+        result = run(
+            ProjectSummarySettings(),
+            ToolRequest("write a project report", "write a project report"),
+            context,
+        )
+        self.assertIn("no indexed documents", result.answer)
+        self.assertEqual(
+            [call.args[0] for call in context.trace.emit.call_args_list],
+            ["tool.choice.proposed", "tool.choice.decided"],
+        )
+        self.assertEqual(
+            context.trace.emit.call_args_list[0].kwargs["turn_id"],
+            "turn-1",
+        )
+
+    def test_invalid_templates_and_fixed_scope(self) -> None:
+        broken = self.templates / "bad_encoding.md"
+        broken.write_bytes(
+            b"---\nscope: project\ntitle: Bad\n---\n\xff"
+        )
+        found = {name: (template, error) for name, template, error in
+                 project_templates(self.templates)}
+        self.assertIsNone(found["bad_encoding"][0])
+        self.assertTrue(found["bad_encoding"][1])
+        with self.assertRaisesRegex(ValueError, "cannot be used"):
+            choose_template(
+                "use bad_encoding.md", self.templates, TEMPLATE_CHOOSE
+            )
+
+        from kilin.tools.generate_paper_summary import (
+            SHIPPED_TEMPLATES_DIR as PAPER_TEMPLATES,
+        )
+        shutil.copy(PAPER_TEMPLATES / "research_briefing.md", self.templates)
+        with self.assertRaisesRegex(ValueError, "individual-document"):
+            choose_template(
+                "use research_briefing.md", self.templates, TEMPLATE_CHOOSE
+            )
+        with self.assertRaisesRegex(ValueError, "individual documents"):
+            choose_template(
+                "make a report", self.templates, "research_briefing"
+            )
+        with self.assertRaisesRegex(ValueError, "Cannot read"):
+            choose_template("make a report", self.templates, "bad_encoding")
+
+    def test_per_document_section_limit(self) -> None:
+        extra = "".join(
+            f"\n## Added {n} (per document)\n\n"
+            "When: it uses imaging.\nDo: list the technique.\n"
+            for n in range(24)
+        )
+        template = parse_template(
+            LAB + extra, "maximum", _config.TEMPLATE_RULES
+        )
+        self.assertEqual(
+            sum(s.source == "per_document" for s in template.sections), 26
+        )
+        with self.assertRaisesRegex(ValueError, "at most 26"):
+            parse_template(LAB + extra + (
+                "\n## Overflow (per document)\n\n"
+                "When: it uses imaging.\nDo: list the technique.\n"
+            ), "overflow", _config.TEMPLATE_RULES)
+
+    def test_routing(self) -> None:
+        found = routing(ProjectSummarySettings(), self.root)
+        self.assertIn("Lab Overview (lab_overview): What our papers say "
+                      "together", found.description)
+        cues = [re.compile(cue, re.I) for cue in found.cues]
+        self.assertTrue(any(c.search("write a lab overview") for c in cues))
+        for type_id in ("literature", "writing"):
+            project = with_project_routing(project_type(type_id), self.root)
+            for question, intent in (
+                ("write a lab overview of the project",
+                 "templated_project_report"),
+                ("summarize the whole project", "templated_project_report"),
+                ("make a literature table of all the papers",
+                 "templated_project_report"),
+                ("wrap up everything in the collection",
+                 "templated_project_report"),
+                ("how many papers are in this project?", None),
+            ):
+                with self.subTest(type_id=type_id, question=question):
+                    self.assertEqual(_cued_intent(project, question),
+                                     intent)
+
+
+class TestReduce(unittest.TestCase):
+
+    def test_code_written_parts(self) -> None:
+        documents = [
+            ProjectDocument(n, Path(f"{n}.md"), f"Doc {n}", (), None)
+            for n in (1, 2, 3, 4)
+        ]
+        section = TemplateSection("Models", when="x", do="y",
+                                  source="per_document")
+        notes = {
+            1: DocumentNotes(1, checks={"Models": Check("yes", entry="A")}),
+            2: DocumentNotes(2, checks={"Models": Check("no")}),
+            3: DocumentNotes(3, checks={"Models": Check(
+                "unclear", why="no answer")}),
+            4: DocumentNotes(4, failure="stopped"),
+        }
+        self.assertEqual(
+            per_document_markdown(section, documents, notes),
+            "1 of 4 documents. Unclear: [3] (no answer). Not read: [4]."
+            "\n\n- **Doc 1**: A [1]",
+        )
+        notes[1] = DocumentNotes(1, checks={"Models": Check("no")})
+        self.assertEqual(per_document_markdown(section, documents, notes),
+                         "No confirmed matches among 4 documents. "
+                         "Unclear: [3] (no "
+                         "answer). Not read: [4].")
+        notes[3] = DocumentNotes(3, checks={"Models": Check("no")})
+        notes[4] = DocumentNotes(4, checks={"Models": Check("no")})
+        self.assertEqual(per_document_markdown(section, documents, notes),
+                         "None of the 4 documents.")
+        self.assertEqual(documents_line(documents[:1]),
+                         "1 document, listed at the end of the report [1].")
+        self.assertIn("[4] Doc 4 (`4.md`)", documents_list(documents))
+        self.assertEqual(chosen_numbers("I pick 4 and 2", 4, 1), [4])
+        for content, cite, problem in (
+            ("Shown [1, 3] and [2-3].", True, ""),
+            ("Shown [n1] and [n2].", True, "[n1], [n2]"),
+            ("Shown [6].", True, "[6]"),
+            ("Document 4 and Documents 1 and 2 agree.", False,
+             "names documents in the text"),
+            ("Documents [1] and [4] both emphasize networks [1, 4].", True,
+             "names documents in the text"),
+            ("Shown without citations.", True, "cites no document"),
+            ("Shown without citations.", False, ""),
+        ):
+            with self.subTest(content=content):
+                found = citation_problem(content, 5, cite)
+                if problem:
+                    self.assertIn(problem, found)
+                else:
+                    self.assertEqual(found, "")
+        self.assertEqual(
+            clean_citations("A [n1], b [2] and c [7].", 5),
+            ("A, b [2] and c.", 2),
+        )
+        for text, cited in (
+            ("Document 1 and 4 both highlight BRAPH.",
+             "[1] and [4] both highlight BRAPH."),
+            ("Document [4] focuses on tools.", "[4] focuses on tools."),
+            ("Documents 1, 2 and [5] share it.",
+             "[1], [2] and [5] share it."),
+            ("Document 9 is not one of them.",
+             "Document 9 is not one of them."),
+            ("No document is named.", "No document is named."),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(cite_document_names(text, 5)[0], cited)
+        # A real report's Overview: [4] is BRAPH 2, the genomics is [5].
+        texts = {
+            1: "BRAPH: A graph theory software for the analysis of brain "
+               "connectivity; freeware MATLAB, network measures",
+            2: "Computational memory capacity predicts aging; reservoir "
+               "computing on brain connectivity, Cam-CAN",
+            3: "Deep-Learning Investigation of Vibrational Raman Spectra "
+               "for Plant-Stress Analysis; variational autoencoder",
+            4: "BRAPH 2 framework for network analyses in neurosciences; "
+               "Genesis compiler, distributions, brain connectivity",
+            5: "Genomic results for psychiatric disorders and brain cell "
+               "types; genome-wide association studies, schizophrenia",
+        }
+        overview = (
+            "The table covers graph theory software for brain connectivity "
+            "[1], computational memory capacity in aging [2], deep learning "
+            "for plant stress analysis [3], and genomic analysis of "
+            "psychiatric disorders [4]."
+        )
+        self.assertIn(
+            "“and genomic analysis of psychiatric disorders” cites [4], "
+            "whose source text does not mention it; it may be [5]",
+            support_problem(overview, texts),
+        )
+        self.assertEqual(
+            support_problem(overview.replace("[4]", "[5]"), texts), ""
+        )
+        # A long clause before the citation: its last part is judged.
+        self.assertIn(
+            "“reservoir computing” cites [1], whose source text "
+            "does not mention it; it may be [2]",
+            support_problem(
+                "The main differences lie in their focus areas—brain "
+                "connectivity, memory capacity and psychiatric disorders—"
+                "and their methods, such as reservoir computing [1], and "
+                "genomic data [5].", texts,
+            ),
+        )
+        # A list cited as a whole: each document backs one part of it.
+        listed = (
+            "The documents cover freeware MATLAB network measures, "
+            "reservoir computing and genome-wide association studies "
+            "[1, 2, 5]."
+        )
+        self.assertEqual(support_problem(listed, texts), "")
+        self.assertIn(
+            "cites [3]", support_problem(listed.replace("5]", "3]"), texts)
+        )
+        # Too few distinctive words to judge, or no better document.
+        self.assertEqual(support_problem("As shown [4].", texts), "")
+        self.assertEqual(
+            support_problem("Quantum chromodynamics lattices [4].", texts),
+            "",
+        )
+        self.assertIn("without a recognizable anchor", support_problem(
+            "Quantum chromodynamics lattices [4].", texts, strict=True,
+        ))
+        self.assertIn("without a recognizable anchor", support_problem(
+            "FraudData [1].", {1: "BBBC source"}, strict=True,
+        ))
+        # A real report's "Agreements and Disagreements".
+        self.assertIn(
+            "cites only [1]",
+            agreement_problem(
+                "The documents agree on the use of non-parametric "
+                "permutation tests [1], and on memory capacity [2]."
+            ),
+        )
+        self.assertIn("cites only [4]", agreement_problem(
+            "They agree that X [1, 2]. However, they disagree on the "
+            "applications of BRAPH 2 [4]."
+        ))
+        for text in ("They agree that thresholds matter [1, 4].",
+                     "They concur on reproducibility [2-4].",
+                     "BRAPH 2 differs from BRAPH [1] in its GUI [4].",
+                     "No document disagrees with another."):
+            with self.subTest(text=text):
+                self.assertEqual(agreement_problem(text), "")
+        self.assertEqual(coverage_problem("A [1, 3] and [2].", [1, 2, 3]),
+                         "")
+        self.assertIn("leaves out [3], [5]",
+                      coverage_problem("A [1, 4] and [2].", [1, 2, 3, 4, 5]))
+        self.assertEqual(
+            fitted_headline("BRAPH tools enable network analysis of brain "
+                            "connectivity in neurological conditions "
+                            "through graph theory and statistics", 110),
+            "BRAPH tools enable network analysis of brain connectivity in "
+            "neurological conditions through graph theory",
+        )
+        self.assertEqual(fitted_headline("Short.", 20), "Short")
+        self.assertIn("Value 999 cited as [1]", numeric_support_problem(
+            "The dataset contains 999 images [1].",
+            {1: "The dataset contains 40 images"},
+        ))
+        self.assertEqual(numeric_support_problem(
+            "The dataset contains 40 images [1].",
+            {1: "The dataset contains 40 images"},
+        ), "")
+        self.assertIn("Quantity 40 million", numeric_support_problem(
+            "The sample contains 40 million images [1].",
+            {1: "The sample contains 40 images"},
+        ))
+        self.assertIn("Comparison p < 0.05", numeric_support_problem(
+            "The effect is significant (p<0.05) [1].",
+            {1: "The effect was not significant (p>0.05)"},
+        ))
+        self.assertEqual(numeric_support_problem(
+            "The effect is significant (p≤0.05) [1].",
+            {1: "The effect had p <= 0.05"},
+        ), "")
+        # Signs, exponent notation, and inequality directions remain
+        # part of an independently checked literal fact.
+        self.assertIn("Value +5%", numeric_support_problem(
+            "The measured change was +5% [1].",
+            {1: "The measured change was -5%."},
+        ))
+        self.assertEqual(numeric_support_problem(
+            "The measured change was -5% [1].",
+            {1: "The measured change was \u22125%."},
+        ), "")
+        self.assertIn("Value -5%", numeric_support_problem(
+            "The measured change was -5% [1].",
+            {1: "The measured change was +5%."},
+        ))
+        self.assertIn("Value \u00b15%", numeric_support_problem(
+            "The uncertainty was \u00b15% [1].",
+            {1: "The uncertainty was 5%."},
+        ))
+        self.assertEqual(numeric_support_problem(
+            "The uncertainty was \u00b15% [1].",
+            {1: "The uncertainty was \u00b15%."},
+        ), "")
+        self.assertEqual(numeric_support_problem(
+            "The threshold was 5e-3 [1].",
+            {1: "The threshold was 5e-3."},
+        ), "")
+        self.assertIn("Value 5e+3", numeric_support_problem(
+            "The threshold was 5e+3 [1].",
+            {1: "The threshold was 5e-3."},
+        ))
+        self.assertEqual(numeric_support_problem(
+            "The effect had p<=5e-3 [1].",
+            {1: "The effect had p \u2264 5e\u22123."},
+        ), "")
+        self.assertIn("Comparison p > 5e-3", numeric_support_problem(
+            "The effect had p > 5e-3 [1].",
+            {1: "The effect had p < 5e-3."},
+        ))
+        for text, problem in (
+            ("BBBC contains 40 images [1].", ""),
+            (
+                "BBBC contains 40 images [1]. The secret dataset "
+                "includes 999 million samples.",
+                "Uncited statement",
+            ),
+            (
+                "BBBC contains 40 images [1]; the secret dataset "
+                "includes 999 million samples.",
+                "Uncited statement",
+            ),
+            (
+                "BBBC contains 40 images [1] and 999 million samples.",
+                "Uncited claim after a citation",
+            ),
+            ("BBBC contains 40 images [1]. ResNet is evaluated [2].", ""),
+            ("- BBBC contains 40 images [1]\n- Uncited new result",
+             "Uncited statement"),
+            (
+                "The systems, e.g. U-Net models, use BBBC [1].",
+                "",
+            ),
+        ):
+            with self.subTest(text=text):
+                found = statement_citation_problem(text, 2)
+                if problem:
+                    self.assertIn(problem, found)
+                else:
+                    self.assertEqual(found, "")
+        groups = note_groups([(1, "a " * 30), (2, "b"), (3, "c")], 10)
+        self.assertEqual([[n for n, _ in g] for g in groups], [[1], [2, 3]])
+
+
+class TestSharedCitationValidation(unittest.TestCase):
+
+    def test_grouped_list_checks_each_part_and_document(self) -> None:
+        sources = {
+            1: "Freeware MATLAB network measures for neuroscience.",
+            2: "Reservoir computing on brain connectivity.",
+            3: "Genomic association studies in rare disease genetics.",
+        }
+        reported = (
+            "The documents cover freeware MATLAB network measures, "
+            "reservoir computing and genomic association studies [1-3]."
+        )
+        self.assertEqual(support_problem(reported, sources, strict=True), "")
+        self.assertEqual(numeric_support_problem(reported, sources), "")
+        missing = reported.replace("genomic association studies", (
+            "a guaranteed cure for rare diseases"
+        ))
+        self.assertIn("Shared citation", support_problem(
+            missing, sources, strict=True,
+        ))
+        wrong = reported.replace("[1-3]", "[1, 2]")
+        self.assertIn("Shared citation", support_problem(
+            wrong, sources, strict=True,
+        ))
+
+    def test_grouped_numeric_values_and_source_attribution(self) -> None:
+        sources = {
+            1: "Study A enrolled 40 patients and measured -5%.",
+            2: "Study B enrolled 20 patients and measured +5%.",
+        }
+        valid = (
+            "Study A enrolled 40 patients, while Study B enrolled "
+            "20 patients [1, 2]."
+        )
+        self.assertEqual(numeric_support_problem(valid, sources), "")
+        self.assertEqual(support_problem(valid, sources, strict=True), "")
+        reversed_count = valid.replace("20 patients", "99 patients")
+        self.assertIn("Numerical assertion", numeric_support_problem(
+            reversed_count, sources,
+        ))
+        for reported in (
+            "Study A measured +5%, and Study B measured -5% [1, 2].",
+            "Study A enrolled 40 patients [1, 2].",
+        ):
+            with self.subTest(reported=reported):
+                self.assertTrue(numeric_support_problem(reported, sources))
+                self.assertTrue(support_problem(
+                    reported, sources, strict=True,
+                ))
+        valid_signs = (
+            "Study A measured -5%, while Study B measured +5% [1, 2]."
+        )
+        self.assertEqual(numeric_support_problem(valid_signs, sources), "")
+        self.assertEqual(support_problem(
+            valid_signs, sources, strict=True,
+        ), "")
+
+    def test_short_study_labels_are_not_prefix_matches(self) -> None:
+        claim = (
+            "Study A enrolled 40 patients, while Study B enrolled "
+            "20 patients [1, 2]."
+        )
+        for first in (
+            "Study AB enrolled 40 patients.",
+            "Study a network enrolled 40 patients.",
+            "Study A1 enrolled 40 patients.",
+        ):
+            with self.subTest(first=first):
+                sources = {
+                    1: first,
+                    2: "Study B enrolled 20 patients.",
+                }
+                self.assertIn("Shared citation", support_problem(
+                    claim, sources, strict=True,
+                ))
+                self.assertIn("Numerical assertion", numeric_support_problem(
+                    claim, sources,
+                ))
+
+    def test_multi_source_single_assertion_is_not_a_list(self) -> None:
+        sources = {
+            1: "The study found the p < 5e-3 threshold.",
+            2: "The study found the p > 5e-3 threshold.",
+        }
+        claim = "Both studies found p < 5e-3 [1, 2]."
+        self.assertIn("Comparison p < 5e-3", numeric_support_problem(
+            claim, sources,
+        ))
+        self.assertIn("Shared citation", support_problem(
+            claim, sources, strict=True,
+        ))
+
+
+if __name__ == "__main__":
+    unittest.main()

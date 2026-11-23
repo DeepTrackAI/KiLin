@@ -11,13 +11,15 @@ and deterministic execution behavior.
 
 from __future__ import annotations
 
-from dataclasses import fields
-import json
 from pathlib import Path
 import unittest
 
 from kilin.tools import project_inventory as tool
-from kilin.tools._registry import TOOL_REGISTRY
+
+from tests.kilin.tools._contract_support import (
+    assert_packaged_defaults,
+    assert_registry_entry,
+)
 
 
 class TestProjectInventory(unittest.TestCase):
@@ -28,38 +30,18 @@ class TestProjectInventory(unittest.TestCase):
 
         """
 
-        entry = TOOL_REGISTRY["project_inventory"]
-        self.assertIs(entry.parse_settings, tool.parse_settings)
-        self.assertIs(entry.run, tool.run)
-        self.assertIsNone(entry.workspace_resources)
+        assert_registry_entry(
+            self, "project_inventory", tool
+        )
 
     def test_packaged_defaults_and_project_type_overrides(self) -> None:
         """Use the tool-local JSON when settings are not supplied.
 
         """
 
-        package = Path(tool.__file__).parent
-        data = json.loads(
-            (package / "defaults.json").read_text(encoding="utf-8")
+        assert_packaged_defaults(
+            self, tool, tool.InventorySettings,
         )
-        readme = (package / "README.md").read_text(encoding="utf-8")
-        for section, values in data.items():
-            with self.subTest(section=section):
-                self.assertIn("`" + section + "`", readme)
-            for key in values:
-                with self.subTest(section=section, key=key):
-                    self.assertIn("`" + key + "`", readme)
-        defaults = tool.InventorySettings()
-        self.assertEqual(defaults, tool.parse_settings({}, "example"))
-        self.assertEqual(
-            {field.name for field in fields(defaults)},
-            {name.lower() for name in data["SETTINGS"]},
-        )
-        for field in fields(defaults):
-            expected = data["SETTINGS"][field.name.upper()]
-            if isinstance(expected, list):
-                expected = tuple(expected)
-            self.assertEqual(getattr(defaults, field.name), expected)
 
     def test_invalid_project_type_settings(self) -> None:
         """Reject out-of-range, mistyped and unknown overrides.
@@ -87,7 +69,33 @@ class TestProjectInventory(unittest.TestCase):
         from tests.kilin.tools._shared._support import chunk
 
         self.assertEqual(tool.file_types_in("List PDFs"), (".pdf",))
+        self.assertEqual(
+            tool.file_types_in("List JSON files"), (".json",)
+        )
         self.assertEqual(tool.file_types_in("text files"), (".txt",))
+        self.assertEqual(
+            tool.file_types_in("How many Word documents?"), (".doc", ".docx")
+        )
+        self.assertEqual(
+            tool.file_types_in("List Word docs"), (".doc", ".docx")
+        )
+        self.assertEqual(
+            tool.file_types_in("List Word doc"), (".doc", ".docx")
+        )
+        self.assertEqual(tool.file_types_in("List the .docx"), (".docx",))
+        self.assertEqual(tool.file_types_in("List the .doc"), (".doc",))
+        self.assertEqual(tool.file_types_in("Find the word MRI"), ())
+        self.assertEqual(tool.file_types_in("list the LaTeX files"),
+                         (".tex",))
+        self.assertEqual(
+            tool.file_types_in("list BibTeX files"), (".bib",)
+        )
+        self.assertEqual(
+            tool.file_types_in("count the .bbl files"), (".bbl",)
+        )
+        self.assertEqual(
+            tool.file_types_in("list bibliographies"), (".bib", ".bbl")
+        )
         context = Mock()
         context.source_files.return_value = {
             Path("a.pdf"): 123,

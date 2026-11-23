@@ -129,6 +129,7 @@ class TestSetupScript(unittest.TestCase):
                         "python:setup/check_setup.py",
                     ],
                 )
+                self.assertNotIn("Open a new terminal", result.stdout)
 
     def test_unsupported_platform_stops(self) -> None:
         self.environment["KILIN_TEST_OS"] = "Darwin"
@@ -144,6 +145,32 @@ class TestSetupScript(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.log.read_text(encoding="utf-8").splitlines()
         self.assertEqual(calls[:2], ["curl", "installer"])
+        uv_path = Path(self.environment["UV_INSTALL_DIR"]) / "uv"
+        self.assertIn(f"uv is installed at {uv_path}.", result.stdout)
+        self.assertIn(
+            f'  "{uv_path}" run kilin --gui',
+            result.stdout,
+        )
+        # Verify the displayed command works with spaces in the path.
+        launch = subprocess.run(
+            ["/bin/sh", "-c", f'"{uv_path}" run kilin --gui'],
+            cwd=self.project,
+            env=self.environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(launch.returncode, 0, launch.stderr)
+        launch_call = self.log.read_text(
+            encoding="utf-8"
+        ).splitlines()[-1]
+        self.assertTrue(launch_call.startswith("uv:"), launch_call)
+        workdir, separator, command = launch_call[3:].rpartition(":")
+        self.assertEqual(separator, ":")
+        self.assertEqual(command, "run kilin --gui")
+        # macOS may spell a temporary path with or without /private.
+        self.assertEqual(Path(workdir).resolve(), self.project.resolve())
 
     def test_failure_does_not_claim_success(self) -> None:
         self.environment["KILIN_TEST_SYNC_EXIT"] = "7"
@@ -163,6 +190,11 @@ class TestSetupScript(unittest.TestCase):
         self.assertEqual(
             self.log.read_text(encoding="utf-8").splitlines()[0],
             f"uv:{self.project}:sync --extra mlx",
+        )
+        self.assertIn(f"uv is installed at {installed}.", result.stdout)
+        self.assertIn(
+            f'  "{installed}" run kilin --gui',
+            result.stdout,
         )
 
     def test_download_failure_stops_before_install(self) -> None:

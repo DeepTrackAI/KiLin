@@ -15,14 +15,15 @@ web/app.js
 window.py (Qt/QWebChannel, GUI process)
   | newline-delimited JSON on child stdin/stdout
   v
-engine.py (synchronous child process)
+engine.py (sequential dispatcher; separate input-reader thread)
   | core KíLín project, retrieval, model, and conversation APIs
 ```
 
 - `ChatBridge` in `kilin/gui/window.py` exposes **camelCase** Qt slots and
   typed Qt signals. Some operations, such as native file dialogs, opening a
-  workspace file, appearance, and Stop, are handled locally rather than being
-  passed to the child as commands.
+  workspace file, appearance, and forceful Stop, are handled locally rather
+  than passed to the child as commands. Answer cancellation instead sends
+  `cancel_answer` to the engine.
 - `ChatWindow._send_command()` queues dictionaries until the child runs;
   `_send_pending()` writes one JSON object followed by `\n` per command.
 - `kilin.gui.engine.main()` reads commands from stdin and emits one JSON
@@ -54,6 +55,49 @@ For orientation, a command and an event look like:
 {"event": "answer_delta", "text": "The file defines..."}
 ```
 
+The core emits `answer_activity` for each new user-facing activity, with
+`index` (zero-based order), `phase`, `label`, and `started_ms` (monotonic
+milliseconds relative to the answer's start). These are the exact activity
+identifiers and labels stored with completed answers; the browser does not
+infer or filter timeline entries from `answer_phase`. The latter describes
+control and status changes, including tool confirmation and completion.
+The `routed` phase includes `intent` and, only for tool-backed intents,
+`tool_name`; the core uses them to form the corresponding activity label.
+Enabled direct-answer memory retrieval emits `memory_retrieving` followed by
+`memory_ready`, whose `memory_hit_count`, `memory_turn_count`, and
+`duration_ms` report the selected messages, distinct turns, and measured
+index synchronization plus query duration. The first activity is timed until
+the second begins; both appear in the saved turn timeline. The browser uses
+core activity labels unchanged instead of inventing memory rows.
+
+Core-owned answer timelines are stored in each completed conversation
+turn under `timeline` (`elapsed_ms`, `steps` containing `phase`, `label`,
+and `ms`). The `answered`, `opened`, and `conversation_opened` events
+include that field as part of their turn objects. Qt's read-only
+`conversation_viewed` path returns the same saved turn fields. The page
+maintains only display estimates while an answer is in flight; the
+completed summary and activity durations come exclusively from the core.
+There is no `save_answer_timeline` command or companion timing file.
+
+## Project-type identifiers
+
+Project selection uses `type_id` in `startup`, `projects`, `saved_project`,
+`opened` and `settings.project_types` entries. The cross-layer identifier
+schema is owned by [Configuration](configuration.md#canonical-identifiers-and-schemas). The
+`open` command accepts `sources: []` with an empty `workspace`: the core
+allocates an available `new-project` name. An explicit `workspace` retains
+its exact-name and collision semantics. Despite its command
+name, `open` creates a new project and never reuses an existing one. `resume`
+is the separate operation for opening saved state. On `workspace_conflict`,
+`existing_project` is true for any existing profile entry, even an invalid one.
+The page may ask whether to resume; confirmation sends `resume` without any
+creation settings or pending sources. Cancellation keeps the new-project
+inputs available for choosing another destination. Non-project occupied
+folders are not offered for resume. The final allocated path is reported by
+`opened.project`, not guaranteed by a prior preview. The old project
+`kind` protocol key is not accepted. Source-preview rows still use `kind`
+for file/folder/link classification; that is a distinct contract.
+
 ## Engine command inventory
 
 The following are the *existing engine dispatcher* actions. Required fields
@@ -79,18 +123,163 @@ paths and source paths remain subject to downstream core validation.
 | `open` | `sources`, `type_id`, `workspace` | Create only; `selected_files`, `settings` default to `None`. Blank workspace allocates a fresh default name. |
 | `preview_reference` | `turn_index`, `citation` | Look up one citation of a saved turn |
 | `ask` | `question` | `retrieval_count`, `generation_settings`, `effort` default to `None` |
+| `cancel_answer` | None | **Special:** applied by the input thread as soon as it arrives, so it stops a running `ask` at the model's next token; ends a wait for a tool plan or option; otherwise ignored |
 | `new_conversation` | None | Create an empty conversation |
-| `branch_conversation` | None | Create a branch of the active conversation |
+| `branch_conversation` | None | Create a branch of the active conversation; optional `turn_count` keeps only its first turns (default: all) |
 | `select_conversation` | `conversation_id` | Switch to a saved conversation |
 | `rename_conversation` | `conversation_id`, `name` | Rename the registered conversation |
 | `delete_conversation` | `conversation_id` | Archive/remove it from the visible catalog |
-| `add_project_sources` | `sources` | Add confirmed source paths and rebuild as needed |
+| `check_sources` | `sources` | Report what adding these files and folders would copy and leave out, without copying; the page asks the user before `add_project_sources` |
+| `add_project_sources` | `sources` | Optional `decisions` maps `sources/` paths to sync actions. Copy eligible new sources, apply supplied choices for existing copies, and reindex once. |
 | `remove_project_sources` | `paths` | Remove confirmed copied project sources |
+| `sync_sources` | None | Optional `decisions` maps `sources/` paths to `import`, `replace`, `keep_both`, `delete` or `keep`; an explicit map leaves unlisted files untouched. Omitted or `null` decisions use the core automatic policy: update changed unedited copies, remove deleted unedited copies, and import no new files. Reindex afterward. |
 | `edit_folder` | None | `folder`, `operation` default to `""`; other fields forwarded as keyword arguments |
 | `rename_project` | `name` | Rename the project |
-| `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |
+| `delete_project` | `project` | Move that closed project to `.deleted/` beside it (`kilin.project.delete_project`); then send `projects` |
+| `apply_indexing` | `settings` | Atomically save validated indexing settings, reopen the project and revalidate its index; send `indexing_applied` with the `profile` only after reopening succeeds |
+| `save_source_cards` | `settings` | Save project-wide source-card policy and both backend generation models, then reconcile derived cards only; send `source_cards_applied` with resolved settings and outcome counts |
+| `regenerate_source_cards` | None | Confirmed user action regenerating derived cards without rescanning chunks or rebuilding ordinary retrieval indexes; send `source_cards_regenerated` with counts |
+| `save_answer_settings` | None at dispatcher | `settings` is forwarded (default `None`); the handler requires an object and an open project. Accepted updates are `temperature`, `thinking`, and `max_new_tokens`; other keys are ignored. The GUI additionally sends `request_id` (positive integer) and canonical `project` path to correlate the result. |
+| `settings_info` | None | Fetch descriptive core and registered tool metadata without opening a project; returns `settings_info` or `settings_info_failed` |
+| `project_behavior` | None | Read project-wide, capability and intent editors, defaults, identity and revision |
+| `save_project_behavior` | `project`, `scope`, `intent_id`, `values`, `revision`, `request_id` | Save global, intent, capabilities, memory or intent_memory settings with project and revision checks; rebuild source indexes only for capabilities |
+| `conversation_feedback` | `project` | Read the active project's feedback revision and per-message ratings without changing its conversation files |
+| `save_message_feedback` | `request` | Write one saved-message selection/reaction with project, conversation ID, turn UUID, role, expected revision and positive request ID |
+| `memory_messages` | `project`, `offset` (optional, 0-based) | Inspect a page of active saved messages and current memory eligibility without an embedding call |
+| `memory_summaries` | `project`, `request` (`request_id`, `references`) | Read current untruncated summaries from referenced active conversation traces, without embeddings or model calls |
+| `set_memory_exclusion` | `request` | Exclude/restore one persisted message with project, turn, role, feedback revision and request ID checks |
+| `memory_status` | `project` | Read current project policy and last saved derived memory-index counts without a model call |
+| `sync_memory_index` | `project` | Synchronize independent conversation memory and emit progress/result; do not rebuild primary-source indexes |
+| `tool_settings` | None | List the open project's tools and their settings |
+| `save_tool_settings` | `tool` | `settings` (object of the tool's changeable settings) saved for the open project |
 | `reset` | None | Start a new conversation; do not erase the previous trace |
 | `plan_choice` | None in the outer dispatcher | **Special:** consumed while awaiting a tool plan/option; otherwise ignored |
+
+### Setting descriptions
+
+`settings_info` requires no project, model, or configuration arguments.
+The engine calls `kilin.get_settings_info()` and emits a `settings_info`
+event containing `catalog: {format: "settings-info-v1", settings: {...}}`.
+The entries contain a `title`, short `summary`, and longer `description`.
+Tool entries use the `tools.<registered-name>.<setting>` namespace. The
+Qt bridge only forwards the request; it does not parse tool metadata.
+On a resource or metadata validation error, `settings_info_failed` carries
+only a diagnostic `message`; normal settings, answering and retrieval
+remain usable. The page uses the catalog to build help icons for static
+and dynamic Settings fields, without embedding the explanatory strings.
+
+### Project behavior editor
+
+The `project_behavior` command emits an event with the canonical project
+path, `project_type_id`, SHA-256 `revision`, global, capability and memory
+editors (each with `values` and `defaults`), and ordered intents (`id`,
+fixed `tool`, `values`, `defaults`, `source_first_defaults`, `memory`).
+The editor resolves
+packaged definitions with sparse project-local overrides.
+
+`save_project_behavior` accepts the project path, scope (`global`, `intent`,
+`capabilities`, `memory`, or `intent_memory`), optional `intent_id`, complete
+editor values, revision and positive `request_id`. The core rejects different projects, stale
+revisions, invalid configurations and tool changes. On success it emits
+`project_behavior` with `saved: true` and the new revision; on error it
+returns a correlated error. Indexing capability edits trigger a rebuild,
+with configuration restoration and index recovery on failure.
+
+### Conversation-memory feedback and index status
+
+`conversation_feedback(project)` emits `conversation_feedback` with
+`project`, SHA-256 `revision`, and `entries` keyed by saved turn UUID and
+`user`/`assistant` role. Each rating has independent `saved` and `reaction`
+(`neutral`, `liked`, `disliked`) fields. Read errors carry `project` and
+`error`. The read does not load a model or rewrite saved conversations.
+
+`save_message_feedback(request)` accepts exactly `project`,
+`conversation_id`, `turn_uuid`, `role`, `saved`, `reaction`, `revision`, and
+positive `request_id`. On success `message_feedback` returns the same
+identifiers plus the new feedback `revision` and complete `entries`.
+Failure returns the matching identifiers and `error`, without changing
+stored feedback. The core verifies the active project and saved turn,
+rejects stale revisions, and blocks writes while an answer is running.
+The page ignores late acknowledgements from other projects or requests;
+failed saves trigger a feedback reload. UUIDs persist across branches.
+
+`memory_messages(project, offset)` emits `memory_messages` with `project`,
+`offset`, `total`, `revision`, and up to 100 `messages`. Each message has
+`turn_uuid`, `role`, `conversation_id`, `conversation_name`, `turn_number`,
+`timestamp`, `preview`, `saved`, `reaction`, `excluded` and status (`eligible`,
+`excluded`, `disliked`, `policy`). The inventory reads the authoritative
+conversation checkpoints and feedback without embedding or modifying them.
+It includes unindexed/excluded messages and deduplicates inherited branch
+turns. Errors carry `project`, `offset`, and `error`.
+
+`memory_summaries(project, request)` accepts a positive `request_id` and up
+to 100 references, each containing an existing turn UUID4, `role` (`user` or
+`assistant`), and up to 20 origins (`conversation_id`, one-based
+`turn_number`). Origins are validated against active registered conversation
+traces and the saved turn UUID. On success `memory_summaries` returns
+`project`, `request_id`, and available `{turn_uuid, role, text}` entries;
+on failure it returns `error`. Questions use the saved question text; answers
+prefer the complete, editable summary in the trace representation event,
+falling back to the compact routing representation for older/branched turns.
+The page refreshes on every popover expansion, ignores late/wrong-project
+replies, and inserts summaries as plain text. No preview is added to the
+saved answer, no summary is recomputed, and the operation is read-only.
+
+`set_memory_exclusion(request)` accepts exactly `project`, `conversation_id`,
+`turn_uuid`, `role`, boolean `excluded`, SHA-256 `revision`, and positive
+`request_id`. `memory_exclusion` returns matching identifiers and the new
+feedback revision/entries on success, or `error` on failure. Save and
+reaction are preserved; a stale revision is rejected. A successful update
+also triggers `memory_status`, but does not rebuild the derived index until
+next sync. Commands reject wrong projects, inactive origins, and concurrent
+answer generation. Exclusion affects long-term retrieval only, not ordinary
+chat history or original checkpoints.
+
+`memory_status(project)` emits `memory_status` with policy `enabled`,
+`indexed`, counts (`records`, `questions`, `answers`, `vectors`) and
+`feedback_stale`. Counts describe the **last derived index**, not a
+real-time guarantee of freshness. `sync_memory_index(project)` emits
+`memory_sync_started`, then `memory_synced` with `changed` and
+`embedded_count` followed by `memory_status`, or `memory_sync_failed`
+with a diagnostic `message`. It requires an idle answer state. These
+commands never call ordinary source indexing or modify source citations.
+
+Completed `answered`, `opened` and `conversation_opened` turn objects may
+contain `parameters.memory_references`: ordered labels `M1`, `M2`, etc.,
+retrieved turn UUID/role, and active conversation/one-based turn origins.
+These are navigational identities only, not stored message previews. Older
+records containing a `preview` field remain readable, but that field is
+ignored. Each retrieved question or answer has its own clickable line;
+questions align right and answers left. On expansion the page requests
+current text using `memory_summaries`, rather than copying it into the
+answer. This text is not the numbered, independently validated documentary
+`evidence` list. Links to archived origins are disabled. The source-
+reference preview contract is unchanged.
+
+`opened.behavior_presentation` contains the project's effective welcome
+prompts and suggestions. The editable intent and project behavior settings
+apply only to subsequent requests.
+
+`save_answer_settings` updates the saved project profile and the live chat
+settings without asking a question. The Qt bridge accepts either the original
+settings JSON object or an envelope containing `settings`, `request_id`, and
+`project`, which it forwards as command fields. Correlated GUI requests must
+match the active project; the engine never applies a late request to a newly
+opened project. The page sends only one such request at a time, retains the
+latest subsequent edit, and waits for its acknowledgement before sending the
+next. Asking a question is blocked while a save is pending; the input is kept.
+
+Success emits `answer_settings_saved` with the full profile values now in
+effect. Correlated successes also return `request_id` and `project`. A
+correlated failure emits `answer_settings_failed` with the same identity,
+`message`, and `verified`: if true, the engine successfully reread
+`profile.ini` and reconfigured the live chat, and returns its authoritative
+`temperature`, `thinking`, and `max_new_tokens`. If false, the page discards
+pending edits and requires reopening the project before answering. The GUI
+ignores stale acknowledgements and discards queued edits after any failure.
+Uncorrelated callers retain the prior generic `error` event on failure. An
+omitted `settings` field reaches the handler as `None` and is rejected,
+not treated as a request to reset defaults.
 
 For `resume`, a supplied `conversation_id` must identify an existing
 conversation in the given project. An unknown, empty, or invalid explicit
@@ -100,6 +289,17 @@ conversation. An `opened` event reports the actual selected ID when
 activation succeeds. This restores the active chat after Stop or engine
 restart; it does not recover unsaved partial model output.
 
+`readiness` applies to **new-project creation**, not `resume`. The page can
+close Settings and issue `resume` from either saved-project list when the
+selected default runtime or models are missing. The engine uses the saved
+project profile and lets normal loading report unavailable project-specific
+models. A failed resume emits `error` with `resume_released`: `false` when
+profile validation failed before the previous session was closed; `true`
+when switching had already begun releasing the previous session. For the
+latter, the page returns to launch and requests session cleanup rather than
+showing the former project as active. New-project preparation remains gated
+by successful readiness.
+
 The page invokes the Qt slots rather than writing these dictionaries itself.
 The bridge decodes JSON-encoded arguments for source lists, generation
 settings, folder edits, and model settings. `openProject()` additionally
@@ -107,9 +307,102 @@ rejects a decoded source selection that is not a list of strings, emitting
 `error` directly through the Qt bridge. Other malformed slot arguments can
 raise JSON decoding errors in Qt and do not become normal engine commands.
 
-Native file selection, `openWorkspaceFile`, appearance changes, drag/drop
+Native file selection, `openWorkspaceFile`, appearance and backend
+preference changes (saved in `preferences.json` by Qt), drag/drop
 state, and `stopOperation` are *not* additional engine commands. They use
 Qt signals, platform dialogs, local file opening, or process control.
+When `setBackendPreference` successfully persists `auto`, `mlx`, or `torch`,
+Qt emits `backend_preference_saved` and sends the existing `readiness` engine
+command. A write/validation error instead emits `backend_preference_failed`;
+no readiness command is sent, and the page restores the last acknowledged
+selection. Unsupported values are ignored. The engine resolves the saved
+preference at the beginning of each setup operation, while `auto` alone uses
+the platform policy. Existing saved project settings remain independent.
+
+Missing-backend instructions are generated by Python for each backend
+using `gui_install_command()`. The current backend uses
+`install_command`; `install_commands` additionally supplies both
+`mlx` and `torch` commands for the Settings model panel. The browser
+selects the complete command for the active backend; it must not
+modify a command by replacing backend names. For a bundled macOS
+app, these commands use its bundled uv and original wheel or pinned
+distribution version. Commands are advice, not automatic repairs.
+
+KíLín setup is complete when `ready` (runtime and models), `folder_confirmed`
+and `terms_accepted` are all true. `confirmProjectsFolder` saves the folder in
+use, and `useDefaultProjectsFolder` the standard folder, by its path; like a
+folder chosen with Browse, this creates the folder and restarts the engine.
+`acceptTerms(version)` accepts only the current `TERMS_VERSION`. Qt emits
+`terms_acceptance_saved` with the submitted `version` **after** successfully
+writing `terms_accepted`, then sends the `readiness` engine command. A write
+error emits `terms_acceptance_failed` with `version`, `reason: "save_failed"`,
+and `message`, without requesting readiness. An outdated submission emits
+`terms_acceptance_failed` with `reason: "outdated_version"`, `version`,
+`current_version`, and `message`; it makes no preferences change. The page
+requests fresh readiness in that case, clears the old checkbox, and requires
+agreement to the current text. On a write failure it retains the checkbox
+and offers a manual retry. A terms-specific error appears in the modal
+welcome dialog rather than in the engine's generic error display.
+
+The page matches the acknowledgement to its pending version. While waiting,
+an unrelated or stale `readiness` event cannot acknowledge the write, close
+the welcome dialog, or enable another Continue request. A confirmed save is
+retained until a matching readiness response confirms the new preferences;
+only then can the folder-confirmation follow-up run. A backend or model
+failure still affects normal setup readiness independently of terms saving.
+
+### Source-card settings and regeneration
+
+The `settings` and `opened` events include `source_cards` (the validated
+project-wide indexing policy and independent MLX/PyTorch generation models).
+`opened` also includes `source_card_summary` (total, valid, ineligible,
+failed, and embedded card counts). Source-card generation uses the existing
+`progress` event with `stage: building_source_cards` and `current`/`total`
+counts. The browser displays these separately from ordinary retrieval
+indexing. A saved policy has precedence over its project type's defaults;
+model selections are stored independently of interactive answering models.
+
+A new project's `open` settings may include `_gui_source_cards`. The core
+validates the entire payload before preparing the project, then writes its
+own `[source_cards]` and `[source_card_generation]` profile sections before
+initial indexing. The page never writes `profile.ini` directly. Models may
+be loaded only in accordance with the project's download policy, which the
+GUI sets to disallow implicit downloads during preparation.
+
+`save_source_cards` saves the policy and both backend model choices before
+reconciling only the card indexes. Valid cached cards remain reusable when
+only generation-model settings change. The engine restores the previous
+profile on failure and reports errors explicitly. `regenerate_source_cards`
+forces new attempts for selected cards, without touching ordinary indexes.
+The GUI requires confirmation before sending the regeneration command.
+During a warm refresh, the RAG core temporarily unloads the answering and
+separate router models only when generation is needed. It then reloads the
+answering model and restores history, settings, and token totals. An
+unrecoverable restore failure closes the session rather than leaving the
+model state silently inconsistent.
+
+### Indexing-settings failure recovery
+
+The frontend shows an in-progress status until `indexing_applied` confirms
+that the project has reopened with the new indexing settings. An `error`
+means the change failed, not that the values were saved. Before changing
+`profile.ini`, the engine snapshots its complete text. If the operation
+fails, it compares the actual file with the snapshot and restores any
+changed profile using `atomic_write_text` rather than overwriting the file
+in place. This includes failures after `configure_project` published a
+new profile but before that method returned. A rejection before profile
+publication leaves the current session active.
+
+If the engine already began replacing the session, recovery closes the
+partial session and tries to reopen the original project and selected
+conversation. Successful recovery can emit `opened` before the final
+`error` explaining why the indexing change failed. If the profile cannot
+be verified or restored, or the original session cannot be reactivated,
+the engine emits `backend_failed` followed by `error`, attempts to close
+the session, and asks the user to inspect `profile.ini` and reopen the
+project. If even closing fails, the user should restart KíLín. No event
+claims that the previous index files were transactionally restored: the
+core checks or rebuilds index artifacts on the next successful open.
 
 ### Interactive tool decisions
 
@@ -123,10 +416,22 @@ calls the same stdin iterator **during** that answer and accepts the next
   cancel the plan.
 - Option questions accept `option:<zero-based index>` or `cancel`. An
   invalid/out-of-range value or EOF cancels the question.
-- Other commands received while waiting emit an `error` asking the user to
-  answer the pending decision; they are consumed rather than queued for
-  execution afterward.
+- Other commands received while waiting emit an `error` with
+  `pending_choice: true`, asking the user to answer the pending decision;
+  they are consumed rather than queued for execution afterward. This
+  rejects the unrelated command, not the running answer. The page
+  displays the notice but retains the prompt and busy state. Ordinary
+  errors without this flag still terminate the pending answer.
 - An idle `plan_choice` that reaches the ordinary dispatcher is ignored.
+
+The page attaches a complete plan or choice card before showing the
+waiting status, replaces any earlier prompt, and focuses the first
+button. It clears queued progress labels both when asking and when
+answering, so old waiting labels do not outlive the controls. A card
+can submit only once; detached or superseded cards cannot send choices.
+Document-selection questions always offer Cancel. Network plans retain
+their separate Authorize lookup and Stay offline controls; rendering
+or focusing a prompt never authorizes it.
 
 This path is why the child must keep *one shared iterator* over stdin.
 
@@ -140,23 +445,83 @@ can accompany an event.
 
 | Group | Events and representative payloads |
 | --- | --- |
-| Setup | `readiness` (`backend`, `ready`, `environment_ready`, `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings) |
-| Installation | `installation_started` (`total`, `backend`); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
-| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`); `models_applied` (updated levels, models and profile); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status) |
-| Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`) |
-| Conversation | `conversation_opened` (`turns`, settings, usage, and conversation metadata); `conversations` (catalog and active ID); `conversation_delete_started` (`conversation_id`); `reset` (`archived`) |
-| Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, optionally `workspace_files`); `progress` (core progress record) |
+| Setup | `readiness` (`backend`, `ready`, `environment_ready`, `unavailable_reason` (empty unless the selected backend is unsupported), `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`, `install_command`, `install_commands` (backend-to-command map), `projects_folder`, `folder_confirmed`, `terms`, `terms_version`, `terms_accepted`, `copyright` (the Settings copyright line, built from the package authors)); `installed_models_used` (`replacements`, updated model settings); `backend_preference_saved`, `backend_preference_failed` (Qt events: saved `backend` or failed `backend` and `message`); `terms_acceptance_saved` (`version`); `terms_acceptance_failed` (`version`, `reason`, `message`, and `current_version` for outdated terms) |
+| Installation | `installation_started` (`total`, `backend`, `models`: the missing models in download order); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
+| Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether a saved folder is unavailable, `legacy`: previous installed-app root with candidate profiles, or empty); `projects_folder_cancelled` (native Browse dialog dismissed); `projects_folder_failed` (`message`: unable to save or old folder no longer exists) |
+| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `source_cards_applied` (validated settings and card counts), `source_cards_regenerated` (card counts); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `project_behavior` (validated project editor, defaults, revision, and correlated saved or error status); `settings_info` (validated core/tool descriptive catalog), `settings_info_failed` (metadata diagnostic only); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
+| Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `question_suggestions` (`project`; `questions`, each with `intent` and `question`: ready-to-send example questions about the project's own sources; and `welcome`: headings about the same sources for the top of an empty chat; sent just before every `opened` of that project and before the `conversation_opened` of each new empty chat, chosen anew each time; an empty list keeps the project type's fixed suggestions or welcome prompts); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
+| Conversation memory | `conversation_feedback` (project, revision, entries or error); `message_feedback` (request ID, turn UUID/role, revision/entries or error); `memory_messages` (paged authoritative inventory); `memory_summaries` (request-correlated trace text or error); `memory_exclusion` (correlated exclusion update or error); `memory_status` (last indexed counts, enabled, stale feedback); `memory_sync_started`, `memory_synced`, `memory_sync_failed` (project, embedded count or error status) |
+| Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
+| Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_activity` (`index`, `phase`, `label`, `started_ms`); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
 | Creation conflict | `workspace_conflict` (`workspace`, `existing_project`, `message`); current session remains active and destination is unchanged |
-| Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`); `backend_failed` (`message`) |
-| Process recovery | `stopped` (no required extra fields); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
+| Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`; `resume_released` for saved-project opening failures); `backend_failed` (`message`) |
+| Process recovery | `stopped` (optional `removed_projects`: empty creation claims removed; `preserved_projects`: known workspaces left intact); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
+
+### Source-aware empty-chat questions
+
+The `question_suggestions` event uses **saved** topic and term words only.
+Project activation and creation do not trigger a router-model generation.
+When a valid pool is unavailable, file-name-only questions can still be
+shown immediately; the remaining slots use the configured fixed suggestions.
+The `assistant_guide` tool may generate and save a source-specific pool when
+explicitly invoked. Subsequent empty chats reuse it and vary their choices
+without new model calls. Cache keys include the router model, indexed
+passages, and whether the project prefers code or documents. Existing
+suggestion pools from the previous format are regenerated on demand.
+
+Saved project overrides of `welcome_prompts` or `suggestions` take precedence
+over generated landing content. For mixed-source projects, code projects
+prefer code files, while other project types prefer relevant documents;
+accepted topics and themes must appear together in an indexed passage of
+one of those files. A received suggestion event updates an already visible
+empty chat and remains available for an ensuing `opened` event for the same
+project.
+
+`answered.turn.parameters.model_summary` is a core-produced model
+description that includes the active chat model, thinking, `T=`,
+and the maximum answer-token setting. The frontend displays it
+unchanged; for older turns without that field it reconstructs the
+line from available saved parameters.
 
 The engine also emits `startup` and `saved_project`, but the current
 `web/app.js` `onEvent()` implementation has no branches for these names.
-The process-recovery events `stopped` and `backend_restarted`, and some
-`error` events, originate in `window.py`, not `engine.py`. Diagnostic trace
-event names such as `gui.project.settings.saved` are a **separate** trace
+Deleting a conversation moves its JSON into `logs/traces/.deleted/`; the
+hidden `.conversation_*.json.lock` sidecar stays at its original path.
+`conversation_delete_started` is sent before the archive operation, so an
+error may be followed by a refreshed catalog instead of deletion.
+The process-recovery events `stopped` and `backend_restarted`,
+`conversation_viewed`, `projects_folder`, `projects_folder_cancelled`,
+`projects_folder_failed`, and some `error` events
+originate in `window.py`, not `engine.py`. Diagnostic trace event names such as `gui.project.settings.saved` are a **separate** trace
 schema and are not browser events.
+
+### Open-project source-add confirmation
+
+`check_sources` delegates the import plan to
+`kilin.preview_project_sources()`. A `sources_checked` event lists only
+eligible imports in `add`, with core-allocated destination names (`state` is
+`new`, `renamed`, or `existing`). The `sources` array in the plan corresponds
+to these eligible imports, even when the user's original selection includes
+files that cannot be copied. The GUI keeps the originally requested paths in
+the event for confirmation and rechecks the plan on the add command.
+
+Direct files bypass directory suffix and protected-name filters but remain
+subject to the project's saved nonempty/file-size rule. Empty and oversized
+files appear in `files` with `empty_file` and `file_too_large` reason codes.
+Missing, linked, or unsupported paths and conflicting destination names
+produce an `error` event rather than a misleading addition preview. Name
+collisions within one selection batch use the same hashed destination names
+as the importer. The plan is read-only, not a reservation: filesystem changes
+between preview and import are checked again by the core.
+
+On resume, `source_changes` describes pending source differences without
+modifying snapshots. The user must confirm synchronization; accepted changes
+are indexed once afterward. A deleted original explicitly kept by the user
+is detached. If that original later returns to the same path, the retained
+copy is reported as `changed`, and an explicit `replace` or `keep_both`
+choice is needed to reconcile it; the automatic core policy keeps it.
+Replacing a source with an empty or oversized original fails before copying.
 
 ### Source-preview contract
 
@@ -211,18 +576,21 @@ without a compatibility fallback to interpreting the English message.
 
 The phase strings used by the web page are the values of
 `kilin.rag.ANSWER_PHASE_*`: `routing`, `routed`, `retrieving`,
-`evidence_ready`, `generating`, `saving`, `completed`, and `processing`.
+`evidence_ready`, `memory_retrieving`, `memory_ready`, `generating`,
+`saving`, `completed`, and `processing`.
 `kilin.gui.engine.ENGINE_PHASE_LOADING_MODEL` adds `loading_model` when
 switching the MLX chat model. The strings are duplicated as JavaScript
 constants and are covered by the Qt-free protocol tests.
 
-A common successful answer can send `status`, several `answer_phase` and
-`progress` events, zero or more `answer_delta` and `usage_progress` events,
+A common successful answer can send `status`, several `answer_phase`,
+`answer_activity`, and `progress` events, zero or more `answer_delta` and
+`usage_progress` events,
 and a final `answered` event with the saved turn. The exact number of phase
 updates and intermediate order **depend on intent, tools, model switches,
 and retrieval paths**. `answer_delta` reports batched model text; the
 browser's further character-by-character reveal is a presentation effect.
-An error may terminate the answer path without `answered`.
+An error may terminate the answer path without `answered`; a `cancel_answer`
+ends it with `answer_cancelled` instead.
 
 `opened` establishes an active project and the initial conversation state;
 `conversation_opened` switches the visible saved conversation. Catalog
@@ -241,11 +609,35 @@ partial visible stream.
 - `ChatWindow._read_events()` silently ignores malformed stdout lines or
   dictionaries without an `event` key; the bridge only forwards recognized
   frames. `onEvent()` has no branch for unknown event names.
-- Stop is **not** an engine `cancel` command. `ChatBridge.stopOperation()`
-  emits `stopRequested`; the Qt window clears queued commands, kills its
-  child using `QProcess.kill()`, starts a new child, and emits `stopped`.
-  Loaded models are lost. Any unsaved partial answer is not committed as a
-  completed turn.
+- An answer is stopped with the `cancel_answer` command. A thread in the
+  engine reads input while `ask` runs and sets the Stop request that every
+  model call of the answer checks after each token, including routing and
+  tools. The answer ends with `answer_cancelled`; no turn is saved, and the
+  project and loaded models stay open.
+- The page's answer Stop calls `ChatBridge.cancelAnswer()`, which sends
+  `cancel_answer` and starts the window's `CANCEL_GRACE_MS` timer
+  (30,000 milliseconds). An `answered`, `answer_cancelled` or `error` event
+  stops it; otherwise the window kills the engine as below. Cancellation
+  is a request, not a guarantee that it wins a race with normal completion:
+  an already completed answer can still end with `answered`.
+- `ChatBridge.stopOperation()` is the forceful Stop for other operations,
+  and the fallback when an engine does not respond: it emits
+  `stopRequested`; the Qt window clears queued commands, kills its child
+  using `QProcess.kill()`, starts a new child, and emits `stopped`. Loaded
+  models are lost. Any unsaved partial answer is not committed as a
+  completed turn. Stop is conservative about project files. The core has
+  already published `profile.ini` when `project_created` (`workspace`) is
+  emitted, so a delayed `opened` event does not make that project disposable.
+  After stopping the child, Qt can remove only a directory containing its
+  `.kilin-creating` marker and no other entries, with the marker naming the
+  stopped engine's process ID and recording that it created this folder.
+  Markers from older versions and pre-existing empty folders are retained.
+  Qt never recursively deletes a project or a populated partial
+  workspace based on a PID or queued event.
+  `stopped` reports removed empty claims as `removed_projects` and paths
+  known to be preserved as `preserved_projects`. The latter may be a
+  completed project or partial files requiring inspection; it is not an
+  exhaustive inventory if an interruption occurred before any event.
 - On unexpected child exit, Qt prepares a `backend_restarted` message and
   starts a replacement child. The page requests settings/readiness again
   and may attempt to reopen the former project. The diagnostic text is
@@ -257,9 +649,9 @@ partial visible stream.
 
 1. **Frontend event and phase identifiers are not generated from Python.**
    The test suite characterizes current names and checks phase agreement,
-   but a shared schema/code generator is not proposed in this PR.
+   but no shared runtime schema or identifier generator is implemented.
 2. **Structured scan codes do not cover all diagnostics.** Source preview
-   eligibility now uses the validated JSON `reason_code` vocabulary, but
+   eligibility uses the validated JSON `reason_code` vocabulary, but
    general `error` event messages and some other diagnostic text remain
    human-readable strings without a universal structured error schema.
 3. **Malformed payload validation is distributed.** Qt slots, the dispatcher,
@@ -270,25 +662,23 @@ partial visible stream.
    isolated `test__webengine_smoke.py` can be enabled on a supported GUI
    installation; it is not a default full native acceptance suite.
 
-Implementation owners: `kilin/gui/window.py`, `kilin/gui/engine.py`,
-`kilin/gui/web/app.js`; core phases in `kilin/rag.py`. Regression tests:
-`tests/kilin/gui/test__protocol.py` and
-`tests/kilin/gui/test_engine__resume.py`.
+## Change impact and verification
 
-## Project-type identifiers
+The transport separates Qt-local actions, ordinary engine commands and
+commands accepted during an active answer. Preserve that distinction when
+adding an action; a handler working in isolation does not prove that the
+input thread, interactive wait and frontend agree about when it is usable.
 
-Project selection consistently uses `type_id`, including `startup`,
-`projects`, `saved_project`, `opened`, and `settings.project_types` entries.
-Serialized `ProjectProfile` snapshots likewise contain `type_id`. The
-`open` command accepts `sources: []` for a new empty workspace only when
-`workspace` is explicit; no example paths are inferred. Despite its command
-name, `open` creates a new project and never reuses an existing one. `resume`
-is the separate operation for opening saved state. On `workspace_conflict`,
-`existing_project` is true for any existing profile entry, even an invalid one.
-The page may ask whether to resume; confirmation sends `resume` without any
-creation settings or pending sources. Cancellation keeps the new-project
-inputs available for choosing another destination. Non-project occupied
-folders are not offered for resume. The final allocated path is reported by
-`opened.project`, not guaranteed by a prior preview. The old project
-`kind` protocol key is not accepted. Source-preview rows still use `kind`
-for file/folder/link classification; that is a distinct contract.
+Review `kilin/gui/window.py`, `kilin/gui/engine.py`, `kilin/gui/web/app.js`
+and the core phase definitions in `kilin/rag.py` together. Update the command
+or event inventory in this page, the affected lifecycle description and
+[protocol tests](../tests/kilin/gui/test__protocol.py). Exercise
+[exact resume](../tests/kilin/gui/test_engine__resume.py) and relevant
+frontend recovery/confirmation tests. The
+[source-backed inventory check](../tests/setup/test__documentation_assets.py)
+detects missing names, not complete payload validation or native acceptance.
+
+## Related
+
+[GUI architecture](gui_architecture.md), [Configuration](configuration.md),
+[Answering lifecycle](answering_pipeline.md), [Development](development.md).

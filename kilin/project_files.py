@@ -31,8 +31,13 @@ Module Structure
 
 Examples
 --------
+For an already prepared project (the path below is illustrative):
+
+>>> import kilin
 >>> from kilin.project_files import list_project_files
->>> isinstance(list_project_files, object)
+>>> project = kilin.open_project("/path/to/project")
+>>> entries = list_project_files(project)
+>>> "outputs/" in entries
 True
 
 """
@@ -45,7 +50,12 @@ from tempfile import NamedTemporaryFile
 from typing import Sequence
 
 from kilin.project import QAProject
-from kilin.workspace_resources import OUTPUTS_FOLDER, TEMPLATES_FOLDER
+from kilin.project_layout import CORE_PROJECT_FOLDERS
+from kilin.workspace_resources import (
+    OUTPUTS_FOLDER,
+    PROJECT_SOURCES_DIRECTORY,
+    TEMPLATES_FOLDER,
+)
 
 __all__ = [
     "add_project_files",
@@ -71,6 +81,11 @@ def _project_root(project: QAProject) -> Path:
     pathlib.Path
         Canonical project root.
 
+    Raises
+    ------
+    TypeError
+        If the argument is not a QAProject.
+
     """
 
     if not isinstance(project, QAProject):
@@ -92,6 +107,11 @@ def _managed_directory(root: Path, folder: str) -> Path:
     -------
     pathlib.Path
         The folder, without following a final symbolic link.
+
+    Raises
+    ------
+    ValueError
+        If the folder is not editable or its path is invalid.
 
     """
 
@@ -115,6 +135,11 @@ def _relative_path(value: str) -> PurePosixPath:
     -------
     pathlib.PurePosixPath
         The checked relative path.
+
+    Raises
+    ------
+    ValueError
+        If the path is empty, absolute, or contains unsafe parts.
 
     """
 
@@ -147,6 +172,12 @@ def _target(root: Path, value: str) -> Path:
     pathlib.Path
         Checked path without resolving its final component.
 
+    Raises
+    ------
+    ValueError
+        If the path is outside the editable folders or traverses a
+        symbolic link or invalid parent directory.
+
     """
 
     relative = _relative_path(value)
@@ -176,6 +207,13 @@ def _inputs(paths: Sequence[str | Path]) -> list[Path]:
     -------
     list[pathlib.Path]
         Resolved ordinary source paths.
+
+    Raises
+    ------
+    ValueError
+        If the selection is empty, invalid, or contains symlinks.
+    OSError
+        If a requested source cannot be found or inspected.
 
     """
 
@@ -275,6 +313,16 @@ def add_project_files(
     list[str]
         Workspace-relative destinations actually written.
 
+    Raises
+    ------
+    TypeError
+        If ``project`` is not a QAProject instance.
+    ValueError
+        If the folder, source, or destination violates the managed
+        file, path, or symlink restrictions.
+    OSError
+        If reading, copying, replacing, or removing a file fails.
+
     Notes
     -----
     No indexing takes place. An existing destination is never followed
@@ -328,6 +376,16 @@ def replace_project_file(
     str
         Workspace-relative file path replaced.
 
+    Raises
+    ------
+    TypeError
+        If ``project`` is not a QAProject instance.
+    ValueError
+        If the destination or replacement source is absent, unsafe, or
+        otherwise invalid.
+    OSError
+        If inspecting, reading, or replacing a file fails.
+
     """
 
     root = _project_root(project)
@@ -376,6 +434,16 @@ def remove_project_files(
     list[str]
         Workspace-relative entries removed.
 
+    Raises
+    ------
+    TypeError
+        If ``project`` is not a QAProject instance.
+    ValueError
+        If the removal selection or destination violates the managed
+        file, path, or symlink restrictions.
+    OSError
+        If removing a file fails.
+
     Notes
     -----
     All paths are validated before deletion. The project folders themselves
@@ -419,8 +487,8 @@ def list_project_files(project: QAProject) -> list[str]:
     """
 
     root = _project_root(project)
-    names = {"sources", "indexes", "logs", OUTPUTS_FOLDER,
-             TEMPLATES_FOLDER}
+    names = set(CORE_PROJECT_FOLDERS)
+    names.add(PROJECT_SOURCES_DIRECTORY)
     if project.source.is_relative_to(root) and project.source != root:
         names.add(project.source.relative_to(root).parts[0])
     found = ["profile.ini"]

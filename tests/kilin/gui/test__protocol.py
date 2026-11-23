@@ -21,6 +21,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
 
+from kilin._model_completion import GenerationCancelled
 from kilin.gui import engine
 from kilin.rag import ANSWER_PHASE_CHOICES
 
@@ -79,6 +80,29 @@ class TestGUIProtocolCommands(unittest.TestCase):
             ({"action": "close"}, "close"),
             ({"action": "reset"}, "reset"),
             ({"action": "new_conversation"}, "create_conversation"),
+            ({"action": "settings_info"}, "settings_info"),
+            ({"action": "project_behavior"}, "behavior_settings"),
+            ({"action": "conversation_feedback", "project": "/project"},
+             "conversation_feedback"),
+            ({"action": "save_message_feedback", "request": {}},
+             "save_message_feedback"),
+            ({"action": "memory_messages", "project": "/project",
+              "offset": 100}, "memory_messages"),
+            ({"action": "memory_summaries", "project": "/project",
+              "request": {"request_id": 1, "references": []}},
+             "memory_summaries"),
+            ({"action": "set_memory_exclusion", "request": {}},
+             "set_memory_exclusion"),
+            ({"action": "memory_status", "project": "/project"},
+             "memory_status"),
+            ({"action": "sync_memory_index", "project": "/project"},
+             "sync_memory_index"),
+            ({"action": "tool_settings"}, "tool_settings"),
+            (
+                {"action": "save_tool_settings", "tool": "find_fact",
+                 "settings": {"part_tokens": 8000}},
+                "save_tool_settings",
+            ),
             ({"action": "branch_conversation"}, "create_conversation"),
             (
                 {"action": "resume", "project": "/project"},
@@ -149,12 +173,21 @@ class TestGUIProtocolCommands(unittest.TestCase):
                 "delete_conversation",
             ),
             (
+                {"action": "check_sources", "sources": ["/more"]},
+                "check_sources",
+            ),
+            (
                 {"action": "add_project_sources", "sources": ["/more"]},
                 "add_project_sources",
             ),
             (
                 {"action": "remove_project_sources", "paths": ["a.py"]},
                 "remove_project_sources",
+            ),
+            (
+                {"action": "sync_sources",
+                 "decisions": {"sources/a.md": "replace"}},
+                "sync_sources",
             ),
             (
                 {"action": "edit_folder", "folder": "outputs",
@@ -166,9 +199,20 @@ class TestGUIProtocolCommands(unittest.TestCase):
                 "rename_project",
             ),
             (
-                {"action": "save_answer_timeline", "timestamp": "now",
-                 "timeline": {"elapsed_ms": 10, "steps": []}},
-                "save_answer_timeline",
+                {"action": "delete_project", "project": "/parent/old"},
+                "delete_project",
+            ),
+            (
+                {"action": "apply_indexing", "settings": {"x": 1}},
+                "apply_indexing_settings",
+            ),
+            (
+                {"action": "save_source_cards", "settings": {"x": 1}},
+                "save_source_card_settings",
+            ),
+            (
+                {"action": "regenerate_source_cards"},
+                "regenerate_source_cards",
             ),
         ]
         for command, method in samples:
@@ -179,6 +223,20 @@ class TestGUIProtocolCommands(unittest.TestCase):
                 self.assertEqual(
                     getattr(worker, method).call_count, expected
                 )
+
+    def test_obsolete_timeline_writer_is_not_an_engine_command(
+        self,
+    ) -> None:
+        """Do not silently write presentation timings to another file."""
+        worker, events = self._run([
+            '{"action":"save_answer_timeline","timestamp":"t"}'
+        ])
+        self.assertEqual(events, [
+            {"event": "error", "message": "Unknown command."}
+        ])
+        self.assertFalse(hasattr(
+            type(worker), "save_answer_timeline"
+        ))
 
     def test_optional_fields_keep_their_existing_defaults(self) -> None:
         """Do not require optional answer and source-selection fields."""
@@ -200,6 +258,20 @@ class TestGUIProtocolCommands(unittest.TestCase):
             ["/a"], "code", "", None, None
         )
 
+    def test_answer_settings_are_saved_on_their_own(self) -> None:
+        """Forward Thinking from the menu without asking a question."""
+
+        worker, _ = self._run([
+            json.dumps({
+                "action": "save_answer_settings",
+                "settings": {"thinking": False},
+            }),
+        ])
+        worker.save_answer_settings.assert_called_once_with(
+            {"thinking": False}, None, None
+        )
+        worker.ask.assert_not_called()
+
     def test_resume_forwards_the_requested_conversation(self) -> None:
         """Restore an explicit ID without changing ordinary project resume."""
 
@@ -214,6 +286,46 @@ class TestGUIProtocolCommands(unittest.TestCase):
         self.assertEqual(worker.resume_project.call_args_list, [
             unittest.mock.call("/project", "conversation_earlier"),
             unittest.mock.call("/project", None),
+        ])
+
+    def test_stop_is_applied_when_it_arrives(self) -> None:
+        """The input thread stops the answer; the loop then ignores it."""
+
+        worker, events = self._run([
+            json.dumps({"action": "cancel_answer"}),
+            json.dumps({"action": "readiness"}),
+        ])
+        self.assertEqual(events, [])
+        worker.cancel_answer.assert_called_once_with()
+        worker.readiness.assert_called_once_with()
+
+    def test_branch_forwards_the_number_of_turns_to_keep(self) -> None:
+        """Branch from a message, or keep every turn as before."""
+
+        worker, events = self._run([
+            json.dumps({"action": "branch_conversation", "turn_count": 2}),
+            json.dumps({"action": "branch_conversation"}),
+            json.dumps({"action": "new_conversation"}),
+        ])
+        self.assertEqual(events, [])
+        self.assertEqual(worker.create_conversation.call_args_list, [
+            unittest.mock.call(branch=True, turn_count=2),
+            unittest.mock.call(branch=True, turn_count=None),
+            unittest.mock.call(),
+        ])
+
+    def test_sync_forwards_the_users_choices(self) -> None:
+        """Pass per-file sync choices through; none means the defaults."""
+
+        decisions = {"sources/a.md": "keep_both"}
+        worker, events = self._run([
+            json.dumps({"action": "sync_sources", "decisions": decisions}),
+            json.dumps({"action": "sync_sources"}),
+        ])
+        self.assertEqual(events, [])
+        self.assertEqual(worker.sync_sources.call_args_list, [
+            unittest.mock.call(decisions),
+            unittest.mock.call(None),
         ])
 
     def test_invalid_commands_emit_errors_and_processing_continues(
@@ -333,6 +445,19 @@ class TestGUIProtocolCommands(unittest.TestCase):
         )
         worker.reset.assert_called_once_with()
 
+    def test_correlated_answer_settings_command(self) -> None:
+        """Forward a save ID and project without losing their identity."""
+
+        worker, _ = self._run([json.dumps({
+            "action": "save_answer_settings",
+            "settings": {"thinking": True},
+            "request_id": 17,
+            "project": "/saved/project",
+        })])
+        worker.save_answer_settings.assert_called_once_with(
+            {"thinking": True}, 17, "/saved/project"
+        )
+
     def test_eof_closes_engine_once(self) -> None:
         """Release an idle coordinator when the command stream ends."""
 
@@ -378,7 +503,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
         )
         worker._report_error = MagicMock()
         with (
-            patch.object(engine, "available_models", return_value=[]),
+            patch.object(engine, "downloaded_models", return_value=[]),
             patch.object(engine, "installed_backends", return_value=[]),
             patch.object(engine, "choose_backend", return_value="mlx"),
         ):
@@ -445,6 +570,8 @@ class TestGUIProtocolEvents(unittest.TestCase):
                 "x = " + "a" * 100, encoding="utf-8"
             )
             (sources / "empty.py").touch()
+            # A type outside the project's list cannot be ticked.
+            (sources / "settings.json").write_text("{}", encoding="utf-8")
             (sources / ".env").write_text(
                 "FAKE_SECRET=not-real", encoding="utf-8"
             )
@@ -454,7 +581,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             events: list[dict[str, object]] = []
             worker = engine.ChatEngine(root, events.append)
             try:
-                worker.preview([str(sources)], [], 40)
+                worker.preview([str(sources)], [".py"], 40)
             finally:
                 worker.close()
 
@@ -469,6 +596,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
                 ".env": "protected_file",
                 "empty.py": "empty_file",
                 "oversized.py": "file_too_large",
+                "settings.json": "file_type_not_selected",
                 "weight.safetensors": "blocked_file_type",
             },
         )
@@ -519,6 +647,26 @@ class TestGUIProtocolEvents(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["event"], "error")
         self.assertIn("Continue, Quick, or Cancel", events[0]["message"])
+        self.assertIs(events[0]["pending_choice"], True)
+
+    def test_stop_ends_a_wait_for_the_users_choice(self) -> None:
+        """Stop while a plan or option is shown ends the answer."""
+
+        with TemporaryDirectory() as temporary:
+            events: list[dict[str, object]] = []
+            commands = iter([{"action": "cancel_answer"}] * 2)
+            worker = engine.ChatEngine(
+                Path(temporary), events.append,
+                read_command=lambda: next(commands),
+            )
+            try:
+                with self.assertRaises(GenerationCancelled):
+                    worker._confirm_plan(None)
+                with self.assertRaises(GenerationCancelled):
+                    worker._choose_option("Choose", ("one", "two"))
+            finally:
+                worker.close()
+        self.assertEqual(events, [])
 
     def test_pending_tool_option_accepts_only_valid_indices(self) -> None:
         """Convert option choice strings only within their valid range."""
@@ -543,6 +691,32 @@ class TestGUIProtocolEvents(unittest.TestCase):
             finally:
                 worker.close()
         self.assertEqual(events, [])
+
+    def test_pending_option_rejection_is_not_an_answer_failure(self):
+        """Keep waiting after rejecting an unrelated command or at EOF."""
+
+        with TemporaryDirectory() as temporary:
+            for last, expected in (
+                ({"action": "plan_choice", "choice": "option:0"}, 0),
+                ({"action": "plan_choice", "choice": "cancel"}, None),
+                (None, None),
+            ):
+                with self.subTest(last=last):
+                    commands = iter([{"action": "readiness"}, last])
+                    events = []
+                    worker = engine.ChatEngine(
+                        Path(temporary), events.append,
+                        read_command=lambda: next(commands),
+                    )
+                    try:
+                        result = worker._choose_option("Choose", ("one",))
+                    finally:
+                        worker.close()
+                    self.assertEqual(result, expected)
+                    self.assertEqual(len(events), 1)
+                    self.assertEqual(events[0]["event"], "error")
+                    self.assertIs(events[0]["pending_choice"], True)
+                    self.assertIn("Answer the question", events[0]["message"])
 
     def test_python_and_browser_answer_phases_match(self) -> None:
         """Keep JavaScript's duplicated phase names in sync with Python."""
@@ -572,18 +746,36 @@ class TestGUIProtocolEvents(unittest.TestCase):
         ).read_text(encoding="utf-8")
         handled = set(re.findall(r'data\.event === "([a-z_]+)"', script))
         self.assertEqual(handled, {
-            "answer_delta", "answer_phase", "answered", "backend_failed",
-            "backend_restarted", "conversation_delete_started",
-            "conversation_opened", "conversations", "error",
+            "answer_activity", "answer_cancelled", "answer_delta",
+            "answer_phase",
+            "answer_settings_failed", "answer_settings_saved",
+            "answered",
+            "backend_failed", "backend_preference_failed",
+            "backend_preference_saved", "backend_restarted",
+            "conversation_delete_started", "conversation_feedback",
+            "conversation_opened", "conversation_viewed", "conversations",
+            "error", "indexing_applied",
+            "source_cards_applied", "source_cards_regenerated",
             "workspace_conflict",
             "folder_changed", "installation_complete",
             "installation_model_complete", "installation_progress",
             "installation_started", "installed_models_used",
             "model_download_progress", "model_download_started",
             "model_downloaded", "models_applied", "opened", "preview",
-            "progress", "projects", "readiness", "reference_error",
-            "reference_preview", "reset", "settings", "status", "stopped",
-            "trace_ready", "usage_progress",
+            "memory_status", "memory_sync_started", "memory_synced",
+            "memory_sync_failed", "memory_messages", "memory_exclusion",
+            "memory_summaries",
+            "message_feedback",
+            "progress", "projects", "projects_folder", "readiness",
+            "question_suggestions",
+            "projects_folder_cancelled", "projects_folder_failed",
+            "reference_error",
+            "reference_preview", "reset", "settings", "source_changes",
+            "sources_checked", "status", "stopped", "tool_settings",
+            "settings_info", "settings_info_failed", "project_behavior",
+            "terms_acceptance_failed", "terms_acceptance_saved",
+            "trace_ready",
+            "usage_progress",
         })
 
 
@@ -651,12 +843,185 @@ class TestGUIProtocolBridge(unittest.TestCase):
             [{"event": "error", "message": "Invalid sources."}],
         )
 
+    def test_tool_settings_command_payloads(self) -> None:
+        """Ask for the tools; save one tool's settings as an object."""
+
+        self.bridge.requestToolSettings()
+        self.bridge.saveToolSettings(
+            "find_fact", json.dumps({"part_tokens": 8000})
+        )
+        self.assertEqual(self.commands, [
+            {"action": "tool_settings"},
+            {
+                "action": "save_tool_settings",
+                "tool": "find_fact",
+                "settings": {"part_tokens": 8000},
+            },
+        ])
+
+    def test_delete_project_sends_the_project_folder(self) -> None:
+        self.bridge.deleteProject("/parent/old")
+        self.assertEqual(self.commands, [
+            {"action": "delete_project", "project": "/parent/old"},
+        ])
+
+    def test_stop_removes_the_project_being_prepared(self) -> None:
+        """Remove only empty claims, not completed or partial projects."""
+
+        cleanup = importlib.import_module(
+            "kilin._project_creation"
+        ).cleanup_stopped_creation
+        with TemporaryDirectory() as folder:
+            parent = Path(folder).resolve()
+            empty = parent / "copying"
+            empty.mkdir()
+            (empty / ".kilin-creating").write_text(
+                "pid=42\ncreated=1\n"
+            )
+            partial = parent / "partial"
+            partial.mkdir()
+            (partial / ".kilin-creating").write_text(
+                "pid=42\ncreated=1\n"
+            )
+            (partial / "notes.txt").write_text("keep")
+            other = parent / "other"
+            other.mkdir()
+            (other / ".kilin-creating").write_text(
+                "pid=7\ncreated=1\n"
+            )
+            committed = parent / "indexing"
+            committed.mkdir()
+            (committed / "profile.ini").write_text("published")
+            (committed / "notes.txt").write_text("user data")
+            (parent / "link").symlink_to(committed)
+            removed, preserved = cleanup(parent, committed, 42)
+            self.assertEqual(removed, [str(empty)])
+            self.assertEqual(
+                preserved, [str(committed), str(partial)]
+            )
+            self.assertEqual(
+                sorted(path.name for path in parent.iterdir()),
+                ["indexing", "link", "other", "partial"],
+            )
+            self.assertEqual((committed / "notes.txt").read_text(),
+                             "user data")
+            self.assertEqual((partial / "notes.txt").read_text(), "keep")
+            self.assertEqual(cleanup(parent, parent / "link", 0), ([], []))
+            self.assertEqual(cleanup(parent, Path("/"), 0), ([], ["/"]))
+
+    def test_stop_keeps_committed_project_before_queued_opened(self):
+        """A delayed Qt event must not turn a published project into trash."""
+
+        window = importlib.import_module("kilin.gui.window").ChatWindow
+        with TemporaryDirectory() as folder:
+            parent = Path(folder).resolve()
+            project = parent / "finished"
+            project.mkdir()
+            (project / "profile.ini").write_text("published")
+            (project / "notes.txt").write_text("important")
+            events = []
+            fake = MagicMock()
+            fake._stdout = bytearray()
+            fake._closing = False
+            fake._switching_folder = False
+            fake._stopping = True
+            fake._unopened_project = project
+            fake._stopped_pid = 42
+            fake.process.readAllStandardOutput.return_value = (
+                json.dumps({"event": "opened", "project": str(project)})
+                + "\n"
+            ).encode()
+            fake.bridge.event.emit.side_effect = events.append
+            fake._cleanup_stopped_creation.side_effect = lambda: (
+                window._cleanup_stopped_creation(fake)
+            )
+            with patch(
+                "kilin.gui.window.default_workspace_directory",
+                return_value=parent,
+            ):
+                window._read_events(fake)
+                self.assertEqual(fake._unopened_project, project)
+                window._process_finished(fake)
+            self.assertEqual((project / "notes.txt").read_text(),
+                             "important")
+            self.assertEqual(events, [json.dumps({
+                "event": "stopped", "preserved_projects": [str(project)]
+            })])
+            fake._start_engine.assert_called_once_with()
+            self.assertIsNone(fake._unopened_project)
+
+    def test_backend_preference_is_saved_by_qt(self) -> None:
+        """Refresh setup only after saving a valid preference."""
+
+        with patch("kilin.gui.window.write_defaults") as write:
+            self.bridge.setBackendPreference("torch")
+            self.bridge.setBackendPreference("cuda")
+        write.assert_called_once_with({"backend": "torch"})
+        self.assertEqual(self.commands, [{"action": "readiness"}])
+        self.assertEqual([
+            json.loads(message) for message in self.events
+        ], [{"event": "backend_preference_saved", "backend": "torch"}])
+
+    def test_backend_preference_save_error_keeps_previous_status(
+        self,
+    ) -> None:
+        """Never request readiness after a failed preferences write."""
+
+        with patch(
+            "kilin.gui.window.write_defaults",
+            side_effect=OSError("read-only preferences"),
+        ):
+            self.bridge.setBackendPreference("torch")
+        self.assertEqual(self.commands, [])
+        self.assertEqual(len(self.events), 1)
+        event = json.loads(self.events[0])
+        self.assertEqual(event["event"], "backend_preference_failed")
+        self.assertEqual(event["backend"], "torch")
+        self.assertIn("read-only preferences", event["message"])
+
+    def test_invalid_saved_preferences_report_failure(self) -> None:
+        """Do not refresh readiness when preference validation fails."""
+
+        with patch(
+            "kilin.gui.window.write_defaults",
+            side_effect=ValueError("invalid preferences.json"),
+        ):
+            self.bridge.setBackendPreference("mlx")
+        self.assertEqual(self.commands, [])
+        self.assertIn("invalid preferences.json", self.events[0])
+
+    def test_indexing_settings_are_sent_as_an_object(self) -> None:
+        self.bridge.applyIndexingSettings('{"target_tokens": 500}')
+        self.assertEqual(self.commands, [
+            {"action": "apply_indexing", "settings": {"target_tokens": 500}},
+        ])
+
+    def test_answer_stop_is_a_command_with_a_last_resort(self) -> None:
+        """Stop an answer by command; the window may still restart."""
+
+        cancels: list[bool] = []
+        self.bridge.answerCancelRequested.connect(
+            lambda: cancels.append(True)
+        )
+        self.bridge.cancelAnswer()
+        self.assertEqual(self.commands, [{"action": "cancel_answer"}])
+        self.assertEqual(cancels, [True])
+        self.assertEqual(self.stops, [])
+
     def test_stop_is_a_signal_not_a_child_command(self) -> None:
         """Preserve out-of-band process termination via Qt signal."""
 
         self.bridge.stopOperation()
         self.assertEqual(self.stops, [True])
         self.assertEqual(self.commands, [])
+
+    def test_branch_from_a_message_sends_the_turns_to_keep(self) -> None:
+        """Each message's Branch from here names how many turns to keep."""
+
+        self.bridge.branchConversation(2)
+        self.assertEqual(self.commands, [
+            {"action": "branch_conversation", "turn_count": 2},
+        ])
 
     def test_tool_plan_choice_uses_special_action(self) -> None:
         """Carry plan decisions through the existing command envelope."""
@@ -666,6 +1031,189 @@ class TestGUIProtocolBridge(unittest.TestCase):
             {"action": "plan_choice", "choice": "continue"},
         ])
 
+
+    def test_projects_folder_is_reported_and_chosen(self) -> None:
+        """Report the folder in use; Use default saves the standard path."""
+
+        chosen: list[str] = []
+        self.bridge.projectsFolderChosen.connect(chosen.append)
+        window = importlib.import_module("kilin.gui.window")
+        with patch.object(
+            window, "default_workspace_directory",
+            return_value=Path("/sandbox"),
+        ), patch.object(
+            window, "standard_workspace_directory",
+            return_value=Path("/sandbox"),
+        ), patch.object(
+            window, "saved_workspace_folder", return_value="/Gone/Projects",
+        ), patch.object(
+            window, "available_legacy_workspace_directory", return_value=None,
+        ):
+            self.bridge.requestProjectsFolder()
+        self.assertEqual(json.loads(self.events[-1]), {
+            "event": "projects_folder", "folder": "/sandbox",
+            "standard": "/sandbox", "saved": "/Gone/Projects",
+            "legacy": "", "missing": True,
+        })
+        with patch.object(
+            window, "standard_workspace_directory",
+            return_value=Path("/sandbox"),
+        ):
+            self.bridge.useDefaultProjectsFolder()
+        self.assertEqual(chosen, [str(Path("/sandbox"))])
+        self.assertEqual(self.commands, [])
+
+    def test_previous_projects_choice_is_explicit_and_revalidated(
+        self,
+    ) -> None:
+        """Only a real legacy candidate can be passed to folder selection."""
+
+        window = importlib.import_module("kilin.gui.window")
+        old = Path("/previous/kilin/workspaces")
+        chosen: list[str] = []
+        self.bridge.projectsFolderChosen.connect(chosen.append)
+        with patch.object(
+            window, "available_legacy_workspace_directory",
+            return_value=old,
+        ):
+            self.bridge.requestProjectsFolder()
+            self.bridge.useLegacyProjectsFolder()
+        self.assertEqual(
+            json.loads(self.events[-1])["legacy"], str(old)
+        )
+        self.assertEqual(chosen, [str(old)])
+        self.assertEqual(self.commands, [])
+        with patch.object(
+            window, "available_legacy_workspace_directory",
+            return_value=None,
+        ):
+            self.bridge.useLegacyProjectsFolder()
+        self.assertEqual(chosen, [str(old)])
+        self.assertEqual(
+            json.loads(self.events[-1])["event"],
+            "projects_folder_failed",
+        )
+
+    def test_cancelled_projects_folder_dialog_emits_its_own_event(
+        self,
+    ) -> None:
+        """Cancelling Browse unblocks setup without changing any folder."""
+
+        window = importlib.import_module("kilin.gui.window")
+        with patch.object(window, "QFileDialog") as picker:
+            picker.getExistingDirectory.return_value = ""
+            self.bridge.chooseProjectsFolder()
+        self.assertEqual(
+            json.loads(self.events[-1]),
+            {"event": "projects_folder_cancelled"},
+        )
+        self.assertEqual(self.commands, [])
+
+    def test_failed_projects_folder_save_reports_recoverable_event(
+        self,
+    ) -> None:
+        """A preference failure must not kill the running GUI engine."""
+
+        window = importlib.import_module("kilin.gui.window")
+        fake = MagicMock()
+        with patch.object(
+            window, "write_defaults", side_effect=OSError("read-only")
+        ):
+            window.ChatWindow._set_projects_folder(fake, "")
+        fake.process.kill.assert_not_called()
+        fake._process_finished.assert_not_called()
+        emitted = json.loads(fake.bridge.event.emit.call_args.args[0])
+        self.assertEqual(emitted["event"], "projects_folder_failed")
+        self.assertIn("read-only", emitted["message"])
+
+    def test_accepting_the_terms_saves_the_current_version(self) -> None:
+        """Confirm only a persisted current-version agreement."""
+
+        window = importlib.import_module("kilin.gui.window")
+        with patch.object(window, "write_defaults") as write:
+            self.bridge.acceptTerms("an outdated version")
+            write.assert_not_called()
+            self.assertEqual(self.commands, [])
+            self.bridge.acceptTerms(window.TERMS_VERSION)
+        write.assert_called_once_with(
+            {"terms_accepted": window.TERMS_VERSION}
+        )
+        self.assertEqual(self.commands, [{"action": "readiness"}])
+        self.assertEqual([
+            json.loads(message) for message in self.events
+        ], [{
+            "event": "terms_acceptance_failed",
+            "version": "an outdated version",
+            "reason": "outdated_version",
+            "current_version": window.TERMS_VERSION,
+            "message": (
+                "The terms of use have changed. Review the current "
+                "version and accept it again."
+            ),
+        }, {
+            "event": "terms_acceptance_saved",
+            "version": window.TERMS_VERSION,
+        }])
+
+    def test_terms_write_failures_allow_retry(self) -> None:
+        """Do not send readiness for unwritten acceptance."""
+
+        window = importlib.import_module("kilin.gui.window")
+        for problem in (OSError("read-only"), ValueError("invalid file")):
+            with self.subTest(problem=problem):
+                with patch.object(
+                    window, "write_defaults", side_effect=problem,
+                ):
+                    self.bridge.acceptTerms(window.TERMS_VERSION)
+                self.assertEqual(self.commands, [])
+                event = json.loads(self.events[-1])
+                self.assertEqual(event["event"], "terms_acceptance_failed")
+                self.assertEqual(event["reason"], "save_failed")
+                self.assertEqual(event["version"], window.TERMS_VERSION)
+                self.assertIn(str(problem), event["message"])
+        with patch.object(window, "write_defaults") as write:
+            self.bridge.acceptTerms(window.TERMS_VERSION)
+        write.assert_called_once()
+        self.assertEqual(self.commands, [{"action": "readiness"}])
+        self.assertEqual(
+            json.loads(self.events[-1])["event"], "terms_acceptance_saved"
+        )
+
+    def test_answer_settings_command_payload(self) -> None:
+        """The bridge sends the settings as a command of their own."""
+
+        self.bridge.saveAnswerSettings(json.dumps({"thinking": True}))
+        self.assertEqual(self.commands, [
+            {"action": "save_answer_settings",
+             "settings": {"thinking": True}},
+        ])
+
+    def test_correlated_answer_settings_bridge_payload(self) -> None:
+        """Unwrap the browser envelope for the engine dispatcher."""
+
+        self.bridge.saveAnswerSettings(json.dumps({
+            "settings": {"thinking": False, "temperature": 0.4},
+            "request_id": 17,
+            "project": "/saved/project",
+        }))
+        self.assertEqual(self.commands, [{
+            "action": "save_answer_settings",
+            "settings": {"thinking": False, "temperature": 0.4},
+            "request_id": 17,
+            "project": "/saved/project",
+        }])
+
+    def test_copy_text_goes_to_the_system_clipboard(self) -> None:
+        """Copy through Qt, since the page may not write the clipboard."""
+
+        clipboard = MagicMock()
+        with patch(
+            "kilin.gui.window.QGuiApplication.clipboard",
+            return_value=clipboard,
+        ):
+            self.bridge.copyText("Answer [1].")
+        clipboard.setText.assert_called_once_with("Answer [1].")
+        self.assertEqual(self.commands, [])
 
 if __name__ == "__main__":
     unittest.main()

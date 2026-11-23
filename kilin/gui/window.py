@@ -62,6 +62,7 @@ from PySide6.QtCore import (
     QProcess,
     QRectF,
     Qt,
+    QTimer,
     QUrl,
     Signal,
     Slot,
@@ -82,20 +83,42 @@ from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 
-from kilin.gui.preferences import default_appearance, write_defaults
+from kilin._project_creation import cleanup_stopped_creation
+from kilin.conversation_format import conversation_state
+from kilin.gui._paths import (
+    available_legacy_workspace_directory,
+    default_workspace_directory,
+    saved_workspace_folder,
+    standard_workspace_directory,
+)
+from kilin.gui.preferences import (
+    BACKEND_CHOICES,
+    TERMS_VERSION,
+    default_appearance,
+    write_defaults,
+)
 
 __all__ = [
     "ChatBridge",
     "SourceDropView",
     "ChatWindow",
+    "saved_conversation_turns",
 ]
 
 ROOT = Path(__file__).resolve().parents[2]
+# How long Stop waits for the engine to end an answer before restarting it,
+# as a last resort for an engine that no longer responds.
+CANCEL_GRACE_MS = 30_000
 ICONS = Path(__file__).resolve().parent / "icons"
 
 
 class ChatBridge(QObject):
     """Expose Qt signals and slots connecting the page to backend commands.
+
+    Parameters
+    ----------
+    parent: QObject | None, optional
+        Parent Qt object for the bridge. Defaults to ``None``.
 
     Attributes
     ----------
@@ -103,60 +126,185 @@ class ChatBridge(QObject):
         Serialized engine event sent back to the web page.
     pathsSelected: Signal(list)
         Local source paths chosen using native dialogs.
+    attachmentsSelected: Signal(list)
+        Local chat attachment paths chosen in native dialogs.
     folderFilesSelected: Signal(str, str, list)
         Editable folder (outputs or templates), purpose ("add" or the path
         to replace), and the chosen files.
-    workspaceSelected: Signal(str)
-        Selected workspace directory.
+    sourceDropTargetChanged: Signal(str)
+        Serialized bounds used to align native source drop targets.
+    sourceDragChanged: Signal(bool)
+        Whether a local source is being dragged over the drop region.
+    appearanceChanged: Signal(str)
+        Requested ``system``, ``light``, or ``dark`` appearance mode.
+    projectsFolderChosen: Signal(str)
+        Folder chosen or confirmed to hold the projects.
     commandRequested: Signal(dict)
         Backend command handed to the window process controller.
     stopRequested: Signal()
         Request to terminate the active engine process.
+    answerCancelRequested: Signal()
+        Stop was pressed for a running answer.
+    project_root: pathlib.Path | None
+        Active project root used by desktop file-opening slots, or None.
 
     Methods
     -------
+
+    **Native dialogs, files, and desktop integration.**
+
     chooseSources()
         Offer files and folders through one browse control.
     chooseFolder()
         Show the native folder picker on the GUI thread.
     chooseFiles()
         Add one or more individual files.
-    chooseWorkspace()
-        Choose the folder in which KíLín stores its project.
+    chooseAttachmentFolder()
+        Choose one folder for the current chat message.
+    chooseAttachmentFiles()
+        Choose one or more files for the current chat message.
+    chooseFolderFiles(folder, purpose)
+        Choose files for ``outputs/`` or ``templates/``.
+    folderDropped(folder, paths)
+        Offer files dropped on ``outputs`` or ``templates`` to the page.
+    editFolder(request_json)
+        Add, replace, or delete files in outputs or templates.
+    chooseProjectsFolder()
+        Choose the folder where KíLín keeps its projects.
+    useDefaultProjectsFolder()
+        Choose the standard projects folder.
+    useLegacyProjectsFolder()
+        Reuse the previous installed-app folder, without moving projects.
+    confirmProjectsFolder()
+        Confirm the projects folder in use, as KíLín setup asks.
+    acceptTerms(version)
+        Record that the user agreed to the terms of use shown in setup.
+    requestProjectsFolder()
+        Report the projects folder in use and the one saved in Settings.
+    setSourceDropTarget(bounds_json)
+        Align the native drop region with the visible sources tree.
+    openWorkspaceFile(relative_path)
+        Open a validated project file in its desktop app.
+    copyText(text)
+        Put text on the system clipboard for the page's Copy buttons.
+    openExternalLink(url)
+        Open an approved HTTPS link only after the user clicks it.
+
+    **Preferences and model availability.**
+
     requestSettings(type_id, workspace)
         Read the existing profile or new-project defaults.
+    requestReadiness()
+        Ask the backend to check runtime and required model availability.
+    installRequiredModels()
+        Ask the backend to download all missing default models.
     downloadModel(model_id)
         Download one suggested model only after the user chooses it.
-    previewSources(sources_json, extensions_json, max_file_bytes, workspace)
+    useInstalledModels()
+        Use installed models in place of missing preferred ones.
+    applyModelSettings(settings_json)
+        Send the JSON-decoded model settings to the backend.
+    setAppearance(mode)
+        Report the page's color mode: system, light, or dark.
+    setBackendPreference(backend)
+        Save the backend new projects are made with.
+    saveAnswerSettings(settings_json)
+        Save answer settings to the open project right away.
+
+    **Projects and source management.**
+
+    previewSources(sources_json, extensions_json, ...)
         Scan selected roots without copying them.
-    openProject(sources_json, type_id, workspace, selected_json, settings_json)
-        Request project preparation in the backend process.
+    openProject(sources_json, type_id, workspace, ...)
+        Request exclusive new-project creation in the backend process.
+    checkProjectSources(sources_json)
+        Ask what adding these sources would copy, before adding.
+    addProjectSources(sources_json, decisions_json)
+        Import sources after the user confirmed the check.
+    removeProjectSources(paths_json)
+        Delete confirmed workspace source copies and reindex.
+    syncProjectSources(decisions_json)
+        Apply the user's choice for each changed source and reindex.
+    renameProject(name)
+        Ask the backend to rename the active project directory.
+    findSavedProject(type_id, workspace)
+        Refresh Resume for the selected project type and workspace.
+    listSavedProjects(workspace)
+        List all valid saved projects without loading their models.
+    resumeProject(directory)
+        Open a saved project without changing its source snapshot.
+    resumeProjectConversation(directory, conversation_id)
+        Reopen a project at the exact conversation active before a stop.
+    closeProject()
+        Release models when the user chooses a different project.
+    deleteProject(directory)
+        Move a closed project into the deleted folder beside it.
+    applyIndexingSettings(settings_json)
+        Save the open project's indexing settings and rebuild its index.
+    saveSourceCardSettings(settings_json)
+        Save the source-card policy and both model configurations.
+    regenerateSourceCards()
+        Regenerate source cards without rebuilding passage indexes.
+
+    **Answering and conversation management.**
+
     askQuestion(question, effort, settings_json)
-        Request one answer with the selected GUI effort preset.
+        Request one answer with the current conversation settings.
+    choosePlan(choice)
+        Answer a tool plan that waits for the user's choice.
     previewReference(turn_index, citation)
         Request source context for one saved answer citation.
     resetConversation()
         Archive the current conversation in the backend process.
     newConversation()
         Create and open a separate empty conversation.
-    branchConversation()
-        Branch the active conversation at its current saved checkpoint.
+    branchConversation(turn_count)
+        Branch the active conversation, keeping its first turns.
+    viewConversation(conversation_id)
+        Show a saved conversation read-only while an answer is generated.
     selectConversation(conversation_id)
         Open a saved conversation without reloading project resources.
     renameConversation(conversation_id, name)
         Rename a saved conversation in the project catalog.
     deleteConversation(conversation_id)
-        Archive a conversation and remove it from the project catalog.
-    listSavedProjects(workspace)
-        List valid saved projects of all registered types.
-    resumeProject(directory)
-        Open a saved project without changing its source snapshot.
-    resumeProjectConversation(directory, conversation_id)
-        Reopen a saved project at one exact conversation.
-    closeProject()
-        Release models when the user chooses a different project.
+        Archive a conversation and remove it from the visible catalog.
+    cancelAnswer()
+        Stop the running answer while the engine and models stay loaded.
     stopOperation()
         Terminate the active backend process immediately.
+
+    **Setting descriptions.**
+
+    requestSettingsInfo()
+        Request shared metadata independently of projects and models.
+
+    **Project behavior.**
+
+    requestProjectBehavior()
+        Request editable project-wide and intent configuration.
+    requestConversationFeedback(project)
+        Request revisioned feedback for the active project.
+    saveMessageFeedback(request_json)
+        Forward a validated feedback write to the backend engine.
+    requestMemoryMessages(project, offset)
+        Inspect saved messages and their current memory status.
+    requestMemorySummaries(project, request_json)
+        Request current remembered summaries from conversation traces.
+    setMemoryExclusion(request_json)
+        Exclude or restore one message without changing its rating.
+    requestMemoryStatus(project)
+        Query stored memory-index counts for the active project.
+    syncConversationMemory(project)
+        Request manual synchronization of the derived memory index.
+    saveProjectBehavior(project, scope, intent_id, ...)
+        Submit one revision-checked project behavior editor.
+
+    **Tool settings.**
+
+    requestToolSettings()
+        Ask for the open project's tools and their settings.
+    saveToolSettings(name, settings_json)
+        Save one tool's settings for the open project.
 
     Notes
     -----
@@ -171,12 +319,13 @@ class ChatBridge(QObject):
     pathsSelected = Signal(list)
     attachmentsSelected = Signal(list)
     folderFilesSelected = Signal(str, str, list)
-    workspaceSelected = Signal(str)
     commandRequested = Signal(dict)
     stopRequested = Signal()
+    answerCancelRequested = Signal()
     sourceDropTargetChanged = Signal(str)
     sourceDragChanged = Signal(bool)
     appearanceChanged = Signal(str)
+    projectsFolderChosen = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         """Keep only the currently opened project path on the UI side.
@@ -290,14 +439,162 @@ class ChatBridge(QObject):
         self.commandRequested.emit({**request, "action": "edit_folder"})
 
     @Slot()
-    def chooseWorkspace(self) -> None:
-        """Choose the folder in which KíLín stores its project."""
+    def chooseProjectsFolder(self) -> None:
+        """Choose the folder where KíLín keeps its projects."""
 
         path = QFileDialog.getExistingDirectory(
-            None, "Choose KíLín workspace"
+            None, "Choose where KíLín keeps projects"
         )
         if path:
-            self.workspaceSelected.emit(path)
+            self.projectsFolderChosen.emit(path)
+        else:
+            self.event.emit(json.dumps({
+                "event": "projects_folder_cancelled",
+            }))
+
+    @Slot()
+    def useDefaultProjectsFolder(self) -> None:
+        """Choose the standard projects folder.
+
+        Notes
+        -----
+        The standard folder is saved by its path, like a folder chosen with
+        Browse, so choosing it also confirms it in KíLín setup.
+
+        """
+
+        try:
+            folder = str(standard_workspace_directory())
+        except ValueError as error:
+            self.event.emit(
+                json.dumps({
+                    "event": "projects_folder_failed",
+                    "message": str(error),
+                })
+            )
+            return
+        self.projectsFolderChosen.emit(folder)
+
+    @Slot()
+    def useLegacyProjectsFolder(self) -> None:
+        """Reuse an existing legacy projects folder, without moving data.
+
+        Notes
+        -----
+        Resolve and validate the candidate again when clicked; the folder
+        may have changed since the frontend received its suggestion.
+
+        """
+
+        folder = available_legacy_workspace_directory()
+        if folder is None:
+            self.event.emit(json.dumps({
+                "event": "projects_folder_failed",
+                "message": (
+                    "The previous projects folder is no longer available. "
+                    "Choose a folder with Browse instead."
+                ),
+            }))
+            return
+        self.projectsFolderChosen.emit(str(folder))
+
+    @Slot()
+    def confirmProjectsFolder(self) -> None:
+        """Confirm the projects folder in use, as KíLín setup asks."""
+
+        try:
+            folder = str(default_workspace_directory())
+        except ValueError as error:
+            self.event.emit(
+                json.dumps({
+                    "event": "projects_folder_failed",
+                    "message": str(error),
+                })
+            )
+            return
+        self.projectsFolderChosen.emit(folder)
+
+    @Slot(str)
+    def acceptTerms(self, version: str) -> None:
+        """Record that the user agreed to the terms of use shown in setup.
+
+        Parameters
+        ----------
+        version: str
+            Version of the terms the page showed. Only the current
+            ``TERMS_VERSION`` is saved; an outdated version is rejected.
+
+        Notes
+        -----
+        Qt acknowledges successful persistence before requesting readiness.
+        Failures are reported to the welcome dialog for user-controlled retry.
+
+        """
+
+        if version != TERMS_VERSION:
+            self.event.emit(json.dumps({
+                "event": "terms_acceptance_failed",
+                "version": version,
+                "reason": "outdated_version",
+                "current_version": TERMS_VERSION,
+                "message": (
+                    "The terms of use have changed. Review the current "
+                    "version and accept it again."
+                ),
+            }))
+            return
+        try:
+            write_defaults({"terms_accepted": version})
+        except (OSError, ValueError) as error:
+            self.event.emit(json.dumps({
+                "event": "terms_acceptance_failed",
+                "version": version,
+                "reason": "save_failed",
+                "message": f"Could not save the agreement: {error}",
+            }))
+            return
+        self.event.emit(json.dumps({
+            "event": "terms_acceptance_saved",
+            "version": version,
+        }))
+        self.commandRequested.emit({"action": "readiness"})
+
+    @Slot()
+    def requestProjectsFolder(self) -> None:
+        """Report the projects folder in use and the one saved in Settings.
+
+        Notes
+        -----
+        Sends ``projects_folder`` with the effective, standard, and saved
+        folders; ``missing`` reports an unavailable saved folder, while
+        ``legacy`` offers an existing old installed-app directory. No
+        project is moved or selected without user confirmation.
+
+        """
+
+        try:
+            folder = str(default_workspace_directory())
+            standard = str(standard_workspace_directory())
+        except ValueError as error:
+            self.event.emit(
+                json.dumps({"event": "error", "message": str(error)})
+            )
+            return
+        saved = saved_workspace_folder()
+        legacy = available_legacy_workspace_directory()
+        self.event.emit(
+            json.dumps(
+                {
+                    "event": "projects_folder",
+                    "folder": folder,
+                    "standard": standard,
+                    "saved": saved,
+                    "legacy": str(legacy) if legacy else "",
+                    "missing": bool(saved)
+                    and not Path(saved).expanduser().is_dir(),
+                }
+            )
+        )
 
     @Slot(str, str)
     def requestSettings(self, type_id: str, workspace: str) -> None:
@@ -565,11 +862,52 @@ class ChatBridge(QObject):
 
         self.commandRequested.emit({"action": "new_conversation"})
 
-    @Slot()
-    def branchConversation(self) -> None:
-        """Branch the active conversation at its current saved checkpoint."""
+    @Slot(int)
+    def branchConversation(self, turn_count: int) -> None:
+        """Branch the active conversation, keeping its first turns.
 
-        self.commandRequested.emit({"action": "branch_conversation"})
+        Parameters
+        ----------
+        turn_count: int
+            Number of saved turns the branch keeps.
+
+        """
+
+        self.commandRequested.emit(
+            {"action": "branch_conversation", "turn_count": turn_count}
+        )
+
+    @Slot(str)
+    def viewConversation(self, conversation_id: str) -> None:
+        """Show a saved conversation read-only while an answer is generated.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Saved conversation to read.
+
+        Notes
+        -----
+        The engine is busy answering, so the conversation file is read here,
+        without the engine. Emits ``conversation_viewed`` with its saved
+        turns, or with ``turns`` None when it cannot be read.
+
+        """
+
+        turns = (
+            None if self.project_root is None
+            else saved_conversation_turns(self.project_root, conversation_id)
+        )
+        # Not an ``error`` event, which would end the running answer.
+        self.event.emit(
+            json.dumps(
+                {
+                    "event": "conversation_viewed",
+                    "conversation_id": conversation_id,
+                    "turns": turns,
+                }
+            )
+        )
 
     @Slot(str)
     def selectConversation(self, conversation_id: str) -> None:
@@ -608,28 +946,6 @@ class ChatBridge(QObject):
                 "action": "rename_conversation",
                 "conversation_id": conversation_id,
                 "name": name,
-            }
-        )
-
-    @Slot(str, str)
-    def saveAnswerTimeline(self, timestamp: str, timeline_json: str) -> None:
-        """Keep how long an answer took, so a resumed chat shows it again.
-
-        Parameters
-        ----------
-        timestamp: str
-            The answered turn's timestamp, which identifies it.
-        timeline_json: str
-            JSON object with ``elapsed_ms`` and ``steps`` (each a ``label``
-            and ``ms``), as the page displayed them.
-
-        """
-
-        self.commandRequested.emit(
-            {
-                "action": "save_answer_timeline",
-                "timestamp": timestamp,
-                "timeline": json.loads(timeline_json),
             }
         )
 
@@ -680,6 +996,38 @@ class ChatBridge(QObject):
         self.appearanceChanged.emit(mode)
 
     @Slot(str)
+    def setBackendPreference(self, backend: str) -> None:
+        """Persist a new-project backend and refresh setup after success.
+
+        Parameters
+        ----------
+        backend: str
+            ``auto``, ``mlx``, or ``torch``; anything else is ignored.
+
+        Notes
+        -----
+        Qt owns preference writes. A failed write must not update readiness
+        or leave the page believing an uncommitted backend was saved.
+
+        """
+
+        if backend not in BACKEND_CHOICES:
+            return
+        try:
+            write_defaults({"backend": backend})
+        except (OSError, ValueError) as error:
+            self.event.emit(json.dumps({
+                "event": "backend_preference_failed",
+                "backend": backend,
+                "message": f"Could not save the backend preference: {error}",
+            }))
+            return
+        self.event.emit(json.dumps({
+            "event": "backend_preference_saved", "backend": backend,
+        }))
+        self.commandRequested.emit({"action": "readiness"})
+
+    @Slot(str)
     def setSourceDropTarget(self, bounds_json: str) -> None:
         """Align the native drop region with the visible sources tree.
 
@@ -693,13 +1041,245 @@ class ChatBridge(QObject):
         self.sourceDropTargetChanged.emit(bounds_json)
 
     @Slot(str)
-    def addProjectSources(self, sources_json: str) -> None:
-        """Import sources after the page's rebuild confirmation.
+    def checkProjectSources(self, sources_json: str) -> None:
+        """Ask what adding these sources would copy, before adding.
+
+        Parameters
+        ----------
+        sources_json: str
+            JSON-encoded source paths dropped or chosen in the page.
+
+        """
+
+        self.commandRequested.emit(
+            {
+                "action": "check_sources",
+                "sources": json.loads(sources_json),
+            }
+        )
+
+    @Slot(str)
+    def saveAnswerSettings(self, settings_json: str) -> None:
+        """Submit a correlated answer-settings save to the engine.
+
+        Parameters
+        ----------
+        settings_json: str
+            JSON settings object, or a GUI request envelope containing
+            ``settings``, ``request_id``, and ``project``. The envelope
+            permits matching asynchronous acknowledgements to the project.
+
+        """
+
+        payload = json.loads(settings_json)
+        command = {"action": "save_answer_settings", "settings": payload}
+        if isinstance(payload, dict) and "request_id" in payload:
+            command = {
+                "action": "save_answer_settings",
+                "settings": payload.get("settings"),
+                "request_id": payload["request_id"],
+                "project": payload.get("project"),
+            }
+        self.commandRequested.emit(command)
+
+    @Slot()
+    def requestSettingsInfo(self) -> None:
+        """Request core- and tool-owned setting descriptions."""
+
+        self.commandRequested.emit({"action": "settings_info"})
+
+    @Slot()
+    def requestProjectBehavior(self) -> None:
+        """Request project-wide and individual intent settings."""
+
+        self.commandRequested.emit({"action": "project_behavior"})
+
+    @Slot(str)
+    def requestConversationFeedback(self, project: str) -> None:
+        """Request feedback for one explicitly named open project.
+
+        Parameters
+        ----------
+        project: str
+            Frontend's currently displayed workspace identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "conversation_feedback", "project": project,
+        })
+
+    @Slot(str)
+    def saveMessageFeedback(self, request_json: str) -> None:
+        """Forward a message rating to the validated core store.
+
+        Parameters
+        ----------
+        request_json: str
+            Serialized feedback request with revision and target identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "save_message_feedback",
+            "request": json.loads(request_json),
+        })
+
+    @Slot(str, int)
+    def requestMemoryMessages(self, project: str, offset: int) -> None:
+        """Inspect project memory without loading embeddings.
+
+        Parameters
+        ----------
+        project: str
+            Currently displayed project identity.
+        offset: int
+            Zero-based page offset.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "memory_messages", "project": project,
+            "offset": offset,
+        })
+
+    @Slot(str, str)
+    def requestMemorySummaries(
+        self, project: str, request_json: str
+    ) -> None:
+        """Request current remembered summaries from conversation traces.
+
+        Parameters
+        ----------
+        project: str
+            Currently displayed project identity.
+        request_json: str
+            Correlated remembered-message origin references.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "memory_summaries", "project": project,
+            "request": json.loads(request_json),
+        })
+
+    @Slot(str)
+    def setMemoryExclusion(self, request_json: str) -> None:
+        """Forward a revision-checked exclusion update to the core.
+
+        Parameters
+        ----------
+        request_json: str
+            Serialized exclusion envelope.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "set_memory_exclusion",
+            "request": json.loads(request_json),
+        })
+
+    @Slot(str)
+    def requestMemoryStatus(self, project: str) -> None:
+        """Read stored memory-index counts without running embeddings.
+
+        Parameters
+        ----------
+        project: str
+            Frontend's currently displayed workspace identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "memory_status", "project": project,
+        })
+
+    @Slot(str)
+    def syncConversationMemory(self, project: str) -> None:
+        """Request explicit project-local memory synchronization.
+
+        Parameters
+        ----------
+        project: str
+            Frontend's currently displayed workspace identity.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "sync_memory_index", "project": project,
+        })
+
+    @Slot(str, str, str, str, str, int)
+    def saveProjectBehavior(
+        self, project: str, scope: str, intent_id: str,
+        values_json: str, revision: str, request_id: int,
+    ) -> None:
+        """Submit a revision-checked project behavior editor.
+
+        Parameters
+        ----------
+        project: str
+            Open project path captured by the page.
+        scope: str
+            ``global``, ``intent``, ``capabilities``, ``memory``, or
+            ``intent_memory`` editor.
+        intent_id: str
+            Intent ID, empty for global or indexing settings.
+        values_json: str
+            JSON object with the editor's complete settings.
+        revision: str
+            Last acknowledged project behavior revision.
+        request_id: int
+            Frontend sequence number for matching the acknowledgement.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "save_project_behavior", "project": project,
+            "scope": scope, "intent_id": intent_id or None,
+            "values": json.loads(values_json), "revision": revision,
+            "request_id": request_id,
+        })
+
+    @Slot()
+    def requestToolSettings(self) -> None:
+        """Ask for the open project's tools and their settings."""
+
+        self.commandRequested.emit({"action": "tool_settings"})
+
+    @Slot(str, str)
+    def saveToolSettings(self, name: str, settings_json: str) -> None:
+        """Save one tool's settings for the open project.
+
+        Parameters
+        ----------
+        name: str
+            Tool the project type uses.
+        settings_json: str
+            JSON object of the tool's changeable settings.
+
+        """
+
+        self.commandRequested.emit(
+            {
+                "action": "save_tool_settings",
+                "tool": name,
+                "settings": json.loads(settings_json),
+            }
+        )
+
+    @Slot(str, str)
+    def addProjectSources(
+        self, sources_json: str, decisions_json: str
+    ) -> None:
+        """Import sources after the user confirmed the check.
 
         Parameters
         ----------
         sources_json: str
             JSON-encoded source paths selected in the page.
+        decisions_json: str
+            JSON object of sync actions for copies already in the project.
 
         """
 
@@ -707,6 +1287,7 @@ class ChatBridge(QObject):
             {
                 "action": "add_project_sources",
                 "sources": json.loads(sources_json),
+                "decisions": json.loads(decisions_json),
             }
         )
 
@@ -725,6 +1306,24 @@ class ChatBridge(QObject):
             {
                 "action": "remove_project_sources",
                 "paths": json.loads(paths_json),
+            }
+        )
+
+    @Slot(str)
+    def syncProjectSources(self, decisions_json: str) -> None:
+        """Apply the user's choice for each changed source and reindex.
+
+        Parameters
+        ----------
+        decisions_json: str
+            JSON object mapping ``sources/`` paths to sync actions.
+
+        """
+
+        self.commandRequested.emit(
+            {
+                "action": "sync_sources",
+                "decisions": json.loads(decisions_json),
             }
         )
 
@@ -769,6 +1368,21 @@ class ChatBridge(QObject):
                     }
                 )
             )
+
+    @Slot(str)
+    def copyText(self, text: str) -> None:
+        """Put text on the system clipboard for the page's Copy buttons.
+
+        Qt WebEngine does not let the page write to the clipboard itself.
+
+        Parameters
+        ----------
+        text: str
+            Text to copy.
+
+        """
+
+        QGuiApplication.clipboard().setText(text)
 
     @Slot(str, str)
     def findSavedProject(self, type_id: str, workspace: str) -> None:
@@ -851,6 +1465,99 @@ class ChatBridge(QObject):
 
         self.commandRequested.emit({"action": "close"})
 
+    @Slot(str)
+    def deleteProject(self, directory: str) -> None:
+        """Move a closed project into the deleted folder beside it.
+
+        Parameters
+        ----------
+        directory: str
+            Folder containing the project's profile.ini.
+
+        """
+
+        self.commandRequested.emit(
+            {"action": "delete_project", "project": directory}
+        )
+
+    @Slot(str)
+    def saveSourceCardSettings(self, settings_json: str) -> None:
+        """Persist core-owned card settings for the active project.
+
+        Parameters
+        ----------
+        settings_json: str
+            JSON containing policy and both backend generation settings.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "save_source_cards",
+            "settings": json.loads(settings_json),
+        })
+
+    @Slot()
+    def regenerateSourceCards(self) -> None:
+        """Rebuild source cards without rebuilding ordinary indexes."""
+
+        self.commandRequested.emit({
+            "action": "regenerate_source_cards",
+        })
+
+    @Slot(str)
+    def applyIndexingSettings(self, settings_json: str) -> None:
+        """Save the open project's indexing settings and rebuild its index.
+
+        Parameters
+        ----------
+        settings_json: str
+            JSON object of the changed indexing settings.
+
+        """
+
+        self.commandRequested.emit(
+            {"action": "apply_indexing", "settings": json.loads(settings_json)}
+        )
+
+    @Slot(str)
+    def openExternalLink(self, url: str) -> None:
+        """Open an approved HTTPS link only after the user clicks it.
+
+        Parameters
+        ----------
+        url: str
+            HTTPS publication or bibliographic search URL from a report.
+
+        Notes
+        -----
+        No link is fetched by the embedded web view or by the backend.
+        Explicit clicks open the system browser, outside KíLín.
+
+        """
+
+        target = QUrl(url)
+        if (
+            target.isValid() and target.scheme() == "https"
+            and target.host() and not target.userName()
+            and not target.password()
+        ):
+            QDesktopServices.openUrl(target)
+
+    @Slot()
+    def cancelAnswer(self) -> None:
+        """Stop the running answer while the engine and models stay loaded.
+
+        Notes
+        -----
+        Sends ``cancel_answer``, which the engine applies at the model's next
+        token. The window restarts the engine only if no answer event follows
+        within ``CANCEL_GRACE_MS``.
+
+        """
+
+        self.commandRequested.emit({"action": "cancel_answer"})
+        self.answerCancelRequested.emit()
+
     @Slot()
     def stopOperation(self) -> None:
         """Terminate the active backend process immediately.
@@ -863,6 +1570,51 @@ class ChatBridge(QObject):
         """
 
         self.stopRequested.emit()
+
+
+def saved_conversation_turns(
+    root: Path, conversation_id: str
+) -> list[dict[str, object]] | None:
+    """Read saved turns, including core timelines, without the engine.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Open project folder.
+    conversation_id: str
+        Saved conversation to read.
+
+    Returns
+    -------
+    list[dict[str, object]] | None
+        Its saved turns, including any persisted ``timeline`` fields,
+        or None when no readable conversation has that ID.
+
+    Notes
+    -----
+    Reads files only, so it never waits for the busy engine. Symbolic links
+    and unreadable files are skipped, as conversation discovery does.
+
+    """
+
+    for path in sorted((root / "logs" / "traces").glob("conversation_*.json")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            state = conversation_state(
+                json.loads(path.read_text(encoding="utf-8"))
+            )
+        except (OSError, ValueError):
+            continue
+        turns = state.get("turns", [])
+        if state.get("conversation_id") != conversation_id:
+            continue
+        if not isinstance(turns, list):
+            return None
+        if not all(isinstance(turn, dict) for turn in turns):
+            return None
+        return turns
+    return None
 
 
 class SourceDropView(QWebEngineView):
@@ -1091,6 +1843,12 @@ class ChatWindow(QMainWindow):
         self.setMinimumSize(760, 560)
         self._closing = False
         self._stopping = False
+        # A newly published project awaiting an opened event and the
+        # stopped engine's PID. Neither authorizes deleting project data.
+        self._unopened_project: Path | None = None
+        self._stopped_pid = 0
+        # Restarting the engine so that it uses a new projects folder.
+        self._switching_folder = False
         self._pending: list[dict[str, object]] = []
         self._stdout = bytearray()
         self._stderr = bytearray()
@@ -1099,11 +1857,18 @@ class ChatWindow(QMainWindow):
         self.bridge = ChatBridge(self)
         self.bridge.commandRequested.connect(self._send_command)
         self.bridge.stopRequested.connect(self._stop_operation)
+        # A Stop the engine does not answer in time restarts it instead.
+        self._cancel_timer = QTimer(self)
+        self._cancel_timer.setSingleShot(True)
+        self._cancel_timer.setInterval(CANCEL_GRACE_MS)
+        self._cancel_timer.timeout.connect(self._stop_operation)
+        self.bridge.answerCancelRequested.connect(self._cancel_timer.start)
 
         # The saved appearance until the page reports its choice; "system"
         # follows the OS.
         self._appearance = default_appearance()
         self.bridge.appearanceChanged.connect(self._set_appearance)
+        self.bridge.projectsFolderChosen.connect(self._set_projects_folder)
         QGuiApplication.styleHints().colorSchemeChanged.connect(
             lambda _scheme: self._update_icon()
         )
@@ -1157,6 +1922,44 @@ class ChatWindow(QMainWindow):
         except OSError:
             pass  # An unwritable preferences file keeps today's choice.
         self._update_icon()
+
+    def _set_projects_folder(self, folder: str) -> None:
+        """Save the projects folder and restart the engine to use it.
+
+        The engine reads the folder when it starts. The page offers this
+        only on the start screen while idle, so no project or answer is
+        interrupted.
+
+        Parameters
+        ----------
+        folder: str
+            Chosen absolute folder, created if it does not exist yet.
+
+        """
+
+        try:
+            # A confirmed folder exists from now on, even before a project.
+            if folder:
+                Path(folder).expanduser().mkdir(parents=True, exist_ok=True)
+            write_defaults({"workspace_folder": folder})
+        except (OSError, ValueError) as error:
+            self.bridge.event.emit(
+                json.dumps(
+                    {
+                        "event": "projects_folder_failed",
+                        "message": (
+                            f"Could not save the projects folder: {error}"
+                        ),
+                    }
+                )
+            )
+            return
+        self._switching_folder = True
+        self._pending.clear()
+        if self.process.state() == QProcess.ProcessState.NotRunning:
+            self._process_finished()
+        else:
+            self.process.kill()
 
     def _update_icon(self) -> None:
         """Show the light or dark logo in the window and Dock.
@@ -1239,13 +2042,53 @@ class ChatWindow(QMainWindow):
                     and isinstance(event, dict)
                     and "event" in event
                 ):
+                    if event["event"] in {
+                        "answered", "answer_cancelled", "error"
+                    }:
+                        # The answer ended, so a pending Stop needs no
+                        # restart.
+                        self._cancel_timer.stop()
                     if event["event"] == "opened" and isinstance(
                         event.get("project"), str
                     ):
                         self.bridge.project_root = Path(event["project"])
+                    if event["event"] == "project_created" and isinstance(
+                        event.get("workspace"), str
+                    ):
+                        self._unopened_project = Path(event["workspace"])
+                    elif event["event"] in {
+                        "opened", "error", "workspace_conflict"
+                    }:
+                        self._unopened_project = None
                     self.bridge.event.emit(json.dumps(event))
             except (UnicodeError, ValueError):
                 continue
+
+    def _cleanup_stopped_creation(self) -> tuple[list[str], list[str]]:
+        """Remove only empty claims; preserve any known project contents.
+
+        Returns
+        -------
+        tuple[list[str], list[str]]
+            Paths removed and paths retained for inspection or reopening.
+
+        """
+
+        try:
+            removed, preserved = cleanup_stopped_creation(
+                default_workspace_directory(),
+                self._unopened_project,
+                self._stopped_pid,
+            )
+        except OSError:
+            removed = []
+            preserved = (
+                [str(self._unopened_project)]
+                if self._unopened_project is not None else []
+            )
+        self._unopened_project = None
+        self._stopped_pid = 0
+        return removed, preserved
 
     def _read_diagnostics(self) -> None:
         """Drain and retain a bounded tail of backend diagnostic output."""
@@ -1268,6 +2111,8 @@ class ChatWindow(QMainWindow):
         if self._stopping:
             return
         self._stopping = True
+        self._stopped_pid = int(self.process.processId())
+        self._cancel_timer.stop()
         self._pending.clear()
         if self.process.state() == QProcess.ProcessState.NotRunning:
             self._process_finished()
@@ -1292,10 +2137,21 @@ class ChatWindow(QMainWindow):
 
         if self._closing:
             return
+        if self._switching_folder:
+            self._switching_folder = False
+            self._start_engine()
+            self.bridge.requestProjectsFolder()
+            return
         if self._stopping:
             self._stopping = False
+            removed, preserved = self._cleanup_stopped_creation()
             self._start_engine()
-            self.bridge.event.emit(json.dumps({"event": "stopped"}))
+            event: dict[str, object] = {"event": "stopped"}
+            if removed:
+                event["removed_projects"] = removed
+            if preserved:
+                event["preserved_projects"] = preserved
+            self.bridge.event.emit(json.dumps(event))
         else:
             exit_code = int(_args[0]) if _args else self.process.exitCode()
             exit_status = _args[1] if len(_args) > 1 else None
@@ -1335,7 +2191,7 @@ class ChatWindow(QMainWindow):
 
         """
 
-        if not self._closing and not self._stopping:
+        if not (self._closing or self._stopping or self._switching_folder):
             self.bridge.event.emit(
                 json.dumps(
                     {"event": "error", "message": self.process.errorString()}

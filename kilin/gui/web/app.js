@@ -9,7 +9,8 @@
  *
  * Completed answers arrive as complete strings. The character-by-character
  * reveal is a presentation timer, not streamed model output. Conversation
- * persistence and tracing remain backend responsibilities.
+ * persistence and tracing remain backend responsibilities. Answer-settings
+ * edits are provisional until the engine confirms the saved project profile.
  */
 
 "use strict";
@@ -22,6 +23,8 @@ const ANSWER_PHASE_ROUTING = "routing";
 const ANSWER_PHASE_ROUTED = "routed";
 const ANSWER_PHASE_RETRIEVING = "retrieving";
 const ANSWER_PHASE_EVIDENCE_READY = "evidence_ready";
+const ANSWER_PHASE_MEMORY_RETRIEVING = "memory_retrieving";
+const ANSWER_PHASE_MEMORY_READY = "memory_ready";
 const ANSWER_PHASE_GENERATING = "generating";
 const ANSWER_PHASE_SAVING = "saving";
 const ANSWER_PHASE_COMPLETED = "completed";
@@ -42,6 +45,10 @@ const shell = document.querySelector(".app-shell");
 let bridge = null;
 let busy = false;
 let ready = false;
+// The Settings status text that showError last wrote, cleared with it.
+let shownErrorStatus = "";
+// The setup reminder shown in the Settings status line, until it is done.
+let shownSetupReminder = "";
 const selectedSources = [];
 const previewRoots = new Map();
 const previewSkipped = new Map();
@@ -53,11 +60,35 @@ const expandedFolders = new Set();
 const collapsedWorkspaceFolders = new Set();
 // Paths shown in the workspace tree, to warn before replacing files.
 let workspacePaths = new Set();
+// The user's last show/hide choice for the side panels; null before any.
+let sidePanelChoice = null;
+// The Settings tab shown when Settings open; kept while KíLín runs.
+let settingsTab = "general";
+// Explanatory metadata belongs to KíLín core and registered tool packages.
+// Its absence must not change how settings work or how answers are made.
+let settingsCatalog = null;
+let settingsHelpSequence = 0;
+// Displayed tooltip lives in the document's top-level layer, outside the
+// scroll-clipped Settings dialog. Never retain more than one open tooltip.
+let activeSettingsHelp = null;
+// The last projects_folder event, to redraw the folder's note.
+let projectsFolderInfo = null;
 // Workspace folders the user edits directly; neither is indexed.
 const EDITABLE_FOLDERS = ["outputs", "templates"];
 // Drag data for a workspace file dragged within the panel.
 const WORKSPACE_DRAG_TYPE = "application/x-kilin-workspace-path";
 let profile = null;
+// Answer settings changed on the start screen: kept until the project is
+// created, instead of being reset by the next settings event.
+let answerSettingsEdited = false;
+// The last engine-confirmed answer settings; the UI may show newer edits.
+let savedAnswerNumbers = { temperature: 0, max_new_tokens: null };
+let savedAnswerThinking = true;
+// One save at a time. Only the latest newer edit is queued, and every
+// acknowledgement is checked against its request and project identity.
+const answerSettingsSave = {
+  nextId: 0, pending: null, queued: null, uncertain: false,
+};
 let cachedModels = new Set();
 let modelChoices = [];
 // Effort levels per backend: saved for the project, built-in defaults, and
@@ -75,29 +106,70 @@ let savedRouters = {};
 let defaultRouters = {};
 let draftRouter = "";
 let modelRoles = {};
+// Whether the tested chat template changes its rendered prompt when
+// enable_thinking changes; missing entries mean unknown.
+let thinkingSwitches = {};
 let modelsBaseline = null;
 let applyingModels = false;
 let closeAfterModelsApply = false;
+// Set while the engine saves indexing settings and rebuilds the index.
+let applyingIndexing = false;
+// Source-card settings are project-owned and independent of answering models.
+let sourceCardSettings = null;
+let applyingSourceCards = false;
 let downloadingModel = null;
 let selectedTurn = null;
 let activeReference = null;
 let installedBackends = {};
 let requiredModels = [];
 let readinessEnvironmentReady = false;
+// Repair commands from Python, one per backend and installation type.
+let installCommand = "";
+let installCommands = {};
+// KíLín setup also asks to confirm the projects folder and to agree to the
+// current terms of use (``termsVersion``), once each.
+let folderConfirmed = true;
+let termsAccepted = true;
+let termsVersion = "";
+// The in-flight terms version identifies the Qt acknowledgement to accept.
+let acceptingTerms = false;
+let pendingTermsVersion = "";
+// Retain a successful Qt write if an earlier readiness reply arrives late.
+let acknowledgedTermsVersion = "";
+// New-project readiness; saved projects use their own profiles.
+let kilinReady = true;
+// Required models still missing, and whether they are being downloaded.
+let readinessMissingCount = 0;
+let installingModels = false;
 let setupCompletionVisible = false;
 let supportedExtensions = new Set();
 let automaticBackend = "mlx";
+// The last backend acknowledged by Qt, not the page's pending selection.
+let confirmedBackendPreference = "auto";
 let activeBackend = "mlx";
-let resumeRefreshTimer = null;
 let activeTracePath = "";
 let activeConversationId = "";
 // Last conversation registry, and the empty chat whose first question is
 // being answered; that chat is listed before it has saved turns.
 let lastConversationData = null;
+// A memory popover reads current trace summaries each time it opens.
+// Responses are matched to their own request; they are never persisted.
+let memorySummarySequence = 0;
+const memorySummaryPending = new Map();
 let askingConversation = null;
 let pendingTurn = null;
 // A stopped answer's partial text, shown again after the engine restarts.
 let stoppedTurn = null;
+// The question put back in the message box once a branch or new chat opens.
+let branchDraft = null;
+// The chat being answered while an answer runs; other chats can be read
+// meanwhile.
+let answeringConversationId = "";
+// A chat read while another one is answered: its id and name, and the
+// answering chat's own content, put back by returnToAnswer().
+let reading = null;
+// Chats whose answer finished while the user was reading another one.
+const unreadConversations = new Set();
 let phaseTimer = null;
 let answerTimer = null;
 // Tokens used by the open chat and the project, from the engine; the
@@ -111,17 +183,52 @@ let selectedDepthStep = 2;
 let resumeAfterStop = false;
 let activeProjectTypeId = "";
 const lastEmptyPrompt = Object.create(null);
+// Suggestions shown in each type's last empty chat, so the next one
+// shows another fixed example.
+const lastEmptySuggestions = Object.create(null);
 let messageAttachments = [];
+// A question whose attached files are being added to sources; it is asked
+// once the index is refreshed.
+let attachedAsk = null;
+// The question being answered, put back in the message box if the answer
+// fails or is stopped.
+let unansweredQuestion = "";
+// Set while Qt restarts the engine to use another projects folder.
+let switchingProjectsFolder = false;
 let currentTurnCount = 0;
 // Project types sent by the engine from kilin/project_types/*.json.
 let projectTypes = Object.create(null);
 // Saved projects last listed, shown again once the types' names arrive.
 let savedProjects = [];
+// Folder of the open project, highlighted in the left panel's Projects.
+let openProjectPath = "";
 // Used only if a type lists no welcome prompts or suggestions.
 const genericEmptyChat = {
   welcome_prompts: ["What would you like to work on?"],
   suggestions: ["Explain a concept", "Develop an idea", "Compare two approaches"],
 };
+
+/**
+ * Fit the chat editor to its content, up to the CSS height limit.
+ *
+ * Resetting the height first lets the editor contract after text is removed
+ * or its available width increases.
+ */
+function resizeQuestionInput() {
+  const input = byId("question");
+  input.style.height = "auto";
+  input.style.height = `${input.scrollHeight}px`;
+}
+
+/**
+ * Replace a chat draft and resize, including drafts restored by KíLín.
+ *
+ * @param text Text to show in the chat editor.
+ */
+function setQuestionDraft(text) {
+  byId("question").value = text;
+  resizeQuestionInput();
+}
 
 /**
  * Rebuild the project type dropdown, keeping the current choice.
@@ -132,6 +239,7 @@ function renderProjectTypes(types) {
   if (!Array.isArray(types) || !types.length) return;
   projectTypes = Object.fromEntries(types.map((item) => [item.type_id, item]));
   if (savedProjects.length) renderSavedProjects(savedProjects);
+  if (openProjectPath) renderSidebarProjects(savedProjects, openProjectPath);
   const select = byId("type-id");
   const current = select.value;
   select.replaceChildren(...types.map((item) => {
@@ -156,47 +264,32 @@ function turnCountLabel(count) {
 }
 
 /**
- * Refresh the header and project summary from the saved turn count.
+ * Refresh the chat's name and turn count in its heading and the top bar.
  *
  * @param count Latest saved count; defaults to the current count.
  */
-function updateProjectSummary(count = currentTurnCount) {
+function updateChatSummary(count = currentTurnCount) {
   currentTurnCount = Number(count) || 0;
-  const projectName = byId("project-name").textContent.trim();
-  byId("topbar-project-name").textContent = projectName;
+  byId("topbar-chat-name").textContent = byId("conversation-name").textContent.trim() || "New chat";
   byId("topbar-turn-count").textContent = turnCountLabel(currentTurnCount);
-  byId("project-detail").textContent = `${currentTurnCount} saved ${currentTurnCount === 1 ? "turn" : "turns"}`;
+  byId("conversation-detail").textContent = currentTurnCount ? turnCountLabel(currentTurnCount) : "";
 }
 
 /**
- * Keep the compact project header visible after scrolling the conversation.
+ * Keep the compact chat header visible after scrolling the conversation.
  */
 function updateFloatingHeader() {
   const scrolled = ready && conversationScroll.scrollTop > 96;
   document.querySelector(".topbar").classList.toggle("floating", scrolled);
-  byId("topbar-project").classList.toggle("hidden", !scrolled);
+  byId("topbar-chat").classList.toggle("hidden", !scrolled);
 }
-
-/**
- * Hide and clear the previously offered saved-project shortcut.
- */
-function hideResume() { byId("saved-projects").classList.add("hidden"); }
 
 /**
  * Ask the engine for a saved project only on an idle setup screen.
  */
 function refreshSavedProject() {
   if (!bridge || busy || ready) return;
-  bridge.listSavedProjects(byId("workspace-path").value.trim());
-}
-
-/**
- * Invalidate the resume shortcut and debounce the next lookup.
- */
-function queueSavedProjectRefresh() {
-  hideResume();
-  clearTimeout(resumeRefreshTimer);
-  resumeRefreshTimer = setTimeout(refreshSavedProject, 250);
+  bridge.listSavedProjects("");
 }
 
 /**
@@ -212,6 +305,19 @@ function showWorkspace(visible) {
   control.setAttribute("aria-label", visible ? "Hide side panels" : "Show side panels");
   control.title = control.getAttribute("aria-label");
   control.classList.toggle("panels-hidden", !visible);
+}
+
+/**
+ * Show or hide the side panels because the user asked, and remember it.
+ *
+ * Automatic layout changes (opening a project, a new chat) then follow
+ * this choice instead of overriding it.
+ *
+ * @param visible Whether the user wants the side panels shown.
+ */
+function chooseSidePanels(visible) {
+  sidePanelChoice = visible;
+  showWorkspace(visible);
 }
 
 /**
@@ -249,6 +355,17 @@ function applyAppearance(value) {
 function renderSavedProjects(projects) {
   savedProjects = projects;
   const host = byId("saved-projects");
+  // The list is refreshed every few seconds; rebuilding it unchanged would
+  // jump a scrolled list back to the top.
+  const shown = JSON.stringify(projects.map((project) => [
+    project.project, project.name, projectTypes[project.type_id]?.label || project.type_id,
+  ]));
+  if (host.dataset.shown === shown) {
+    host.classList.toggle("hidden", !host.children.length);
+    return;
+  }
+  host.dataset.shown = shown;
+  const scroll = host.querySelector(".saved-project-list")?.scrollTop || 0;
   host.replaceChildren();
   if (projects.length) {
     // One list of every project type, most recently used first (engine order).
@@ -256,44 +373,312 @@ function renderSavedProjects(projects) {
     group.className = "saved-project-group";
     const heading = document.createElement("strong");
     heading.textContent = "Resume a previous project";
-    group.append(heading);
+    // Five projects show; the rest scroll, so the setup card stays in view.
+    const list = document.createElement("div");
+    list.className = "saved-project-list";
+    group.append(heading, list);
     for (const project of projects) {
       const button = document.createElement("button");
       button.type = "button";
       const name = document.createElement("span");
       name.className = "saved-project-name";
-      name.textContent = `Resume ${project.name}`;
+      name.textContent = project.name;
       const typeLabel = document.createElement("span");
       typeLabel.className = "saved-project-type";
       // The type's own name, or its ID until the types have arrived.
       typeLabel.textContent = projectTypes[project.type_id]?.label || project.type_id;
       button.append(name, typeLabel);
-      button.title = `Resume ${project.type_id} project from ${project.project}`;
+      button.title = `Open ${project.type_id} project from ${project.project}`;
       button.addEventListener("click", () => {
         if (busy) return;
-        setBusy(true, "Resuming project…");
+        setBusy(true, "Opening project…");
         bridge.resumeProject(project.project);
       });
-      group.append(button);
+      list.append(button);
     }
     host.append(group);
+    list.scrollTop = scroll;
   }
   host.classList.toggle("hidden", !host.children.length);
 }
 
 /**
- * Normalize and deduplicate source paths, then request a preview.
+ * Read a left-panel choice remembered on this computer.
+ *
+ * @param key Choice name, such as "projects-sort".
+ * @param fallback Value when nothing is saved or storage is unavailable.
+ * @returns The saved value, or ``fallback``.
+ */
+function sidebarPref(key, fallback) {
+  try {
+    const saved = localStorage.getItem(`kilin-sidebar-${key}`);
+    return saved == null ? fallback : JSON.parse(saved);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Remember a left-panel choice on this computer.
+ *
+ * @param key Choice name, such as "projects-sort".
+ * @param value JSON-serializable value.
+ */
+function setSidebarPref(key, value) {
+  try { localStorage.setItem(`kilin-sidebar-${key}`, JSON.stringify(value)); } catch {}
+}
+
+/**
+ * Put items in the user's dragged order; items not yet placed come first,
+ * in their given order.
+ *
+ * @param items Items in their default order.
+ * @param idOf Returns an item's identifier.
+ * @param saved Identifiers in the user's order.
+ * @returns New list of the same items.
+ */
+function manualOrder(items, idOf, saved) {
+  const rank = new Map((saved || []).map((id, index) => [id, index]));
+  const fresh = items.filter((item) => !rank.has(idOf(item)));
+  const placed = items.filter((item) => rank.has(idOf(item)))
+    .sort((a, b) => rank.get(idOf(a)) - rank.get(idOf(b)));
+  return [...fresh, ...placed];
+}
+
+/**
+ * Move one identifier to the place of another, as a dropped row does.
+ *
+ * @param ids Identifiers in their shown order.
+ * @param moved The dragged row's identifier.
+ * @param target The identifier of the row it was dropped on.
+ * @returns New list of identifiers.
+ */
+function moveInOrder(ids, moved, target) {
+  const index = ids.indexOf(target);
+  const rest = ids.filter((id) => id !== moved);
+  rest.splice(index, 0, moved);
+  return rest;
+}
+
+/**
+ * Let a row be dragged onto another row of the same list.
+ *
+ * @param row Row element.
+ * @param id The row's identifier.
+ * @param ids Identifiers of the whole list, in shown order.
+ * @param save Receives the new order after a drop.
+ */
+function makeReorderable(row, id, ids, save) {
+  const type = "application/x-kilin-order";
+  row.draggable = true;
+  row.addEventListener("dragstart", (event) => {
+    event.dataTransfer.setData(type, id);
+    event.dataTransfer.effectAllowed = "move";
+    row.classList.add("dragging");
+  });
+  row.addEventListener("dragend", () => row.classList.remove("dragging"));
+  // Stop here, so the page-wide guard against file drops does not refuse it.
+  row.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer.types.includes(type)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+  });
+  row.addEventListener("drop", (event) => {
+    const moved = event.dataTransfer.getData(type);
+    if (!moved) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (moved !== id && ids.includes(moved)) save(moveInOrder(ids, moved, id));
+  });
+}
+
+/**
+ * Order the projects for the left panel.
+ *
+ * @param projects Saved projects ordered by recent use.
+ * @param current Folder of the open project, listed first when it is not
+ *   among the saved projects.
+ * @param currentType Project type of the open project.
+ * @param mode "updated" keeps recent use; "manual" uses ``saved``.
+ * @param saved Project folders in the user's dragged order.
+ * @returns New list of projects to show.
+ */
+function sidebarProjectOrder(projects, current, currentType = "", mode = "updated", saved = []) {
+  const listed = !current || projects.some((project) => project.project === current)
+    ? [...projects]
+    : [{ project: current, name: current.split(/[\\/]/).pop(), type_id: currentType }, ...projects];
+  return mode === "manual" ? manualOrder(listed, (project) => project.project, saved) : listed;
+}
+
+/**
+ * Order the conversations for the left panel.
+ *
+ * @param items Conversation records with ``updated_at_utc``.
+ * @param mode "updated" puts the latest change first; "manual" uses
+ *   ``saved``.
+ * @param saved Conversation identifiers in the user's dragged order.
+ * @returns New list of conversations.
+ */
+function sidebarConversationOrder(items, mode = "updated", saved = []) {
+  const recent = [...items].sort((a, b) =>
+    (Date.parse(b.updated_at_utc) || 0) - (Date.parse(a.updated_at_utc) || 0));
+  return mode === "manual" ? manualOrder(recent, (item) => item.conversation_id, saved) : recent;
+}
+
+/**
+ * List the most recent projects in the left panel, each with its type, the
+ * open one highlighted; clicking another one switches to it, and More shows
+ * the rest.
+ *
+ * @param projects Saved projects ordered by recent use.
+ * @param current Folder of the open project.
+ */
+function renderSidebarProjects(projects, current) {
+  const list = byId("project-list");
+  list.replaceChildren();
+  const mode = sidebarPref("projects-sort", "updated");
+  const ordered = sidebarProjectOrder(
+    projects, current, activeProjectTypeId, mode, sidebarPref("projects-order", []));
+  const ids = ordered.map((project) => project.project);
+  // Five projects show; the list scrolls for the rest (see styles.css).
+  for (const project of ordered) {
+    const row = document.createElement("div");
+    row.className = "project-row";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "project-item";
+    const name = document.createElement("span");
+    name.className = "project-item-name";
+    name.textContent = project.name;
+    const type = document.createElement("span");
+    type.className = "project-item-type";
+    type.textContent = projectTypes[project.type_id]?.label || project.type_id || "";
+    button.append(name, type);
+    button.title = project.project;
+    const active = project.project === current;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "true");
+    button.disabled = busy;
+    const open = () => {
+      if (busy || active) return;
+      setBusy(true, `Opening ${project.name}…`);
+      bridge.resumeProject(project.project);
+    };
+    button.addEventListener("click", () => open());
+    // Settings save into the open project, so only its row has the icon.
+    const settings = document.createElement("button");
+    settings.type = "button";
+    settings.className = "project-settings";
+    settings.setAttribute("aria-label", `Settings for ${project.name}`);
+    settings.title = "Project settings";
+    settings.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+    settings.disabled = busy;
+    settings.addEventListener("click", () => openModels());
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showWorkspaceMenu(event.clientX, event.clientY, active
+        ? [["Rename", () => renameProjectInSidebar(button, project)], ["Settings", openModels]]
+        : [["Open", open]]);
+    });
+    row.append(button);
+    if (active) row.append(settings);
+    if (mode === "manual") {
+      makeReorderable(row, project.project, ids, (order) => {
+        setSidebarPref("projects-order", order);
+        renderSidebarProjects(projects, current);
+      });
+    }
+    list.append(row);
+  }
+}
+
+/**
+ * Rename the open project in place: Enter or leaving the field saves,
+ * Escape cancels.
+ *
+ * @param button The project's row button, replaced while editing.
+ * @param project The open project.
+ */
+function renameProjectInSidebar(button, project) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "conversation-rename";
+  input.value = project.name;
+  input.setAttribute("aria-label", `Rename ${project.name}`);
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    input.replaceWith(button);
+    if (save && name && name !== project.name && !busy && ready) {
+      setBusy(true, "Renaming project…");
+      bridge.renameProject(name);
+    }
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); finish(true); }
+    if (event.key === "Escape") { event.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+  button.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+/**
+ * Show the ⋯ menu of a left-panel section: sort by last update, or in the
+ * user's own dragged order.
+ *
+ * @param anchor The ⋯ button.
+ * @param section "projects" or "conversations".
+ * @param refresh Redraws the section's list.
+ */
+function showSidebarSortMenu(anchor, section, refresh) {
+  const mode = sidebarPref(`${section}-sort`, "updated");
+  const heading = document.createElement("div");
+  heading.className = "menu-heading";
+  heading.textContent = "Sort by";
+  const options = [["updated", "Last updated"], ["manual", "Manual order"]].map(([value, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitemradio");
+    button.setAttribute("aria-checked", String(value === mode));
+    button.textContent = label;
+    if (value === mode) {
+      const check = document.createElement("span");
+      check.className = "menu-check";
+      check.textContent = "✓";
+      button.append(check);
+    }
+    button.addEventListener("click", () => {
+      hideSourceMenu();
+      setSidebarPref(`${section}-sort`, value);
+      refresh();
+    });
+    return button;
+  });
+  sourceMenu.replaceChildren(heading, ...options);
+  sourceMenu.classList.remove("hidden");
+  const box = anchor.getBoundingClientRect();
+  const { width } = sourceMenu.getBoundingClientRect();
+  sourceMenu.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - width - 8))}px`;
+  sourceMenu.style.top = `${box.bottom + 4}px`;
+}
+
+/**
+ * Check sources for an open project, or add them to a new project's preview.
  *
  * @param paths Local paths provided by a native dialog or drag-and-drop.
  */
 function addSources(paths) {
   if (busy || !paths.length) return;
   if (ready) {
-    const names = paths.map((path) => String(path).split(/[\\/]/).pop()).join("\n");
-    if (!confirm(`Add these sources to this project?\n\n${names}\n\nKíLín will copy supported files into sources and update the index, reusing unchanged chunks when possible. This may take a while. Existing sources and saved chats will be kept. Re-added files may replace their existing copies. Continue?`)) return;
+    // Check first: the dialog shows what would be added and left out.
     error.classList.add("hidden");
-    setBusy(true, "Adding sources and updating the index…");
-    bridge.addProjectSources(JSON.stringify(paths));
+    setBusy(true, "Checking the sources…");
+    bridge.checkProjectSources(JSON.stringify(paths));
     return;
   }
   for (const path of paths) {
@@ -312,14 +697,23 @@ function fileTypes() {
 }
 
 /**
+ * List the file types the new project copies: its type's own and the extra
+ * types typed in Settings. The preview offers only these, so every file the
+ * user can tick is one project creation accepts.
+ */
+function projectFileTypes() {
+  return [...new Set([...profile.extensions, ...fileTypes()])];
+}
+
+/**
  * Request a backend metadata scan for the current source selection.
  */
 function previewSources() {
   if (bridge && selectedSources.length) {
     setBusy(true, "Scanning selected sources…");
     bridge.previewSources(
-      JSON.stringify(selectedSources), JSON.stringify(fileTypes()),
-      Number(byId("max-file-bytes").value), byId("workspace-path").value.trim(),
+      JSON.stringify(selectedSources), JSON.stringify(projectFileTypes()),
+      Number(byId("max-file-bytes").value), "",
     );
   }
 }
@@ -357,9 +751,12 @@ function showFolderCount(folder) {
  * @param depth Nesting depth; the top-level branch starts expanded.
  * @param enabled Allowed paths, or null to enable every path.
  * @param reasons Path-to-explanation mapping for skipped entries.
+ * @param selectable True gives each row a checkbox (the source preview).
+ *   False gives plain rows (the workspace tree), so clicking a file's
+ *   name does not also click its delete button.
  * @returns New details element containing the branch.
  */
-function branch(name, children, paths, selection, depth = 0, enabled = null, reasons = {}) {
+function branch(name, children, paths, selection, depth = 0, enabled = null, reasons = {}, selectable = true) {
   const details = document.createElement("details");
   details.className = "tree-folder";
   const key = `${name}|${paths[0] || ""}`;
@@ -374,37 +771,44 @@ function branch(name, children, paths, selection, depth = 0, enabled = null, rea
   details.dataset.folders = String(children.directories.size);
   details.dataset.files = String(children.files.length);
   const summary = document.createElement("summary");
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  const available = enabled ? paths.filter((path) => enabled.has(path)) : paths;
-  checkbox.checked = available.length > 0 && available.every((path) => selection.has(path));
-  checkbox.indeterminate = available.some((path) => selection.has(path)) && !checkbox.checked;
-  checkbox.disabled = available.length === 0;
-  checkbox.addEventListener("click", (event) => event.stopPropagation());
-  checkbox.addEventListener("change", () => {
-    available.forEach((path) => checkbox.checked ? selection.add(path) : selection.delete(path));
-    renderPreview();
-  });
-  summary.append(checkbox, document.createTextNode(name));
+  if (selectable) {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    const available = enabled ? paths.filter((path) => enabled.has(path)) : paths;
+    checkbox.checked = available.length > 0 && available.every((path) => selection.has(path));
+    checkbox.indeterminate = available.some((path) => selection.has(path)) && !checkbox.checked;
+    checkbox.disabled = available.length === 0;
+    checkbox.addEventListener("click", (event) => event.stopPropagation());
+    checkbox.addEventListener("change", () => {
+      available.forEach((path) => checkbox.checked ? selection.add(path) : selection.delete(path));
+      renderPreview();
+    });
+    summary.append(checkbox);
+  }
+  summary.append(document.createTextNode(name));
   details.append(summary);
   const content = document.createElement("div");
   content.className = "tree-children";
   for (const [folder, node] of [...children.directories].sort()) {
-    content.append(branch(folder, node, allFiles(node), selection, depth + 1, enabled, reasons));
+    content.append(branch(folder, node, allFiles(node), selection, depth + 1, enabled, reasons, selectable));
   }
   for (const file of children.files.sort()) {
-    const row = document.createElement("label");
+    // A label forwards clicks to its first control, so plain rows are divs.
+    const row = document.createElement(selectable ? "label" : "div");
     row.className = "tree-file";
     row.dataset.path = file;
-    const check = document.createElement("input");
-    check.type = "checkbox";
-    check.checked = selection.has(file);
-    check.disabled = enabled !== null && !enabled.has(file);
-    check.addEventListener("change", () => {
-      check.checked ? selection.add(file) : selection.delete(file);
-      renderPreview();
-    });
-    row.append(check, document.createTextNode(file.split("/").pop()));
+    if (selectable) {
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = selection.has(file);
+      check.disabled = enabled !== null && !enabled.has(file);
+      check.addEventListener("change", () => {
+        check.checked ? selection.add(file) : selection.delete(file);
+        renderPreview();
+      });
+      row.append(check);
+    }
+    row.append(document.createTextNode(file.split("/").pop()));
     if (reasons[file]) {
       const reason = document.createElement("small");
       reason.className = "skip-reason";
@@ -462,6 +866,21 @@ function isOversizedSkippedFile(item) {
 }
 
 /**
+ * Say briefly why a preview file cannot be ticked.
+ *
+ * @param item Skipped-file preview row with a reason code.
+ * @returns Short text shown next to the file.
+ */
+function skippedReason(item) {
+  if (isOversizedSkippedFile(item)) return "Above current limit · check to include";
+  if (selectionReasonCodes !== null
+      && item.reason_code === selectionReasonCodes.FILE_TYPE_NOT_SELECTED) {
+    return "File type not included";
+  }
+  return item.reason;
+}
+
+/**
  * Rebuild source trees, counts, and removal controls from preview state.
  */
 function renderPreview() {
@@ -492,12 +911,7 @@ function renderPreview() {
       checkedFiles.delete(rootPath);
       renderPreview();
     });
-    const reasons = Object.fromEntries(skipped.map((item) => [
-      item.path,
-      isOversizedSkippedFile(item)
-        ? "Above current limit · check to include"
-        : item.reason,
-    ]));
+    const reasons = Object.fromEntries(skipped.map((item) => [item.path, skippedReason(item)]));
     const all = [...files, ...skipped.map((item) => item.path)];
     holder.append(branch(rootPath, fileTree(all), all, chosen, 0, offered, reasons), remove);
     tree.append(holder);
@@ -599,20 +1013,49 @@ function roleModelIds(role, current) {
  * @param ids Model IDs offered in the dropdown.
  * @param value Currently chosen model ID.
  * @param label Accessible label of the model selector.
+ * @param markThinking Whether to add the template-switch probe label.
  */
-function modelSelect(ids, value, label) {
+function modelSelect(ids, value, label, markThinking = false) {
   const select = document.createElement("select");
   select.className = "model-select";
   select.setAttribute("aria-label", label);
   for (const id of ids) {
     const option = document.createElement("option");
     option.value = id;
-    option.textContent = cachedModels.has(id) ? id : `${id} (not downloaded)`;
+    const name = markThinking ? `${id}${thinkingMark(id)}` : id;
+    option.textContent = cachedModels.has(id) ? name : `${name} (not downloaded)`;
     select.append(option);
   }
   select.value = value;
   select.disabled = busy;
   return select;
+}
+
+/**
+ * Check whether a cached model's template rendered different prompts
+ * with enable_thinking on and off. This does not test model reasoning.
+ *
+ * Missing models or templates that could not be checked are unknown.
+ *
+ * @param id Model identifier or local path.
+ * @returns True only for a detected template prompt difference.
+ */
+function modelHasThinkingSwitch(id) {
+  return thinkingSwitches[id] === true;
+}
+
+/**
+ * Label the template probe outcome, or return "" when unknown.
+ *
+ * @param id Model identifier or local path.
+ * @returns A template-switch label, or "" when no result is available.
+ */
+function thinkingMark(id) {
+  if (thinkingSwitches[id] === true) {
+    return " · thinking switch detected";
+  }
+  return thinkingSwitches[id] === false
+    ? " · no template switch detected" : "";
 }
 
 /**
@@ -631,8 +1074,9 @@ function downloadNotice(id, installed) {
   download.className = "primary";
   download.textContent = "Download";
   download.disabled = busy || !installed;
-  // An explicit Download click authorizes this download.
-  download.addEventListener("click", () => applyModelEdits(false, id));
+  // An explicit Download click authorizes this download. On the start
+  // screen it only downloads: nothing is saved before a project exists.
+  download.addEventListener("click", () => (ready ? applyModelEdits(false, id) : downloadModelOnly(id)));
   notice.append(text, download);
   return notice;
 }
@@ -647,6 +1091,9 @@ function modelGroupHeader(role, title) {
   header.className = "model-group-header";
   const heading = document.createElement("h3");
   heading.textContent = title;
+  const groupKeys = { chat: "effort_levels", depth: "search_depth",
+    router: "router_models", embedding: "embedding_models" };
+  heading.dataset.settingsKey = `model_settings.${groupKeys[role]}`;
   const restore = document.createElement("button");
   restore.type = "button";
   restore.className = "secondary restore-defaults";
@@ -660,17 +1107,62 @@ function modelGroupHeader(role, title) {
 }
 
 /**
+ * Remember a field's value when the user enters it, so a refused edit can
+ * be put back.
+ *
+ * @param input Text or number field.
+ */
+function rememberValue(input) {
+  input.addEventListener("focus", () => { input.dataset.before = input.value; });
+}
+
+/**
+ * Check a start-screen edit at once, as Prepare project would: a refused
+ * value is put back and explained; nothing is saved before the project
+ * exists.
+ *
+ * @param input The edited field, if known.
+ * @param problem Why the values are refused, or "".
+ */
+function keepNewProjectValue(input, problem) {
+  if (problem) {
+    if (input && input.dataset.before !== undefined) input.value = input.dataset.before;
+    byId("model-download-status").textContent = problem;
+  } else if (input && input.value !== input.dataset.before) {
+    byId("model-download-status").textContent = "Kept for the new project.";
+  }
+}
+
+/**
+ * Save a typed field when the user presses Enter or leaves it, not on each
+ * key or number-arrow click.
+ *
+ * @param input Text or number field.
+ * @param save Function that saves the field's change.
+ */
+function saveOnEnter(input, save) {
+  rememberValue(input);
+  input.addEventListener("blur", save);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
+  });
+}
+
+/**
  * Build the effort-level rows, the embedding choice, and the cache listing.
  */
 function renderModelsPanel() {
   const host = byId("model-list");
   const focused = document.activeElement?.closest?.("[data-focus-key]")?.dataset.focusKey;
   host.replaceChildren();
+  const depthHost = byId("search-depth");
+  depthHost.replaceChildren();
   const installed = installedBackends[activeBackend];
   const mlx = activeBackend === "mlx";
   // Only a missing backend needs a note above the levels.
+  const repair = installCommands[activeBackend] || "the KíLín installer";
   byId("models-backend").textContent = installed ? ""
-    : `${activeBackend.toUpperCase()} packages are not installed. Run uv sync --extra gui --extra ${activeBackend} from the KíLín folder first.`;
+    : `${activeBackend.toUpperCase()} packages are not installed. Install them with ${repair}, then restart KíLín.`;
   byId("models-backend").classList.toggle("hidden", Boolean(installed));
 
   const chat = document.createElement("section");
@@ -689,6 +1181,9 @@ function renderModelsPanel() {
   for (const label of ["Level", "Language model"]) {
     const cell = document.createElement("span");
     cell.textContent = label;
+    cell.dataset.settingsKey = label === "Level"
+      ? "model_settings.effort_levels.name"
+      : "model_settings.effort_levels.model";
     columns.append(cell);
   }
   chat.append(columns);
@@ -707,14 +1202,17 @@ function renderModelsPanel() {
       level.name = name.value;
       refreshRestoreButtons();
     });
+    saveOnEnter(name, saveModelEdits);
+    // Answers think only with these models; routing never does.
     const select = modelSelect(roleModelIds("chat", level.model), level.model,
-      `Language model for ${level.name || `level ${index + 1}`}`);
+      `Language model for ${level.name || `level ${index + 1}`}`, true);
     select.dataset.focusKey = `model-${index}`;
     select.addEventListener("change", () => {
       // Other backends cannot switch models per level: one model for all.
       for (const target of mlx ? [level] : draftLevels) target.model = select.value;
       byId("chat-model").value = draftLevels[DEFAULT_LEVEL].model;
       renderModelsPanel();
+      saveModelEdits();
     });
     row.append(name, select);
     chat.append(row);
@@ -724,7 +1222,7 @@ function renderModelsPanel() {
   host.append(chat);
 
   // Search depth: how many passages each step of the composer's second
-  // slider retrieves.
+  // slider retrieves. Shown in Answers; applied with the model changes.
   const depth = document.createElement("section");
   depth.className = "model-group";
   depth.append(modelGroupHeader("depth", "Search depth"));
@@ -748,11 +1246,31 @@ function renderModelsPanel() {
       draftDepth[index] = Number(input.value);
       refreshRestoreButtons();
     });
+    saveOnEnter(input, saveModelEdits);
     cell.append(caption, input);
     steps.append(cell);
   });
   depth.append(steps);
-  host.append(depth);
+  depthHost.append(depth);
+
+  const router = document.createElement("section");
+  router.className = "model-group";
+  router.append(modelGroupHeader("router", "Intent model"));
+  const routerRow = document.createElement("div");
+  routerRow.className = "model-row";
+  // Marked like the levels; picking the intent runs with thinking off.
+  const routerSelect = modelSelect(roleModelIds("chat", draftRouter), draftRouter, "Intent model", true);
+  routerSelect.dataset.focusKey = "router";
+  routerSelect.addEventListener("change", () => {
+    draftRouter = routerSelect.value;
+    renderModelsPanel();
+    saveModelEdits();
+  });
+  routerRow.append(routerSelect);
+  router.append(routerRow);
+  const routerNotice = downloadNotice(draftRouter, installed);
+  if (routerNotice) router.append(routerNotice);
+  host.append(router);
 
   const embedding = document.createElement("section");
   embedding.className = "model-group";
@@ -765,37 +1283,26 @@ function renderModelsPanel() {
   select.addEventListener("change", () => {
     byId("embedding-model").value = select.value;
     renderModelsPanel();
+    saveModelEdits();
   });
   row.append(select);
   embedding.append(row);
   const notice = downloadNotice(current, installed);
   if (notice) embedding.append(notice);
   host.append(embedding);
-
-  const router = document.createElement("section");
-  router.className = "model-group";
-  router.append(modelGroupHeader("router", "Intent model"));
-  const routerRow = document.createElement("div");
-  routerRow.className = "model-row";
-  const routerSelect = modelSelect(roleModelIds("chat", draftRouter), draftRouter, "Intent model");
-  routerSelect.dataset.focusKey = "router";
-  routerSelect.addEventListener("change", () => {
-    draftRouter = routerSelect.value;
-    renderModelsPanel();
-  });
-  routerRow.append(routerSelect);
-  router.append(routerRow);
-  const routerNotice = downloadNotice(draftRouter, installed);
-  if (routerNotice) router.append(routerNotice);
-  host.append(router);
-  if (focused) host.querySelector(`[data-focus-key="${focused}"]`)?.focus();
+  applySettingsHelp(host);
+  applySettingsHelp(depthHost);
+  if (focused) {
+    (host.querySelector(`[data-focus-key="${focused}"]`)
+      || depthHost.querySelector(`[data-focus-key="${focused}"]`))?.focus();
+  }
 }
 
 /**
  * Enable each Restore defaults button only when it would change something.
  */
 function refreshRestoreButtons() {
-  for (const button of byId("model-list").querySelectorAll(".restore-defaults")) {
+  for (const button of document.querySelectorAll("#model-list .restore-defaults, #search-depth .restore-defaults")) {
     button.disabled = busy || !hasModelChanges(button.dataset.role);
   }
 }
@@ -858,6 +1365,1152 @@ function restoreDefaultModels(role) {
   }
   refreshModelStatus();
   renderModelsPanel();
+  saveModelEdits();
+}
+
+/**
+ * Show one Settings tab and hide the sections of the others.
+ *
+ * @param name Project settings tab name.
+ */
+function showSettingsTab(name) {
+  settingsTab = name;
+  // The open project's tools, read fresh each time the tab is shown.
+  if (name === "tools") requestToolSettings();
+  if (["intents", "indexing", "memory"].includes(name)) {
+    requestProjectBehavior();
+  }
+  if (name === "memory" && bridge && ready && openProjectPath) {
+    bridge.requestMemoryStatus(openProjectPath);
+    requestMemoryMessages();
+  }
+  for (const tab of document.querySelectorAll(".settings-tab")) {
+    const selected = tab.dataset.tab === name;
+    tab.classList.toggle("active", selected);
+    tab.setAttribute("aria-selected", String(selected));
+    // Arrow keys move between tabs; Tab moves into the shown one.
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  for (const section of document.querySelectorAll("#models-panel [data-settings-tab]")) {
+    section.classList.toggle("tab-hidden", section.dataset.settingsTab !== name);
+  }
+}
+
+/**
+ * Ask for the open project's tools, or say that a project must be open.
+ */
+function requestToolSettings() {
+  if (bridge && openProjectPath) {
+    bridge.requestToolSettings();
+    return;
+  }
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Open a project to see its tools.";
+  byId("tool-settings").replaceChildren(hint);
+}
+
+/**
+ * Close the active tooltip and return it to its setting's label.
+ *
+ * The tooltip is portaled to the document while visible so the scrollable
+ * Settings dialog cannot clip it. Returning it preserves label ownership
+ * and avoids orphaned nodes when the Settings panel is reconstructed.
+ */
+function dismissSettingsHelp() {
+  if (!activeSettingsHelp) return;
+  const { wrapper, trigger, tooltip } = activeSettingsHelp;
+  tooltip.classList.remove("is-visible");
+  wrapper.append(tooltip);
+  wrapper.classList.remove("is-open");
+  trigger.setAttribute("aria-expanded", "false");
+  activeSettingsHelp = null;
+}
+
+/**
+ * Keep the tooltip inside the viewport and aligned with its help icon.
+ *
+ * The small panel can scroll independently of the page, so screen-relative
+ * coordinates must be recalculated when the page or Settings panel scrolls.
+ */
+function positionSettingsHelp() {
+  if (!activeSettingsHelp) return;
+  const { trigger, tooltip } = activeSettingsHelp;
+  if (trigger.isConnected === false) {
+    dismissSettingsHelp();
+    return;
+  }
+  const icon = trigger.getBoundingClientRect();
+  const card = trigger.closest?.(".models-card")?.getBoundingClientRect();
+  if (card && (icon.bottom < card.top || icon.top > card.bottom)) {
+    dismissSettingsHelp();
+    return;
+  }
+  const margin = 12;
+  const gap = 6;
+  const width = tooltip.getBoundingClientRect().width;
+  const height = tooltip.getBoundingClientRect().height;
+  const rightLimit = Math.max(margin, window.innerWidth - width - margin);
+  const left = Math.max(margin, Math.min(icon.left, rightLimit));
+  const below = icon.bottom + gap;
+  const above = icon.top - height - gap;
+  const top = below + height <= window.innerHeight - margin
+    ? below : above >= margin ? above
+      : Math.max(margin, Math.min(below,
+        window.innerHeight - height - margin));
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(top)}px`;
+}
+
+/**
+ * Show one core-owned setting summary outside any clipping ancestor.
+ *
+ * @param wrapper Help control belonging to the setting label.
+ * @param trigger Small focusable information button.
+ * @param tooltip Summary node to show in the top-level document.
+ * @param pinned Whether a click should keep it visible after hover ends.
+ */
+function showSettingsHelp(wrapper, trigger, tooltip, pinned = false) {
+  if (activeSettingsHelp?.trigger !== trigger) dismissSettingsHelp();
+  if (!activeSettingsHelp) {
+    document.body.append(tooltip);
+    tooltip.classList.add("is-visible");
+    wrapper.classList.add("is-open");
+    activeSettingsHelp = { wrapper, trigger, tooltip, pinned };
+  } else if (pinned) {
+    activeSettingsHelp.pinned = true;
+  }
+  trigger.setAttribute("aria-expanded", "true");
+  positionSettingsHelp();
+}
+
+/**
+ * Add reusable explanatory popovers to controls with canonical setting IDs.
+ * Labels and summaries are provided by the core, never authored in the UI.
+ *
+ * @param root DOM subtree to decorate, or the document on first load.
+ */
+function applySettingsHelp(root = document) {
+  if (!settingsCatalog?.settings) return;
+  for (const label of root.querySelectorAll("[data-settings-key]")) {
+    if (label.querySelector(".setting-help")) continue;
+    const info = settingsCatalog.settings[label.dataset.settingsKey];
+    if (!info) continue;
+    // Keep the title and help icon together above a nested input.
+    const caption = [...label.childNodes].find((node) =>
+      node.nodeType === 3 && node.textContent.trim());
+    const wrapper = document.createElement("span");
+    wrapper.className = "setting-help";
+    const trigger = document.createElement("button");
+    trigger.className = "setting-help-trigger";
+    trigger.type = "button";
+    trigger.textContent = "i";
+    trigger.setAttribute("aria-label", `Help: ${info.title}`);
+    const tooltip = document.createElement("span");
+    tooltip.className = "setting-help-popup";
+    tooltip.setAttribute("role", "tooltip");
+    const id = `setting-help-${++settingsHelpSequence}`;
+    tooltip.id = id;
+    tooltip.textContent = info.summary;
+    trigger.setAttribute("aria-describedby", id);
+    // A button nested in a label must not edit or submit that field.
+    trigger.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (activeSettingsHelp?.trigger === trigger
+          && activeSettingsHelp.pinned) {
+        dismissSettingsHelp();
+        trigger.blur();
+      } else {
+        showSettingsHelp(wrapper, trigger, tooltip, true);
+      }
+    });
+    trigger.addEventListener("pointerenter", () => {
+      showSettingsHelp(wrapper, trigger, tooltip);
+    });
+    trigger.addEventListener("pointerleave", () => {
+      if (activeSettingsHelp?.trigger === trigger
+          && !activeSettingsHelp.pinned
+          && document.activeElement !== trigger) dismissSettingsHelp();
+    });
+    trigger.addEventListener("focus", () => {
+      showSettingsHelp(wrapper, trigger, tooltip);
+    });
+    trigger.addEventListener("blur", () => {
+      if (activeSettingsHelp?.trigger === trigger
+          && !trigger.matches(":hover")) dismissSettingsHelp();
+    });
+    trigger.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      dismissSettingsHelp();
+      trigger.blur();
+      event.stopPropagation();
+    });
+    trigger.setAttribute("aria-expanded", "false");
+    wrapper.append(trigger, tooltip);
+    const captionGroup = document.createElement("span");
+    captionGroup.className = "setting-help-caption";
+    captionGroup.append(document.createTextNode(info.title), wrapper);
+    if (caption) label.replaceChild(captionGroup, caption);
+    else label.append(captionGroup);
+  }
+}
+
+// Reposition the portaled popup as its anchor moves inside Settings.
+window.addEventListener("resize", positionSettingsHelp);
+document.addEventListener("scroll", positionSettingsHelp, true);
+// Clicking elsewhere dismisses a tooltip opened explicitly by clicking.
+document.addEventListener("click", (event) => {
+  if (event.target.closest?.(".setting-help")) return;
+  dismissSettingsHelp();
+});
+
+/**
+ * Turn a setting name such as "max_model_calls" into "Max model calls".
+ *
+ * @param key Setting name from a tool's defaults.json.
+ * @returns Label for the setting.
+ */
+function settingLabel(key) {
+  const words = key.replaceAll("_", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * Build the field for one tool setting, chosen by its value's type.
+ *
+ * @param key Setting name.
+ * @param value Current value: a Boolean, number, string, or list.
+ * @param toolName Registered owner of the setting.
+ * @returns Label element holding the field.
+ */
+function toolSettingField(key, value, toolName) {
+  const label = document.createElement("label");
+  label.dataset.settingsKey = `tools.${toolName}.${key}`;
+  const input = document.createElement("input");
+  input.dataset.key = key;
+  if (typeof value === "boolean") {
+    label.className = "check-row";
+    input.type = "checkbox";
+    input.checked = value;
+    input.dataset.kind = "boolean";
+    label.append(input, ` ${settingLabel(key)}`);
+    return label;
+  }
+  if (typeof value === "number") {
+    input.type = "number";
+    input.step = Number.isInteger(value) ? "1" : "any";
+    input.value = String(value);
+    input.dataset.kind = "number";
+  } else if (Array.isArray(value)) {
+    input.type = "text";
+    input.value = value.join(", ");
+    input.placeholder = "Comma-separated";
+    input.dataset.kind = "list";
+  } else {
+    input.type = "text";
+    input.value = String(value ?? "");
+    input.dataset.kind = "text";
+  }
+  label.append(settingLabel(key), input);
+  return label;
+}
+
+/**
+ * Read a tool's fields back into setting values.
+ *
+ * @param fields Container of the tool's setting fields.
+ * @returns Setting names and values to save.
+ */
+function toolSettingValues(fields) {
+  const values = {};
+  for (const input of fields.querySelectorAll("input[data-key]")) {
+    const kind = input.dataset.kind;
+    values[input.dataset.key] = kind === "boolean" ? input.checked
+      : kind === "number" ? Number(input.value)
+        : kind === "list" ? input.value.split(",").map((item) => item.trim()).filter(Boolean)
+          : input.value;
+  }
+  return values;
+}
+
+/**
+ * Show the project's tools, each with its settings built from the tool's
+ * defaults.json as fields.
+ *
+ * @param data The ``tool_settings`` event: ``tools``, and for a save the
+ *   ``tool`` with ``saved`` or ``error``.
+ */
+function renderToolSettings(data) {
+  const holder = byId("tool-settings");
+  const open = new Set([...holder.querySelectorAll("details.tool-settings[open]")].map((item) => item.dataset.tool));
+  if (data.tool) open.add(data.tool);
+  // Saving redraws the list; keep the field the user moved to.
+  const focused = document.activeElement?.closest?.("#tool-settings") && document.activeElement.dataset.key
+    ? [document.activeElement.closest("details.tool-settings").dataset.tool, document.activeElement.dataset.key]
+    : null;
+  holder.replaceChildren();
+  if (!data.tools.length) {
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "This project type uses no tools.";
+    holder.append(hint);
+    return;
+  }
+  for (const tool of data.tools) {
+    const item = document.createElement("details");
+    item.className = "tool-settings";
+    item.dataset.tool = tool.name;
+    item.open = open.has(tool.name);
+    const summary = document.createElement("summary");
+    const name = document.createElement("code");
+    name.textContent = tool.name;
+    summary.append(name, ` ${tool.summary}`);
+    const fields = document.createElement("div");
+    fields.className = "tool-fields";
+    // Values first, then the on/off switches together, one per row.
+    const entries = Object.entries(tool.settings);
+    for (const [key, value] of entries) if (typeof value !== "boolean") fields.append(toolSettingField(key, value, tool.name));
+    for (const [key, value] of entries) if (typeof value === "boolean") fields.append(toolSettingField(key, value, tool.name));
+    item.append(summary, fields);
+    // Settings each use sets differently, such as a template, stay as set.
+    const perIntent = Object.entries(tool.per_intent);
+    if (perIntent.length) {
+      const fixed = document.createElement("p");
+      fixed.className = "hint";
+      fixed.textContent = `Set by each use: ${perIntent.map(([intent, values]) =>
+        `${settingLabel(intent)} (${Object.entries(values).map(([key, value]) => `${key} ${value}`).join(", ")})`).join("; ")}`;
+      item.append(fixed);
+    }
+    const status = document.createElement("p");
+    status.className = "hint tool-status";
+    status.setAttribute("role", "status");
+    if (data.tool === tool.name) status.textContent = data.error || (data.saved ? "Saved." : "");
+    status.classList.toggle("tool-error", Boolean(data.tool === tool.name && data.error));
+    // Like the other settings, a change is saved as soon as it is made.
+    fields.addEventListener("change", () => {
+      status.textContent = "Saving…";
+      status.classList.remove("tool-error");
+      bridge.saveToolSettings(tool.name, JSON.stringify(toolSettingValues(fields)));
+    });
+    const actions = document.createElement("div");
+    actions.className = "tool-actions";
+    const restore = document.createElement("button");
+    restore.type = "button";
+    restore.className = "secondary restore-defaults";
+    restore.textContent = "Restore defaults";
+    restore.setAttribute("aria-label", `Restore the default ${tool.name} settings`);
+    restore.disabled = JSON.stringify(tool.settings) === JSON.stringify(tool.type_settings);
+    restore.addEventListener("click", () => {
+      status.textContent = "Saving…";
+      bridge.saveToolSettings(tool.name, JSON.stringify(tool.type_settings));
+    });
+    actions.append(restore);
+    item.append(actions, status);
+    holder.append(item);
+  }
+  applySettingsHelp(holder);
+  if (focused) holder.querySelector(`details[data-tool="${focused[0]}"] input[data-key="${focused[1]}"]`)?.focus();
+}
+
+// The core owns validation, persistence and revision. Only these editable
+// DOM controls are local to the GUI.
+let projectBehaviorData = null;
+let behaviorSave = { nextId: 0, pending: null };
+let projectPresentation = null;
+// Ready-to-send questions about the open project's sources, as
+// {intent, question}, up to three per intent, and welcome headings about
+// them; empty means none. The question_suggestions event comes just before
+// its project's "opened" event, which takes them from pending, and before
+// each new empty chat of the open project, which uses them at once.
+let sourceQuestions = [];
+let sourceWelcome = [];
+let pendingSourceQuestions = null;
+let feedbackData = { project: "", revision: "", entries: {} };
+let feedbackSave = { nextId: 0, pending: null };
+let memoryIndexState = null;
+let memorySyncPending = false;
+let memoryMessagePage = null;
+let memoryMessagesRequestedOffset = 0;
+let memoryExcludeSave = {nextId: 0, pending: null};
+let memoryNavigation = null;
+let displayedMemoryProject = "";
+let displayedMemoryRevision = "";
+
+/**
+ * Request the currently opened project's saved behavior configuration.
+ * @param force Reload even when an editor already exists.
+ */
+function requestProjectBehavior(force = false) {
+  const holder = byId("intent-settings");
+  if (!bridge || !ready || !openProjectPath) {
+    holder.textContent = "Open a project to customize its intents.";
+    projectBehaviorData = null;
+    showIndexingCapabilities();
+    showMemoryPolicy();
+    return;
+  }
+  if (!force && projectBehaviorData?.project === openProjectPath) return;
+  if (behaviorSave.pending) return;
+  if (force) {
+    projectBehaviorData = null;
+    displayedMemoryRevision = "";
+  }
+  holder.textContent = "Loading project behavior…";
+  bridge.requestProjectBehavior();
+}
+
+/**
+ * Construct a labeled form input from an effective JSON setting.
+ * @param path Dotted JSON key identifying the setting.
+ * @param title Human-readable field name.
+ * @param value Effective setting value.
+ * @param kind Field type: text, multiline, lines, number, select or checkbox.
+ * @param options Optional select choices, range, and disabled flag.
+ * @returns The labeled control container.
+ */
+function behaviorField(path, title, value, kind = "text", options = {}) {
+  const label = document.createElement("label");
+  label.className = kind === "checkbox" ? "check-row" : "behavior-field";
+  const control = kind === "lines" || kind === "multiline"
+    ? document.createElement("textarea")
+    : kind === "select" ? document.createElement("select")
+      : document.createElement("input");
+  control.dataset.behaviorPath = path;
+  control.dataset.behaviorKind = kind;
+  if (kind === "select") {
+    for (const [key, name] of options.choices || []) {
+      const choice = document.createElement("option");
+      choice.value = key;
+      choice.textContent = name;
+      control.append(choice);
+    }
+    control.value = value === null ? "inherit" : String(value);
+  } else if (kind === "checkbox") {
+    control.type = "checkbox";
+    control.checked = Boolean(value);
+  } else if (kind === "number") {
+    control.type = "number";
+    control.step = "1";
+    if (options.min !== undefined) control.min = String(options.min);
+    if (options.max !== undefined) control.max = String(options.max);
+    control.value = String(value);
+  } else if (kind === "lines") {
+    control.value = (value || []).join("\n");
+    control.rows = options.rows || 3;
+  } else {
+    control.value = value ?? "";
+    if (kind === "multiline") control.rows = options.rows || 4;
+  }
+  control.disabled = Boolean(options.disabled);
+  if (options.disabled) control.title = options.disabledMessage || "Not editable";
+  if (kind === "checkbox") label.append(control, ` ${title}`);
+  else label.append(title, control);
+  return label;
+}
+
+/**
+ * Display explicit inheritance or an override of answer guidance.
+ * @param value Effective optional intent guidance.
+ * @returns The two associated editing controls.
+ */
+function behaviorGuidance(value) {
+  const group = document.createElement("div");
+  group.className = "behavior-guidance";
+  const mode = behaviorField("_guidance_mode", "Answer guidance",
+    value === null ? "inherit" : "override", "select", {
+      choices: [["inherit", "Inherit project guidance"],
+        ["override", "Override for this intent"]],
+    });
+  const field = behaviorField("answer_guidance", "Override text", value ?? "",
+    "multiline", { rows: 4 });
+  field.querySelector("textarea").disabled = value === null;
+  mode.querySelector("select").addEventListener("change", (event) => {
+    field.querySelector("textarea").disabled = event.target.value === "inherit";
+  });
+  group.append(mode, field);
+  return group;
+}
+
+/**
+ * Turn an editor's controls into a complete JSON-compatible settings object.
+ * @param editor The editor containing dotted-path controls.
+ * @returns Current full values, excluding inactive source-first limits.
+ */
+function behaviorValues(editor) {
+  const values = JSON.parse(editor.dataset.initial);
+  for (const field of editor.querySelectorAll("[data-behavior-path]")) {
+    const path = field.dataset.behaviorPath;
+    if (path.startsWith("_")) continue;
+    const kind = field.dataset.behaviorKind;
+    if (kind === "number" && (!field.value.trim()
+        || !field.checkValidity() || !Number.isSafeInteger(Number(field.value)))) {
+      throw new Error(`${settingLabel(path.split(".").at(-1))} must be a valid whole number.`);
+    }
+    const value = kind === "checkbox" ? field.checked
+      : kind === "number" ? Number(field.value)
+        : kind === "lines" ? field.value.split("\n").map((x) => x.trim()).filter(Boolean)
+          : path === "thinking" ? field.value === "inherit" ? null : field.value === "on"
+            : field.value;
+    const segments = path.split(".");
+    const leaf = segments.pop();
+    let parent = values;
+    for (const segment of segments) parent = parent[segment] ??= {};
+    parent[leaf] = value;
+  }
+  if (editor.dataset.behaviorScope === "intent") {
+    const mode = editor.querySelector('[data-behavior-path="_guidance_mode"]');
+    if (mode?.value === "inherit") values.answer_guidance = null;
+    if (values.retrieval.mode !== "search"
+        || values.retrieval.strategy !== "source_first") {
+      for (const name of ["max_sources", "passages_per_source",
+        "max_passages", "evidence_tokens", "coverage"]) {
+        delete values.retrieval[name];
+      }
+    }
+  }
+  return values;
+}
+
+/**
+ * Show fields whose meaning depends on the selected retrieval strategy.
+ * @param editor An individual intent editor.
+ */
+function refreshBehaviorEditor(editor) {
+  if (editor.dataset.behaviorScope !== "intent") return;
+  const mode = editor.querySelector('[data-behavior-path="retrieval.mode"]');
+  const strategy = editor.querySelector('[data-behavior-path="retrieval.strategy"]');
+  const limits = editor.querySelector(".behavior-source-limits");
+  limits?.classList.toggle("hidden", mode?.value !== "search"
+    || strategy?.value !== "source_first");
+  const preview = editor.querySelector(".behavior-prompt-preview");
+  if (preview) {
+    const global = byId("intent-settings").querySelector(
+      '[data-behavior-scope="global"] [data-behavior-path="system_prompt"]');
+    const local = editor.querySelector('[data-behavior-path="system_prompt"]');
+    preview.textContent = `${global?.value || ""}\n\n${local?.value || ""}`;
+  }
+}
+
+/**
+ * Collect all field values, including incomplete drafts.
+ * @param editor The editor whose controls are captured.
+ * @returns A list of path, value snapshots.
+ */
+function behaviorFieldDraft(editor) {
+  return [...editor.querySelectorAll("[data-behavior-path]")].map((field) => ({
+    path: field.dataset.behaviorPath,
+    value: field.type === "checkbox" ? field.checked : field.value,
+  }));
+}
+
+/**
+ * Capture only dirty editors before refreshing after a different save.
+ * @returns A map from editor identity to unsaved field snapshots.
+ */
+function behaviorDrafts() {
+  const drafts = new Map();
+  for (const editor of byId("intent-settings").querySelectorAll(
+    ".behavior-editor")) {
+    const values = behaviorFieldDraft(editor);
+    if (JSON.stringify(values) !== editor.dataset.initialFields) {
+      drafts.set(`${editor.dataset.behaviorScope}:${editor.dataset.intentId}`,
+        values);
+    }
+  }
+  return drafts;
+}
+
+/**
+ * Save an independent behavior scope using the core's revision contract.
+ * @param scope Memory or intent_memory.
+ * @param intentId The owning intent ID, empty for project memory.
+ * @param values Complete scope values.
+ * @param status Result element for validation and confirmation.
+ */
+function saveMemoryBehavior(scope, intentId, values, status) {
+  if (!bridge || !ready || !projectBehaviorData
+      || projectBehaviorData.project !== openProjectPath) return;
+  if (busy || behaviorSave.pending) {
+    status.textContent = "Complete the current operation before saving.";
+    return;
+  }
+  const requestId = ++behaviorSave.nextId;
+  behaviorSave.pending = {
+    requestId, project: openProjectPath, scope, intentId,
+  };
+  status.textContent = "Saving…";
+  status.classList.remove("tool-error");
+  bridge.saveProjectBehavior(openProjectPath, scope, intentId,
+    JSON.stringify(values), projectBehaviorData.revision, requestId);
+}
+
+/**
+ * Return the memory policy currently shown in Settings.
+ * @returns Full project-level policy object.
+ */
+function memoryPolicyValues() {
+  const limits = ["max-hits", "max-tokens"].map((name) => {
+    const field = byId(`memory-${name}`);
+    if (!field.value.trim() || !field.checkValidity()
+        || !Number.isSafeInteger(Number(field.value))) {
+      throw new Error("Memory limits must be positive whole numbers.");
+    }
+    return Number(field.value);
+  });
+  return {
+    enabled: byId("memory-enabled").checked,
+    questions: byId("memory-questions").value,
+    answers: byId("memory-answers").value,
+    max_hits: limits[0], max_tokens: limits[1],
+    exclude_disliked_answers: byId("memory-exclude-disliked").checked,
+  };
+}
+
+/**
+ * Present the saved memory policy without discarding unrelated draft edits.
+ * @param draft Current unsaved settings, or null to render saved settings.
+ */
+function showMemoryPolicy(draft = null) {
+  const data = projectBehaviorData?.project === openProjectPath
+    ? projectBehaviorData.memory : null;
+  const enabled = Boolean(ready && data);
+  const ids = ["enabled", "questions", "answers", "max-hits", "max-tokens",
+    "exclude-disliked"];
+  const values = draft || data?.values;
+  const changed = displayedMemoryProject !== openProjectPath
+    || displayedMemoryRevision !== projectBehaviorData?.revision;
+  if (values && (draft || changed)) {
+    byId("memory-enabled").checked = values.enabled;
+    byId("memory-questions").value = values.questions;
+    byId("memory-answers").value = values.answers;
+    byId("memory-max-hits").value = values.max_hits;
+    byId("memory-max-tokens").value = values.max_tokens;
+    byId("memory-exclude-disliked").checked = values.exclude_disliked_answers;
+  }
+  if (data) {
+    displayedMemoryProject = openProjectPath;
+    displayedMemoryRevision = projectBehaviorData.revision;
+  }
+  for (const name of ids) byId(`memory-${name}`).disabled = !enabled || busy;
+  byId("save-memory-policy").disabled = !enabled || busy;
+  byId("reset-memory-policy").disabled = !enabled || busy
+    || JSON.stringify(data.values) === JSON.stringify(data.defaults);
+  byId("sync-memory-index").disabled = !enabled || busy
+    || !data.values.enabled || memorySyncPending;
+  if (!enabled) byId("memory-policy-status").textContent =
+    "Open a project to configure conversation memory.";
+}
+
+/**
+ * Submit project memory settings, or restore the type's packaged defaults.
+ * @param restore Whether the user selected Restore defaults.
+ */
+function saveMemoryPolicy(restore = false) {
+  const data = projectBehaviorData?.memory;
+  const status = byId("memory-policy-status");
+  if (!data) return;
+  try {
+    const values = restore ? data.defaults : memoryPolicyValues();
+    if (JSON.stringify(values) === JSON.stringify(data.values)) {
+      status.textContent = "These memory settings are already saved.";
+      return;
+    }
+    saveMemoryBehavior("memory", "", values, status);
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add("tool-error");
+  }
+}
+
+/**
+ * Construct per-intent memory controls with independent Save and Restore.
+ * @param item Validated intent editor payload.
+ * @returns Editable policy panel.
+ */
+function createIntentMemoryEditor(item) {
+  const panel = document.createElement("section");
+  panel.className = "intent-memory-editor";
+  panel.dataset.intentId = item.id;
+  panel.dataset.initial = JSON.stringify(item.memory.values);
+  const heading = document.createElement("h5");
+  heading.textContent = "Conversation memory";
+  const mode = behaviorField("indexing", "Index this intent", item.memory.values.indexing,
+    "select", { choices: [["automatic", "Use project policy"],
+      ["explicit", "Only when saved or liked"], ["never", "Never"]] });
+  const read = behaviorField("read", "Retrieve earlier memory for this intent",
+    item.memory.values.read, "checkbox");
+  const actions = document.createElement("div");
+  actions.className = "behavior-actions";
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "secondary";
+  save.textContent = "Save memory policy";
+  const restore = document.createElement("button");
+  restore.type = "button";
+  restore.className = "secondary";
+  restore.textContent = "Restore defaults";
+  restore.disabled = JSON.stringify(item.memory.values)
+    === JSON.stringify(item.memory.defaults);
+  const status = document.createElement("p");
+  status.className = "hint behavior-status";
+  status.setAttribute("role", "status");
+  const current = () => ({
+    indexing: mode.querySelector("select").value,
+    read: read.querySelector("input").checked,
+  });
+  save.addEventListener("click", () => saveMemoryBehavior(
+    "intent_memory", item.id, current(), status));
+  restore.addEventListener("click", () => saveMemoryBehavior(
+    "intent_memory", item.id, item.memory.defaults, status));
+  actions.append(save, restore);
+  panel.append(heading, mode, read, actions, status);
+  for (const field of panel.querySelectorAll("[data-behavior-path]")) {
+    field.closest("label").dataset.settingsKey =
+      `project_behavior.intents.memory.${field.dataset.behaviorPath}`;
+  }
+  applySettingsHelp(panel);
+  return panel;
+}
+
+/**
+ * Save an editor with the current project identity and optimistic revision.
+ * @param editor Editor whose values are being persisted.
+ * @param values Complete JSON settings object.
+ */
+function saveBehaviorEditor(editor, values) {
+  const status = editor.querySelector(".behavior-status");
+  if (!bridge || !ready || !projectBehaviorData
+      || projectBehaviorData.project !== openProjectPath) return;
+  if (behaviorSave.pending) {
+    status.textContent = "Complete the previous save first.";
+    return;
+  }
+  const requestId = ++behaviorSave.nextId;
+  const scope = editor.dataset.behaviorScope;
+  const intentId = editor.dataset.intentId;
+  behaviorSave.pending = { requestId, project: openProjectPath,
+    scope, intentId };
+  status.textContent = "Saving…";
+  status.classList.remove("tool-error");
+  bridge.saveProjectBehavior(openProjectPath, scope, intentId,
+    JSON.stringify(values), projectBehaviorData.revision, requestId);
+}
+
+/**
+ * Build one editable project-wide or individual-intent panel.
+ * @param scope Either global or intent.
+ * @param record Effective values, defaults, and fixed intent tool.
+ * @param id Fixed intent ID, empty for global settings.
+ * @returns The editor DOM subtree.
+ */
+function createBehaviorEditor(scope, record, id = "") {
+  const editor = document.createElement("div");
+  editor.className = "behavior-editor";
+  editor.dataset.behaviorScope = scope;
+  editor.dataset.intentId = id;
+  editor.dataset.initial = JSON.stringify(record.values);
+  const values = record.values;
+  const descriptionLabel = scope === "global"
+    ? "Project description (for routing)"
+    : "Intent description (for routing)";
+  editor.append(behaviorField("description", descriptionLabel,
+    values.description, "multiline", { rows: 3 }));
+  editor.append(behaviorField("system_prompt", "System instructions",
+    values.system_prompt, "multiline", { rows: 6,
+      disabled: Boolean(record.tool),
+      disabledMessage: "A tool produces the answer for this intent." }));
+  if (scope === "global") {
+    editor.append(
+      behaviorField("answer_guidance", "Default answer guidance",
+        values.answer_guidance, "multiline"),
+      behaviorField("retrieval_instruction", "Embedding query instruction",
+        values.retrieval_instruction, "multiline", { rows: 3 }),
+      behaviorField("history.recent_turns", "Recent conversation turns",
+        values.history.recent_turns, "number", { min: 0, max: 100 }),
+      behaviorField("default_intent", "Default intent", values.default_intent,
+        "select", { choices: projectBehaviorData.intents.map((item) =>
+          [item.id, settingLabel(item.id)]) }),
+      behaviorField("welcome_prompts", "Welcome prompts (one per line)",
+        values.welcome_prompts, "lines"),
+      behaviorField("suggestions", "Suggested questions (one per line)",
+        values.suggestions, "lines"),
+    );
+  } else {
+    editor.append(behaviorGuidance(values.answer_guidance));
+    editor.append(behaviorField("history.policy", "Conversation history",
+      values.history.policy, "select", {
+        choices: [["none", "None"], ["recent", "Recent"],
+          ["relevant", "Relevant"]],
+      }));
+    if (record.tool) {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = `Tool: ${record.tool}. Retrieval and thinking are managed by the tool.`;
+      editor.append(hint);
+    }
+    const restricted = { disabled: Boolean(record.tool) };
+    editor.append(
+      behaviorField("retrieval.mode", "Retrieval mode",
+        values.retrieval.mode, "select", { choices: [
+          ["search", "Search"], ["document", "Document"],
+          ["reuse", "Reuse evidence"], ["none", "None"]], ...restricted }),
+      behaviorField("retrieval.strategy", "Search strategy",
+        values.retrieval.strategy, "select", { choices: [
+          ["hybrid", "Hybrid"], ["source_first", "Source first"]],
+          ...restricted }),
+      behaviorField("retrieval.max_tokens", "Document token budget",
+        values.retrieval.max_tokens, "number", {
+          min: 1000, max: 200000, ...restricted }),
+      behaviorField("retrieval.include_related_evidence",
+        "Include related evidence", values.retrieval.include_related_evidence,
+        "checkbox", restricted),
+      behaviorField("retrieval.prefer_source_code", "Prefer source code",
+        values.retrieval.prefer_source_code, "checkbox", restricted),
+    );
+    const limits = document.createElement("div");
+    limits.className = "behavior-source-limits";
+    const valuesLimits = values.retrieval;
+    const defaults = record.source_first_defaults;
+    for (const [key, min, max, title] of [
+      ["max_sources", 1, 50, "Maximum sources"],
+      ["passages_per_source", 1, 10, "Passages per source"],
+      ["max_passages", 1, 200, "Maximum passages"],
+      ["evidence_tokens", 1000, 200000, "Evidence token budget"],
+    ]) {
+      limits.append(behaviorField(`retrieval.${key}`, title,
+        valuesLimits[key] ?? defaults[key], "number",
+        { min, max, ...restricted }));
+    }
+    limits.append(behaviorField("retrieval.coverage", "Coverage",
+      valuesLimits.coverage ?? defaults.coverage, "select", { choices: [
+        ["bounded", "Bounded"], ["exhaustive", "Exhaustive"]], ...restricted }));
+    editor.append(limits);
+    editor.append(behaviorField("thinking", "Thinking policy",
+      values.thinking === null ? "inherit" : values.thinking ? "on" : "off",
+      "select", { choices: [["inherit", "Inherit session setting"],
+        ["on", "On"], ["off", "Off"]], ...restricted }));
+    const advanced = document.createElement("details");
+    advanced.className = "behavior-advanced";
+    const advancedHeading = document.createElement("summary");
+    advancedHeading.textContent = "Advanced routing patterns";
+    advanced.append(advancedHeading);
+    for (const [field, title] of [["shortcuts", "Shortcuts"],
+      ["cues", "Cues"], ["requires", "Requirements"]]) {
+      advanced.append(behaviorField(field, `${title} (one regex per line)`,
+        values[field], "lines"));
+    }
+    editor.append(advanced);
+    if (!record.tool) {
+      const preview = document.createElement("details");
+      preview.className = "behavior-preview";
+      const heading = document.createElement("summary");
+      heading.textContent = "Effective system prompt preview";
+      const contents = document.createElement("pre");
+      contents.className = "behavior-prompt-preview";
+      preview.append(heading, contents);
+      editor.append(preview);
+    }
+  }
+  const actions = document.createElement("div");
+  actions.className = "behavior-actions";
+  const save = document.createElement("button");
+  save.className = "primary";
+  save.type = "button";
+  save.textContent = "Save settings";
+  const restore = document.createElement("button");
+  restore.className = "secondary";
+  restore.type = "button";
+  restore.textContent = "Restore defaults";
+  restore.disabled = JSON.stringify(record.values)
+    === JSON.stringify(record.defaults);
+  const status = document.createElement("p");
+  status.className = "hint behavior-status";
+  status.setAttribute("role", "status");
+  save.addEventListener("click", () => {
+    try { saveBehaviorEditor(editor, behaviorValues(editor)); }
+    catch (error) {
+      status.textContent = error.message;
+      status.classList.add("tool-error");
+    }
+  });
+  restore.addEventListener("click", () =>
+    saveBehaviorEditor(editor, record.defaults));
+  actions.append(save, restore);
+  editor.append(actions, status);
+  editor.addEventListener("input", () => {
+    refreshBehaviorEditor(editor);
+    if (scope === "global") {
+      for (const other of byId("intent-settings").querySelectorAll(
+        '[data-behavior-scope="intent"]')) refreshBehaviorEditor(other);
+    }
+  });
+  editor.addEventListener("change", () => refreshBehaviorEditor(editor));
+  for (const field of editor.querySelectorAll("[data-behavior-path]")) {
+    const path = field.dataset.behaviorPath === "_guidance_mode"
+      ? "answer_guidance" : field.dataset.behaviorPath;
+    field.closest("label").dataset.settingsKey =
+      `project_behavior.${scope === "global" ? "global" : "intents"}.${path}`;
+  }
+  applySettingsHelp(editor);
+  editor.dataset.initialFields = JSON.stringify(behaviorFieldDraft(editor));
+  return editor;
+}
+
+/**
+ * Render a complete project editor and correlated save acknowledgment.
+ * @param data GUI event with effective behavior or correlated error.
+ */
+function renderProjectBehavior(data) {
+  const pending = behaviorSave.pending;
+  if (data.request_id !== undefined && (!pending
+      || pending.requestId !== data.request_id
+      || (pending.project !== data.behavior?.project
+          && pending.project !== data.project))) return;
+  if (data.behavior && data.behavior.project !== openProjectPath) return;
+  if (data.request_id !== undefined) behaviorSave.pending = null;
+  if (data.error) {
+    if (data.scope === "capabilities") {
+      applyingIndexing = false;
+      setBusy(false);
+      const status = byId("index-capabilities-status");
+      status.textContent = data.error;
+      status.classList.add("tool-error");
+      showIndexingCapabilities();
+      return;
+    }
+    if (data.scope === "memory" || data.scope === "intent_memory") {
+      const status = data.scope === "memory"
+        ? byId("memory-policy-status")
+        : [...byId("intent-settings").querySelectorAll(
+          ".intent-memory-editor")].find((item) =>
+          item.dataset.intentId === data.intent_id)?.querySelector(
+            ".behavior-status");
+      if (status) {
+        status.textContent = data.error;
+        status.classList.add("tool-error");
+      }
+      return;
+    }
+    const editor = [...byId("intent-settings").querySelectorAll(
+      ".behavior-editor")].find((item) =>
+        item.dataset.behaviorScope === data.scope
+        && item.dataset.intentId === (data.intent_id || ""));
+    const status = editor?.querySelector(".behavior-status");
+    if (status) {
+      status.textContent = data.error;
+      status.classList.add("tool-error");
+    }
+    return;
+  }
+  if (!data.behavior) return;
+  const previous = projectBehaviorData?.project === openProjectPath
+    ? behaviorDrafts() : new Map();
+  let memoryDraft = null;
+  if (projectBehaviorData?.project === openProjectPath
+      && !(data.saved && data.scope === "memory")) {
+    try {
+      const current = memoryPolicyValues();
+      if (JSON.stringify(current)
+          !== JSON.stringify(projectBehaviorData.memory.values)) {
+        memoryDraft = current;
+      }
+    } catch { /* Invalid numeric drafts remain until the next valid save. */ }
+  }
+  const previousIntentMemory = new Map();
+  for (const editor of byId("intent-settings").querySelectorAll(
+    ".intent-memory-editor")) {
+    const fields = [...editor.querySelectorAll("[data-behavior-path]")].map(
+      (field) => ({ path: field.dataset.behaviorPath,
+        value: field.type === "checkbox" ? field.checked : field.value }));
+    if (JSON.stringify(Object.fromEntries(fields.map((field) =>
+      [field.path, field.value]))) !== editor.dataset.initial) {
+      previousIntentMemory.set(editor.dataset.intentId, fields);
+    }
+  }
+  const prior = projectBehaviorData;
+  projectBehaviorData = data.behavior;
+  if (data.scope === "capabilities" && data.saved) {
+    applyingIndexing = false;
+    setBusy(false);
+    const status = byId("index-capabilities-status");
+    status.textContent = "Saved. Affected indexes have been rebuilt.";
+    status.classList.remove("tool-error");
+  }
+  showIndexingCapabilities();
+  showMemoryPolicy(memoryDraft);
+  if (data.saved && data.scope === "memory") {
+    byId("memory-policy-status").textContent =
+      "Saved. Memory updates on the next eligible answer or manual update.";
+    byId("memory-policy-status").classList.remove("tool-error");
+    bridge?.requestMemoryStatus(openProjectPath);
+  }
+  const holder = byId("intent-settings");
+  const opened = new Set([...holder.querySelectorAll(
+    "details.behavior-intent[open]")].map((item) => item.dataset.intentId));
+  holder.replaceChildren();
+  const global = document.createElement("details");
+  global.className = "behavior-intent";
+  global.open = true;
+  global.dataset.intentId = "";
+  const heading = document.createElement("summary");
+  heading.textContent = "Project-wide settings";
+  global.append(heading, createBehaviorEditor("global", data.behavior.global));
+  holder.append(global);
+  const title = document.createElement("h4");
+  title.textContent = "Individual intents";
+  holder.append(title);
+  for (const item of data.behavior.intents) {
+    const section = document.createElement("details");
+    section.className = "behavior-intent";
+    section.dataset.intentId = item.id;
+    section.open = opened.has(item.id)
+      || Boolean(data.saved && data.scope === "intent"
+        && data.intent_id === item.id)
+      || Boolean(data.saved && data.scope === "intent_memory"
+        && data.intent_id === item.id);
+    const summary = document.createElement("summary");
+    const code = document.createElement("code");
+    code.textContent = item.id;
+    summary.append(code, ` — ${item.values.description}`);
+    section.append(summary, createBehaviorEditor("intent", item, item.id));
+    section.append(createIntentMemoryEditor(item));
+    holder.append(section);
+  }
+  for (const editor of holder.querySelectorAll(".intent-memory-editor")) {
+    if (data.saved && data.scope === "intent_memory"
+        && data.intent_id === editor.dataset.intentId) continue;
+    for (const field of previousIntentMemory.get(editor.dataset.intentId) || []) {
+      const control = [...editor.querySelectorAll("[data-behavior-path]")]
+        .find((item) => item.dataset.behaviorPath === field.path);
+      if (!control) continue;
+      if (control.type === "checkbox") control.checked = field.value;
+      else control.value = field.value;
+    }
+  }
+  if (prior?.project === openProjectPath) {
+    for (const editor of holder.querySelectorAll(".behavior-editor")) {
+      const key = `${editor.dataset.behaviorScope}:${editor.dataset.intentId}`;
+      if (data.saved && data.scope === editor.dataset.behaviorScope
+          && (data.intent_id || "") === editor.dataset.intentId) continue;
+      for (const field of previous.get(key) || []) {
+        const control = [...editor.querySelectorAll("[data-behavior-path]")]
+          .find((item) => item.dataset.behaviorPath === field.path);
+        if (!control) continue;
+        if (control.type === "checkbox") control.checked = field.value;
+        else control.value = field.value;
+      }
+    }
+  }
+  for (const editor of holder.querySelectorAll(".behavior-editor")) {
+    refreshBehaviorEditor(editor);
+    const mode = editor.querySelector('[data-behavior-path="_guidance_mode"]');
+    if (mode) editor.querySelector(
+      '[data-behavior-path="answer_guidance"]').disabled
+      = mode.value === "inherit";
+  }
+  if (data.saved) {
+    const editor = [...holder.querySelectorAll(".behavior-editor")]
+      .find((item) => item.dataset.behaviorScope === data.scope
+        && item.dataset.intentId === (data.intent_id || ""));
+    if (editor) editor.querySelector(".behavior-status").textContent = "Saved.";
+    if (data.scope === "intent_memory") {
+      const memoryEditor = [...holder.querySelectorAll(
+        ".intent-memory-editor")].find((item) =>
+          item.dataset.intentId === data.intent_id);
+      if (memoryEditor) memoryEditor.querySelector(".behavior-status")
+        .textContent = "Saved. Index updates on next use.";
+      bridge?.requestMemoryStatus(openProjectPath);
+    }
+    if (data.scope === "global") {
+      projectPresentation = {
+        welcome_prompts: data.behavior.global.values.welcome_prompts,
+        suggestions: data.behavior.global.values.suggestions,
+      };
+      if (conversation.querySelector(".conversation-empty"))
+        renderConversationEmpty();
+    }
+  }
+  refreshFeedbackControls();
+}
+
+/**
+ * Populate advanced Indexing controls from the effective project behavior.
+ */
+function showIndexingCapabilities() {
+  const data = projectBehaviorData?.project === openProjectPath
+    ? projectBehaviorData.capabilities : null;
+  const available = Boolean(ready && data);
+  const graph = byId("code-graph");
+  const headers = byId("document-headers");
+  const save = byId("save-index-capabilities");
+  const restore = byId("reset-index-capabilities");
+  if (data && !applyingIndexing) {
+    graph.value = data.values.code_graph === "auto" ? "auto"
+      : data.values.code_graph ? "on" : "off";
+    headers.checked = data.values.document_headers;
+  }
+  graph.disabled = !available || busy;
+  headers.disabled = !available || busy;
+  save.disabled = !available || busy;
+  restore.disabled = !available || busy || JSON.stringify(data.values)
+    === JSON.stringify(data.defaults);
+  if (!available) byId("index-capabilities-status").textContent =
+    "Open a project to edit indexing capabilities.";
+}
+
+/**
+ * Serialize the advanced indexing fields in the core's vocabulary.
+ * @returns The two capability settings.
+ */
+function indexingCapabilityValues() {
+  return {
+    code_graph: byId("code-graph").value === "auto" ? "auto"
+      : byId("code-graph").value === "on",
+    document_headers: byId("document-headers").checked,
+  };
+}
+
+/**
+ * Confirm and save index-affecting project behavior, rebuilding as needed.
+ * @param restore Restore packaged defaults rather than edited controls.
+ */
+async function saveIndexCapabilities(restore = false) {
+  const status = byId("index-capabilities-status");
+  if (!bridge || !ready || !projectBehaviorData
+      || projectBehaviorData.project !== openProjectPath) return;
+  if (busy || behaviorSave.pending) {
+    status.textContent = "Complete the current operation before saving.";
+    return;
+  }
+  const editingProject = openProjectPath;
+  const editingRevision = projectBehaviorData.revision;
+  const values = restore ? projectBehaviorData.capabilities.defaults
+    : indexingCapabilityValues();
+  if (JSON.stringify(values)
+      === JSON.stringify(projectBehaviorData.capabilities.values)) {
+    status.textContent = "These settings are already saved.";
+    return;
+  }
+  if (!await askKilin("Rebuild affected indexes?",
+    "Changing code graph or document headers requires rebuilding affected indexes. "
+      + "Your sources and conversations are preserved.",
+    "Save and rebuild")) {
+    showIndexingCapabilities();
+    return;
+  }
+  if (!ready || busy || !projectBehaviorData
+      || openProjectPath !== editingProject
+      || projectBehaviorData.project !== editingProject
+      || projectBehaviorData.revision !== editingRevision) return;
+  const requestId = ++behaviorSave.nextId;
+  behaviorSave.pending = { requestId, project: openProjectPath,
+    scope: "capabilities", intentId: "" };
+  applyingIndexing = true;
+  setBusy(true, "Rebuilding the index…");
+  status.textContent = "Saving capabilities and rebuilding the index…";
+  bridge.saveProjectBehavior(openProjectPath, "capabilities", "",
+    JSON.stringify(values), projectBehaviorData.revision, requestId);
 }
 
 /**
@@ -865,14 +2518,36 @@ function restoreDefaultModels(role) {
  */
 function openModels() {
   if (byId("models-panel").classList.contains("hidden")) {
+    clearSettingsStatus();
+    // An open project's saved values, not an edit left unsaved earlier.
+    if (ready && profile) showIndexingFields();
     draftLevels = cloneLevels(currentLevels());
     draftDepth = [...currentDepth()];
     draftRouter = currentRouter();
     modelsBaseline = currentModelSettings();
   }
   renderModelsPanel();
+  showProjectSettings();
+  // The Tools tab may still be selected from another project.
+  if (settingsTab === "tools") requestToolSettings();
+  if (["intents", "indexing", "memory"].includes(settingsTab)) {
+    requestProjectBehavior();
+  }
+  if (settingsTab === "memory" && bridge && ready && openProjectPath) {
+    bridge.requestMemoryStatus(openProjectPath);
+    requestMemoryMessages();
+  }
   byId("models-panel").classList.remove("hidden");
   byId("close-models").focus();
+}
+
+/**
+ * Clear the message under the tabs, so it only ever answers the last
+ * action; one still in progress (a download or a rebuild) is kept.
+ */
+function clearSettingsStatus() {
+  if (downloadingModel || applyingModels || applyingIndexing) return;
+  byId("model-download-status").textContent = "";
 }
 
 /**
@@ -907,6 +2582,7 @@ function modelEditsPending() {
  * Close the model settings panel and refresh source-drop bounds.
  */
 function hideModels() {
+  dismissSettingsHelp();
   setupCompletionVisible = false;
   byId("models-panel").classList.add("hidden");
   syncSourceDropTarget();
@@ -935,21 +2611,21 @@ function levelProblem(levels, depth) {
  * @param closeAfter Whether to close Settings after applying the changes.
  * @param explicitDownload Model ID to download, or null for ordinary edits.
  */
-function applyModelEdits(closeAfter = false, explicitDownload = null) {
-  if (busy || !bridge) return;
+async function applyModelEdits(closeAfter = false, explicitDownload = null) {
+  if (busy || !bridge) return false;
   const settings = currentModelSettings();
   const before = modelsBaseline || settings;
   const changed = modelEditsPending();
-  if (!changed && !explicitDownload) { if (closeAfter) hideModels(); return; }
+  if (!changed && !explicitDownload) { if (closeAfter) hideModels(); return false; }
   const problem = levelProblem(settings.effort_levels, settings.search_depth);
   if (problem) {
     byId("model-download-status").textContent = problem;
-    return;
+    return false;
   }
   for (const level of settings.effort_levels) level.name = level.name.trim();
   if (!settings.chat_model || !settings.embedding_model) {
     byId("model-download-status").textContent = "Choose language and embedding models.";
-    return;
+    return false;
   }
   const requested = [...new Set([settings.embedding_model,
     ...settings.effort_levels.map((level) => level.model),
@@ -959,28 +2635,381 @@ function applyModelEdits(closeAfter = false, explicitDownload = null) {
   const reindex = ready && (settings.embedding_model !== before.embedding_model
     || settings.query_format !== before.query_format);
   const warnings = [];
-  if (missing.some((id) => id !== explicitDownload)) warnings.push(`These models need to download, which may take a while:\n${missing.join("\n")}`);
-  if (reindex) warnings.push("Changing the embedding model or query format will rebuild this project's index. Your saved chats will be kept.");
-  if (warnings.length && !confirm(`${warnings.join("\n\n")}\n\nProceed?`)) return;
+  if (missing.some((id) => id !== explicitDownload)) warnings.push(`KíLín downloads ${missing.join(", ")}, which may take a while.`);
+  if (reindex) warnings.push("KíLín rebuilds this project's index; saved chats are kept.");
+  if (warnings.length && (!await askKilin("Apply model settings?", warnings.join(" "), "Apply") || busy)) return false;
   applyingModels = true;
   closeAfterModelsApply = closeAfter;
   error.classList.add("hidden");
   byId("model-download-status").textContent = reindex ? "Applying models and rebuilding the index…" : "Applying model settings…";
   setBusy(true, byId("model-download-status").textContent);
   bridge.applyModelSettings(JSON.stringify({ ...settings, download: missing.length > 0 }));
+  return true;
 }
+
 /**
- * Close Settings if possible, applying confirmed edits when idle.
+ * Save a Models or Search depth change as soon as it is made, so Settings
+ * always shows what is in effect. A refused or cancelled change (for
+ * example a download the user declines) puts the saved values back.
  */
-function closeModels() {
-  if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
+async function saveModelEdits() {
+  if (!modelEditsPending()) return;
+  if (!ready) return keepNewProjectModels();
   if (busy) {
-    // Nothing to apply: just close. Edits wait until KíLín is idle.
-    if (!modelEditsPending()) hideModels();
-    else byId("model-download-status").textContent = "KíLín is busy. Close Settings again when it finishes to apply your changes.";
+    byId("model-download-status").textContent = "KíLín is busy. Change this again when it finishes.";
+  } else if (await applyModelEdits()) {
     return;
   }
-  applyModelEdits(true);
+  const problem = byId("model-download-status").textContent;
+  showSavedModels();
+  byId("model-download-status").textContent = problem;
+}
+
+/**
+ * Keep start-screen model choices on the page for the next new project,
+ * which saves them in its own profile.ini. Nothing is written before a
+ * project exists, so the next new project starts from the defaults again.
+ */
+function keepNewProjectModels() {
+  const problem = levelProblem(draftLevels, draftDepth);
+  if (problem) {
+    showSavedModels();
+    byId("model-download-status").textContent = problem;
+    return;
+  }
+  savedLevels = { ...savedLevels, [activeBackend]: cloneLevels(draftLevels) };
+  savedRouters = { ...savedRouters, [activeBackend]: draftRouter };
+  savedDepth = [...draftDepth];
+  saveModelFields();
+  modelsBaseline = currentModelSettings();
+  refreshRestoreButtons();
+  byId("model-download-status").textContent = "Kept for the new project.";
+}
+
+/**
+ * Download one model from the start screen, saving no settings.
+ *
+ * @param id Model identifier to download.
+ */
+function downloadModelOnly(id) {
+  if (busy || !bridge) return;
+  downloadingModel = id;
+  setBusy(true, `Downloading ${id}…`);
+  bridge.downloadModel(id);
+}
+
+/**
+ * Put the saved model choices and search depth back into Settings.
+ */
+function showSavedModels() {
+  draftLevels = cloneLevels(currentLevels());
+  draftDepth = [...currentDepth()];
+  draftRouter = currentRouter();
+  if (modelsBaseline) {
+    byId("embedding-model").value = modelsBaseline.embedding_model;
+    byId("query-format").value = modelsBaseline.query_format;
+  }
+  if (draftLevels.length) byId("chat-model").value = draftLevels[DEFAULT_LEVEL].model;
+  renderModelsPanel();
+}
+
+/**
+ * Update one required model's line in the KíLín setup steps.
+ *
+ * @param modelId Model whose line to update; unknown models are ignored.
+ * @param text New text, such as "Downloading: <model> · 40%".
+ * @param complete Whether the model is now ready.
+ */
+function showModelStep(modelId, text, complete = false) {
+  const item = [...byId("readiness-steps").children]
+    .find((step) => step.dataset.model === modelId);
+  if (!item) return;
+  item.textContent = text;
+  item.classList.toggle("complete", complete);
+}
+
+/**
+ * Show the terms of use in KíLín setup, one paragraph per blank-line block.
+ *
+ * @param text Terms of use from the readiness check.
+ */
+function renderTerms(text) {
+  const host = byId("terms-text");
+  // Readiness is checked often; keep the reader's place in unchanged terms.
+  if (host.dataset.shown === text) return;
+  host.dataset.shown = text;
+  host.replaceChildren(...text.split(/\n\s*\n/).filter(Boolean).map((block) => {
+    const paragraph = document.createElement("p");
+    // A short lead such as "Research software." is the paragraph's title.
+    const [, lead, rest] = block.trim().match(/^([^.]{1,40}\.)\s+(.*)$/s) || [];
+    if (lead && lead.split(" ").length <= 5) {
+      const title = document.createElement("strong");
+      title.textContent = lead;
+      paragraph.append(title, ` ${rest}`);
+    } else {
+      paragraph.textContent = block.trim();
+    }
+    return paragraph;
+  }));
+}
+
+/**
+ * Show the welcome dialog with the terms of use. Until they are accepted it
+ * cannot be dismissed; afterwards it only shows them again.
+ */
+function showWelcome() {
+  const dialog = byId("welcome");
+  // Do not erase a checked agreement after a failed save: retry is allowed.
+  if (termsAccepted) byId("terms-agree").checked = true;
+  byId("terms-agree").closest("label").classList.toggle("hidden", termsAccepted);
+  byId("welcome-hint").classList.add("hidden");
+  showSetupConfirmations();
+  if (dialog.open) return;
+  dialog.showModal();
+  // Opening focuses "Read the full terms of use"; the dialog takes it.
+  dialog.focus?.();
+}
+
+/**
+ * Display a recoverable save error inside the non-dismissible terms dialog.
+ *
+ * @param message Message to display, or an empty string to clear it.
+ */
+function setWelcomeError(message) {
+  const host = byId("welcome-error");
+  host.textContent = message;
+  host.classList.toggle("hidden", !message);
+}
+
+/**
+ * Answer an attempt to leave the welcome dialog before the terms are
+ * accepted: scroll to its end and say what is still needed there.
+ */
+function remindWelcome() {
+  const dialog = byId("welcome");
+  const hint = byId("welcome-hint");
+  hint.classList.remove("hidden");
+  dialog.scrollTo?.({ top: dialog.scrollHeight, behavior: "smooth" });
+  byId("terms-agree").focus?.({ preventScroll: true });
+  drawAttention(hint);
+}
+
+/**
+ * Show Confirm projects folder until it is done, and enable Continue in the
+ * welcome dialog. The folder is confirmed only on the start screen.
+ */
+function showSetupConfirmations() {
+  const confirm = byId("confirm-workspace");
+  confirm.classList.toggle("hidden", folderConfirmed);
+  byId("confirm-workspace-note").classList.toggle("hidden", folderConfirmed);
+  confirm.disabled = busy || ready || !bridge;
+  confirm.title = ready ? "Confirm it from the start screen." : "";
+  // Continue needs the box ticked; Close needs no additional confirmation.
+  const continueButton = byId("accept-terms");
+  continueButton.textContent = termsAccepted ? "Close"
+    : acceptingTerms ? "Saving agreement…" : "Continue";
+  continueButton.disabled = !termsAccepted
+    && (acceptingTerms || !bridge || !termsVersion || !byId("terms-agree").checked);
+}
+
+/**
+ * Show the setup buttons, Close and Prepare project for the current setup
+ * state: while the required models download, Install becomes Stop and
+ * new-project preparation waits for setup. Settings can always close.
+ */
+function showSetupLock() {
+  const install = byId("install-required");
+  install.textContent = installingModels ? "Stop downloading" : "Install required models";
+  install.disabled = installingModels ? false : busy || !readinessEnvironmentReady || !readinessMissingCount;
+  byId("use-installed").disabled = busy || !readinessEnvironmentReady;
+  byId("use-legacy-workspace").disabled = busy || ready;
+  byId("open").disabled = busy || !bridge || !kilinReady;
+  byId("close-models").disabled = false;
+  byId("close-models").title = "";
+  showSetupConfirmations();
+}
+
+/**
+ * Require the selected default backend and models only for new projects.
+ *
+ * @returns Whether new-project setup still needs to be finished.
+ */
+function needsNewProjectSetup() {
+  if (kilinReady) return false;
+  openModels();
+  byId("first-run-setup").open = true;
+  byId("model-download-status").textContent = "Finish KíLín setup before preparing a new project.";
+  return true;
+}
+
+/**
+ * Keep Settings open and point to the projects folder or terms of use that
+ * KíLín setup still needs.
+ */
+function remindSetupConfirmations() {
+  byId("first-run-setup").open = true;
+  if (!termsAccepted) showWelcome();
+  else pointToProjectsFolder();
+  byId("model-download-status").textContent = !folderConfirmed && !termsAccepted
+    ? "Confirm the projects folder and accept the terms of use to continue."
+    : !folderConfirmed
+      ? "Confirm the projects folder to continue."
+      : "Accept the terms of use to continue.";
+  shownSetupReminder = byId("model-download-status").textContent;
+  // The terms have their own reminder in the welcome dialog.
+  if (termsAccepted) drawAttention(byId("model-download-status"));
+}
+
+/**
+ * Remove the setup reminder and its highlights once it no longer applies.
+ *
+ * The status line is cleared only while it still shows the reminder, so a
+ * later message there (such as download progress) stays.
+ */
+function clearSetupReminder() {
+  const status = byId("model-download-status");
+  if (shownSetupReminder && status.textContent === shownSetupReminder) {
+    status.textContent = "";
+  }
+  shownSetupReminder = "";
+  status.classList.remove("attention");
+  byId("confirm-workspace").classList.remove("attention");
+}
+
+/**
+ * Bring the Confirm projects folder button into view and highlight it.
+ */
+function pointToProjectsFolder() {
+  const confirm = byId("confirm-workspace");
+  confirm.scrollIntoView?.({ block: "center" });
+  confirm.focus?.({ preventScroll: true });
+  drawAttention(confirm);
+}
+
+/**
+ * Briefly highlight an element (see `.attention` in the styles).
+ * The class is removed when the animation ends; left on, it would replay
+ * whenever the element is shown again, such as when a project opens.
+ * @param element Button or message to point to.
+ * @param then Called once the highlight has ended, if given.
+ */
+function drawAttention(element, then) {
+  // Restarting the animation highlights again on every reminder.
+  element.classList.remove("attention");
+  void element.offsetWidth;
+  element.classList.add("attention");
+  const finish = (event) => {
+    // Animations of child elements bubble up; wait for this one.
+    if (event.target !== element) return;
+    element.removeEventListener("animationend", finish);
+    element.classList.remove("attention");
+    then?.();
+  };
+  element.addEventListener("animationend", finish);
+}
+
+/**
+ * After an assistant_guide answer, which explains how to add files, flash
+ * the composer's + button and then the sources folder in the Workspace
+ * panel.
+ * @param turn The finished turn.
+ */
+function pointToSourceControls(turn) {
+  const parameters = turn.parameters || {};
+  if (parameters.tool?.name !== "assistant_guide") return;
+  const attach = byId("attach-button");
+  // Looked up when its turn comes: the file tree may be redrawn meanwhile.
+  const flashSources = () => {
+    const sources = byId("workspace-source-drop");
+    if (sources) drawAttention(sources);
+  };
+  if (attach) drawAttention(attach, flashSources);
+  else flashSources();
+}
+
+/**
+ * Close Settings; every change has been saved when it was made. Until the
+ * projects folder and terms of use are confirmed, Settings stays open.
+ */
+function closeModels() {
+  if (!folderConfirmed || !termsAccepted) return remindSetupConfirmations();
+  if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
+  // A save still running closes Settings once it is done.
+  if (applyingModels) closeAfterModelsApply = true;
+  else hideModels();
+}
+
+/**
+ * Return the open project's changed indexing settings, or null for none.
+ *
+ * The index records these, so changing any of them rebuilds it.
+ *
+ * @returns Changed values by profile key, or null.
+ */
+function indexingEdits() {
+  if (!ready || !profile) return null;
+  // The field lists only the types beyond the ones KíLín reads anyway.
+  const extensions = [...new Set([
+    ...profile.extensions.filter((extension) => supportedExtensions.has(extension)),
+    ...fileTypes(),
+  ])];
+  const values = {
+    extensions,
+    max_file_bytes: Number(byId("max-file-bytes").value),
+    target_tokens: Number(byId("target-tokens").value),
+    max_tokens: Number(byId("max-tokens").value),
+    overlap_tokens: Number(byId("overlap-tokens").value),
+  };
+  const same = (key, value) => (key === "extensions"
+    ? JSON.stringify([...value].sort()) === JSON.stringify([...profile[key]].sort())
+    : value === profile[key]);
+  const edits = Object.fromEntries(Object.entries(values).filter(([key, value]) => !same(key, value)));
+  return Object.keys(edits).length ? edits : null;
+}
+
+/**
+ * Explain the first invalid indexing value, or return an empty string.
+ */
+function indexingProblem() {
+  const [size, target, most, overlap] = ["max-file-bytes", "target-tokens", "max-tokens", "overlap-tokens"]
+    .map((id) => Number(byId(id).value));
+  if (!Number.isInteger(size) || size < 1) return "The maximum file size must be a whole number of bytes.";
+  if (!Number.isInteger(target) || target < 1) return "Target chunk tokens must be a whole number of at least 1.";
+  if (!Number.isInteger(most) || most < target) return "Maximum chunk tokens must be at least the target.";
+  if (!Number.isInteger(overlap) || overlap < 0 || overlap >= target) return "Overlap tokens must be below the target.";
+  return "";
+}
+
+/**
+ * Save an open project's indexing edit once it is entered and the user
+ * agrees to rebuild, so the fields always show the settings in effect.
+ * The engine reopens the project, which rebuilds its index; a refused or
+ * cancelled value is put back. On the start screen it is only checked.
+ *
+ * @param event The field's blur event.
+ */
+async function saveIndexingEdits(event) {
+  if (!ready) return keepNewProjectValue(event?.target, indexingProblem());
+  const edits = indexingEdits();
+  if (!edits) return;
+  const problem = busy ? "KíLín is busy. Change this again when it finishes." : indexingProblem();
+  if (problem) {
+    byId("model-download-status").textContent = problem;
+    showIndexingFields();
+    return;
+  }
+  if (!await askKilin(
+    "Rebuild the index?",
+    "The new value takes effect once the project's index is rebuilt from its files. That takes seconds for a few files and can take several minutes for a large project.",
+    "Rebuild",
+  )) {
+    showIndexingFields();
+    return;
+  }
+  applyingIndexing = true;
+  setBusy(true, "Rebuilding the index…");
+  byId("model-download-status").textContent = "Applying indexing settings and rebuilding the index…";
+  bridge.applyIndexingSettings(JSON.stringify(edits));
 }
 
 /**
@@ -1094,21 +3123,27 @@ function showSettings(data) {
   else if (remembered && remembered !== "system") applyAppearance(remembered);
   renderProjectTypes(data.project_types);
   modelRoles = data.model_roles || modelRoles;
+  thinkingSwitches = data.thinking_switches || thinkingSwitches;
   automaticBackend = data.backend;
   cachedModels = new Set(data.cached_models);
   modelChoices = data.model_choices || [];
   installedBackends = data.installed_backends || {};
   supportedExtensions = new Set(data.supported_extensions);
   closeModelMenus();
-  byId("backend").value = profile.backend;
+  // Saved projects use their profile; new projects use the last
+  // acknowledged user preference, independently of the automatic policy.
+  confirmedBackendPreference = data.backend_preference || "auto";
+  byId("backend").value = data.workspace ? profile.backend
+    : confirmedBackendPreference;
   byId("query-format").value = profile.query_format;
-  byId("extensions").value = profile.extensions.filter((extension) => !supportedExtensions.has(extension)).join(", ");
-  for (const key of ["max_file_bytes", "target_tokens", "max_tokens", "overlap_tokens", "temperature", "max_new_tokens"]) {
-    if (ready && ["temperature", "max_new_tokens"].includes(key)) continue;
-    byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
+  showIndexingFields();
+  const keepAnswers = ready || answerSettingsEdited;
+  for (const key of ["temperature", "max_new_tokens"]) {
+    if (!keepAnswers) byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
   }
-  if (!ready) byId("thinking").checked = profile.thinking;
+  if (!keepAnswers) byId("thinking").checked = profile.thinking;
   showModelFields();
+  if (data.source_cards) showSourceCardSettings(data.source_cards);
   if (data.workspace) {
     byId("workspace-location").textContent = data.workspace;
     renderWorkspace(data.workspace_files);
@@ -1117,21 +3152,35 @@ function showSettings(data) {
 }
 
 /**
+ * Show the profile's indexing settings in the Indexing tab.
+ */
+function showIndexingFields() {
+  byId("extensions").value = profile.extensions.filter((extension) => !supportedExtensions.has(extension)).join(", ");
+  for (const key of ["max_file_bytes", "target_tokens", "max_tokens", "overlap_tokens"]) {
+    byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
+  }
+  showIndexingCapabilities();
+  showMemoryPolicy();
+}
+
+/**
  * Collect preparation settings and selected file-type/size adjustments.
  * @returns Preparation settings object for the engine.
  */
 function collectSettings() {
   // Preparation settings may require a model reload or index rebuild.
-  // Answer-time controls are sent only with the question below.
   saveModelFields();
   return {
+    ...newProjectAnswerSettings(),
     backend: byId("backend").value,
     _gui_effort_levels: { [activeBackend]: cloneLevels(currentLevels()) },
     _gui_search_depth: [...currentDepth()],
+    _gui_router_models: { [activeBackend]: currentRouter() },
+    _gui_source_cards: sourceCardValues(),
     chat_mlx: profile.chat_mlx, chat_torch: profile.chat_torch,
     embedding_mlx: profile.embedding_mlx, embedding_torch: profile.embedding_torch,
     query_format: byId("query-format").value,
-    extensions: [...new Set([...profile.extensions, ...fileTypes()])],
+    extensions: projectFileTypes(),
     max_file_bytes: selectedFileSizeLimit(),
     target_tokens: Number(byId("target-tokens").value),
     max_tokens: Number(byId("max-tokens").value),
@@ -1139,6 +3188,348 @@ function collectSettings() {
     // Models are downloaded from Settings, never silently while preparing.
     allow_download: false,
   };
+}
+
+/**
+ * Display the core-owned card policy and independent backend models.
+ * @param settings Validated settings supplied by the engine.
+ */
+function showSourceCardSettings(settings) {
+  sourceCardSettings = JSON.parse(JSON.stringify(settings));
+  byId("source-card-enabled").checked = settings.policy.enabled;
+  byId("source-card-automatic").checked = settings.policy.automatic;
+  byId("source-card-kind").value = settings.policy.kind || "";
+  byId("source-card-mlx").value = settings.models.mlx.model_id;
+  byId("source-card-torch").value = settings.models.torch.model_id;
+  const model = settings.models[activeBackend] || settings.models.mlx;
+  byId("source-card-thinking").checked = model.thinking;
+  byId("source-card-temperature").value = model.temperature;
+  byId("source-card-input").value = model.max_input_tokens;
+  byId("source-card-output").value = model.max_new_tokens;
+  byId("regenerate-source-cards").disabled = !ready || !settings.policy.enabled;
+}
+
+/**
+ * Read source-card controls, with shared inference parameters per backend.
+ * @returns Complete request for the core-owned settings validator.
+ */
+function sourceCardValues() {
+  const common = {
+    thinking: byId("source-card-thinking").checked,
+    temperature: Number(byId("source-card-temperature").value),
+    max_input_tokens: Number(byId("source-card-input").value),
+    max_new_tokens: Number(byId("source-card-output").value),
+  };
+  return {
+    policy: {
+      enabled: byId("source-card-enabled").checked,
+      kind: byId("source-card-kind").value || null,
+      automatic: byId("source-card-automatic").checked,
+    },
+    models: {
+      mlx: { ...common, model_id: byId("source-card-mlx").value.trim() },
+      torch: { ...common, model_id: byId("source-card-torch").value.trim() },
+    },
+  };
+}
+
+/**
+ * Reject malformed numerical card settings before submitting them to core.
+ * @returns Error message, or an empty string for valid values.
+ */
+function sourceCardProblem() {
+  const config = sourceCardValues();
+  if (!config.models.mlx.model_id || !config.models.torch.model_id) {
+    return "Choose valid MLX and PyTorch source-card model identifiers.";
+  }
+  const value = config.models.mlx;
+  if (!Number.isFinite(value.temperature) || value.temperature < 0
+      || byId("source-card-temperature").value.trim() === "") {
+    return "Source-card temperature must be finite and nonnegative.";
+  }
+  for (const key of ["max_input_tokens", "max_new_tokens"]) {
+    if (!Number.isInteger(value[key]) || value[key] < 1
+        || value[key] > 200000) {
+      return "Source-card token limits must be between 1 and 200,000.";
+    }
+  }
+  if (config.policy.enabled && !config.policy.kind) {
+    return "Choose a registered card kind when cards are enabled.";
+  }
+  return "";
+}
+
+/**
+ * Report valid, excluded, failed and embedded cards from current indexing.
+ * @param summary Core-provided persisted card outcome counts.
+ */
+function showSourceCardSummary(summary) {
+  if (!summary) return;
+  byId("source-card-summary").textContent =
+    `${summary.valid} valid · ${summary.not_applicable} ineligible · `
+    + `${summary.failed} failed · ${summary.embedded} embedded `
+    + `(${summary.total} recorded)`;
+}
+
+/**
+ * Persist card settings independently of normal model and index settings.
+ */
+function saveSourceCardSettings() {
+  if (!bridge || busy) return;
+  const problem = sourceCardProblem();
+  if (problem) {
+    byId("model-download-status").textContent = problem;
+    return;
+  }
+  if (!ready) {
+    sourceCardSettings = sourceCardValues();
+    byId("model-download-status").textContent =
+      "Source-card settings kept for the new project.";
+    return;
+  }
+  applyingSourceCards = true;
+  setBusy(true, "Updating source-card settings…");
+  bridge.saveSourceCardSettings(JSON.stringify(sourceCardValues()));
+}
+
+/**
+ * Request fresh cards only after confirmation; never rebuild chunk indexes.
+ */
+async function regenerateSourceCards() {
+  if (!ready || !bridge || busy) return;
+  if (!await askKilin(
+    "Regenerate source cards?",
+    "This replaces derived card summaries using the saved generation "
+      + "model. Original sources and passage indexes are unchanged.",
+    "Regenerate",
+  )) return;
+  applyingSourceCards = true;
+  setBusy(true, "Regenerating source cards…");
+  bridge.regenerateSourceCards();
+}
+
+/**
+ * Return the most recently verified project-wide answer settings.
+ * @returns Temperature, Thinking, and answer-token limit.
+ */
+function confirmedAnswerSettings() {
+  return { ...savedAnswerNumbers, thinking: savedAnswerThinking };
+}
+
+/**
+ * Compare two complete answer-settings snapshots.
+ * @param left First settings object.
+ * @param right Second settings object.
+ * @returns Whether every setting is equal.
+ */
+function sameAnswerSettings(left, right) {
+  return left.temperature === right.temperature
+    && left.thinking === right.thinking
+    && left.max_new_tokens === right.max_new_tokens;
+}
+
+/**
+ * Restore the actual or most recently verified values in both controls.
+ * @param settings Complete answer-settings snapshot.
+ */
+function displayAnswerSettings(settings) {
+  byId("temperature").value = settings.temperature;
+  byId("max-new-tokens").value = settings.max_new_tokens ?? "";
+  byId("thinking").checked = settings.thinking;
+  renderEffortPicker();
+}
+
+/**
+ * Adopt the configuration reported by the engine after opening a project.
+ * @param settings Complete settings from the opened project.
+ */
+function resetAnswerSettings(settings) {
+  savedAnswerNumbers = {
+    temperature: settings.temperature,
+    max_new_tokens: settings.max_new_tokens ?? null,
+  };
+  savedAnswerThinking = settings.thinking;
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  answerSettingsSave.uncertain = false;
+  displayAnswerSettings(confirmedAnswerSettings());
+  updateSendButton();
+}
+
+/**
+ * Save an entire snapshot, or retain its latest version while saving.
+ *
+ * Only the engine's acknowledgement advances confirmed settings. A request
+ * includes the current project so that late replies cannot affect another.
+ *
+ * @param settings Valid, complete answer settings.
+ */
+function queueAnswerSettings(settings) {
+  if (!ready || !bridge || !openProjectPath) return;
+  if (answerSettingsSave.uncertain) {
+    displayAnswerSettings(confirmedAnswerSettings());
+    byId("model-download-status").textContent =
+      "Reopen the project to verify its answer settings.";
+    return;
+  }
+  if (answerSettingsSave.pending) {
+    answerSettingsSave.queued = settings;
+    byId("model-download-status").textContent =
+      "Saving answer settings… latest edits queued.";
+    updateSendButton();
+    return;
+  }
+  if (sameAnswerSettings(settings, confirmedAnswerSettings())) return;
+  const request = {
+    id: ++answerSettingsSave.nextId,
+    project: openProjectPath,
+    settings,
+  };
+  answerSettingsSave.pending = request;
+  byId("model-download-status").textContent = "Saving answer settings…";
+  updateSendButton();
+  bridge.saveAnswerSettings(JSON.stringify({
+    request_id: request.id,
+    project: request.project,
+    settings: request.settings,
+  }));
+}
+
+/**
+ * Check whether an asynchronous save result belongs to this project.
+ * @param data Engine acknowledgement or operation-specific failure.
+ * @returns Whether it matches the active request and project.
+ */
+function matchesAnswerSettingsSave(data) {
+  const pending = answerSettingsSave.pending;
+  return pending !== null && data.request_id === pending.id
+    && data.project === pending.project && data.project === openProjectPath;
+}
+
+/**
+ * Confirm a successful write, then send only the latest queued edit.
+ * @param data Saved settings and correlated request identity.
+ */
+function answerSettingsSaved(data) {
+  if (!matchesAnswerSettingsSave(data)) return;
+  savedAnswerNumbers = {
+    temperature: data.temperature,
+    max_new_tokens: data.max_new_tokens ?? null,
+  };
+  savedAnswerThinking = data.thinking;
+  const queued = answerSettingsSave.queued;
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  if (queued && !sameAnswerSettings(queued, confirmedAnswerSettings())) {
+    queueAnswerSettings(queued);
+    return;
+  }
+  byId("model-download-status").textContent =
+    "Saved in profile.ini. The next answer uses it.";
+  updateSendButton();
+}
+
+/**
+ * Recover the saved profile on failure and discard all unconfirmed edits.
+ *
+ * If the engine could not reread the file and update the live chat, the
+ * project must be reopened before answering again.
+ *
+ * @param data Failure, verified profile (if available), and request identity.
+ */
+function answerSettingsFailed(data) {
+  if (!matchesAnswerSettingsSave(data)) return;
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  answerSettingsSave.uncertain = data.verified !== true;
+  if (!answerSettingsSave.uncertain) {
+    savedAnswerNumbers = {
+      temperature: data.temperature,
+      max_new_tokens: data.max_new_tokens ?? null,
+    };
+    savedAnswerThinking = data.thinking;
+  }
+  displayAnswerSettings(confirmedAnswerSettings());
+  const message = answerSettingsSave.uncertain
+    ? `${data.message} Reopen the project to verify its answer settings.`
+    : data.message;
+  byId("model-download-status").textContent = message;
+  error.textContent = message;
+  error.classList.remove("hidden");
+  updateSendButton();
+}
+
+/**
+ * Validate the Answers numbers, then save them with the current Thinking.
+ *
+ * The start screen retains these values for project creation. While an
+ * existing project's save is pending, later changes replace the queued
+ * snapshot rather than starting a second write.
+ *
+ * @param event Change event for an answer number, if any.
+ */
+function saveAnswerNumbers(event) {
+  const temperature = Number(byId("temperature").value);
+  const tokens = byId("max-new-tokens").value.trim();
+  const maxNewTokens = tokens ? Number(tokens) : null;
+  const invalid = !byId("temperature").value.trim() || !Number.isFinite(temperature) || temperature < 0
+    ? "Choose a temperature of zero or higher."
+    : tokens && (!Number.isInteger(maxNewTokens) || maxNewTokens < 1)
+      ? "Choose a positive answer-token limit or leave it blank."
+      : "";
+  if (!ready) return keepNewProjectValue(event?.target, invalid);
+  const problem = invalid || (busy ? "KíLín is busy. Change this again when it finishes." : "");
+  if (problem) {
+    byId("model-download-status").textContent = problem;
+    const last = answerSettingsSave.queued
+      || answerSettingsSave.pending?.settings
+      || confirmedAnswerSettings();
+    byId("temperature").value = last.temperature;
+    byId("effort-temperature").value = last.temperature;
+    byId("max-new-tokens").value = last.max_new_tokens ?? "";
+    return;
+  }
+  queueAnswerSettings({
+    temperature, max_new_tokens: maxNewTokens,
+    thinking: byId("thinking").checked,
+  });
+  byId("effort-temperature").value = byId("temperature").value;
+}
+
+/**
+ * Return the Answers settings for a new project, so its profile starts
+ * with them; later changes are saved when a question is asked.
+ *
+ * @returns ``thinking``, plus ``temperature`` and ``max_new_tokens`` when
+ *   valid ("none" for a blank token limit); invalid values are left out so
+ *   the project keeps its defaults.
+ */
+function newProjectAnswerSettings() {
+  const settings = { thinking: byId("thinking").checked };
+  const temperature = Number(byId("temperature").value);
+  if (byId("temperature").value.trim() && Number.isFinite(temperature) && temperature >= 0) {
+    settings.temperature = temperature;
+  }
+  const tokens = byId("max-new-tokens").value.trim();
+  if (!tokens) settings.max_new_tokens = "none";
+  else if (Number.isInteger(Number(tokens)) && Number(tokens) > 0) settings.max_new_tokens = Number(tokens);
+  return settings;
+}
+
+/**
+ * Tell whether the workspace tree shows a file.
+ *
+ * The core keeps a lock file next to each open conversation, so that only
+ * one window writes it, and macOS adds .DS_Store files to folders it shows
+ * in Finder. Neither is the user's file, so both are hidden.
+ *
+ * @param path Workspace-relative file path reported by the backend.
+ * @returns False for a conversation lock under logs/ or a .DS_Store file,
+ *   true otherwise.
+ */
+function shownInWorkspace(path) {
+  if (path.split("/").pop() === ".DS_Store") return false;
+  return !(path.startsWith("logs/") && path.endsWith(".json.lock"));
 }
 
 /**
@@ -1150,12 +3541,14 @@ function renderWorkspace(paths) {
   workspacePaths = new Set(paths);
   const host = byId("workspace-tree");
   host.replaceChildren();
-  const root = fileTree(paths);
-  const selected = new Set(paths);
+  // The core lists every file; the tree leaves out conversation locks.
+  const root = fileTree(paths.filter(shownInWorkspace));
   // Every folder comes from the core's actual workspace inventory.
   for (const [name, node] of [...root.directories].sort()) {
     const files = allFiles(node);
-    const item = branch(name, node, files, selected);
+    // Plain rows: the delete button added below must not act as a label's
+    // control, or clicking a file's name would also ask to delete it.
+    const item = branch(name, node, files, new Set(), 0, null, {}, false);
     // Sources and outputs start open; the other folders stay folded.
     const key = `${name}|${files[0] || ""}`;
     const startsOpen = name === "sources" || name === "outputs";
@@ -1164,7 +3557,6 @@ function renderWorkspace(paths) {
       if (!item.isConnected || !startsOpen) return;
       item.open ? collapsedWorkspaceFolders.delete(key) : collapsedWorkspaceFolders.add(key);
     });
-    item.querySelectorAll("input").forEach((input) => input.remove());
     [item, ...item.querySelectorAll(".tree-folder")].forEach(showFolderCount);
     item.querySelectorAll(".tree-file").forEach((line) => {
       line.tabIndex = 0;
@@ -1257,6 +3649,24 @@ function renderWorkspace(paths) {
     line.addEventListener("click", () => openWorkspaceFile(file));
     host.append(line);
   }
+  markActiveConversationFile();
+}
+
+/**
+ * Bold the workspace entry of the conversation file now in use.
+ *
+ * The engine's trace path is the active conversation's JSON file, an
+ * absolute path; workspace rows carry project-relative paths.
+ */
+function markActiveConversationFile() {
+  const active = activeTracePath.replaceAll("\\", "/");
+  byId("workspace-tree").querySelectorAll(".tree-file").forEach((row) => {
+    const path = row.dataset.path;
+    row.classList.toggle(
+      "active-conversation",
+      Boolean(active && path && active.endsWith(`/${path}`)),
+    );
+  });
 }
 
 // Send the visible drop rectangle to Qt; all other workspace rows reject drops.
@@ -1432,9 +3842,10 @@ function showFolderMenu(x, y, folder, path, isFile) {
  * @param path Workspace-relative target path.
  * @param isFile Whether the target is a file.
  */
-function deleteFromFolder(folder, path, isFile) {
+async function deleteFromFolder(folder, path, isFile) {
   const name = path.split("/").pop();
-  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nThis folder is not indexed, so nothing is rebuilt. Continue?`)) return;
+  const what = isFile ? `“${name}”` : `the folder “${name}” and everything in it`;
+  if (!await askKilin(`Delete ${what}?`, "It is deleted permanently, not moved to the Trash.", "Delete")) return;
   editFolder({ folder, operation: "remove", paths: [path] }, `Deleting from ${folder}…`);
 }
 
@@ -1444,7 +3855,7 @@ function deleteFromFolder(folder, path, isFile) {
  * @param path Workspace-relative path, such as outputs/summary.md.
  */
 function copyToSources(path) {
-  const root = byId("workspace-path").value.trim().replace(/[\\/]+$/, "");
+  const root = openProjectPath.replace(/[\\/]+$/, "");
   if (!root || !EDITABLE_FOLDERS.some((name) => path.startsWith(`${name}/`))) return;
   addSources([`${root}/${path}`]);
 }
@@ -1468,10 +3879,11 @@ function editFolder(request, message) {
  * @param purpose "add", or the workspace path to replace.
  * @param paths Local files chosen in the native dialog.
  */
-function folderFilesChosen(folder, purpose, paths) {
+async function folderFilesChosen(folder, purpose, paths) {
   if (purpose !== "add") {
     const name = purpose.split("/").pop();
-    if (!confirm(`Replace "${name}" with the content of ${paths[0].split(/[\\/]/).pop()}?\n\nThe name stays ${name}.`)) return;
+    const source = paths[0].split(/[\\/]/).pop();
+    if (!await askKilin(`Replace “${name}”?`, `KíLín puts the content of ${source} in it; the name stays.`, "Replace")) return;
     editFolder({ folder, operation: "replace", path: purpose, source: paths[0] }, `Replacing a file in ${folder}…`);
     return;
   }
@@ -1479,7 +3891,11 @@ function folderFilesChosen(folder, purpose, paths) {
   const taken = names.filter((name) => workspacePaths.has(`${folder}/${name}`));
   let replace = false;
   if (taken.length) {
-    replace = confirm(`These names are already in ${folder}:\n\n${taken.join("\n")}\n\nOK replaces them; Cancel keeps both (the new copies get a number).`);
+    const what = taken.length === 1 ? `“${taken[0]}” is` : `${taken.map((name) => `“${name}”`).join(", ")} are`;
+    const answer = await askKilin(`${what} already in ${folder}`,
+      "Keep both gives the new copies a number.", "Replace", "Keep both");
+    if (!answer) return;
+    replace = answer === true;
   }
   editFolder({ folder, operation: "add", paths, replace }, `Adding to ${folder}…`);
 }
@@ -1497,11 +3913,11 @@ function hideSourceMenu() {
  * @param path Workspace-relative path beginning with sources/.
  * @param isFile Whether the path is a file rather than a folder.
  */
-function removeSource(path, isFile) {
+async function removeSource(path, isFile) {
   if (busy || !bridge) return;
   const name = path.split("/").pop();
-  const what = isFile ? `the file "${name}"` : `the folder "${name}" and everything in it`;
-  if (!confirm(`Delete ${what} from this project's sources?\n\n${path}\n\nThe copy in the workspace is deleted and the index is updated. Your original files outside the workspace are not changed. Saved chats are kept. Continue?`)) return;
+  const what = isFile ? `“${name}”` : `the folder “${name}” and everything in it`;
+  if (!await askKilin(`Delete ${what}?`, "", "Delete") || busy) return;
   error.classList.add("hidden");
   setBusy(true, "Removing sources and updating the index…");
   bridge.removeProjectSources(JSON.stringify([path]));
@@ -1521,9 +3937,20 @@ document.addEventListener("scroll", hideSourceMenu, true);
  *
  * @param path Workspace-relative path to the selected file.
  */
-function openWorkspaceFile(path) {
-  if (!path || !bridge || !confirm(`Open ${path} with its default application?`)) return;
+async function openWorkspaceFile(path) {
+  if (!path || !bridge) return;
+  if (!await askKilin(`Open “${path.split("/").pop()}” in its default app?`, "", "Open")) return;
   bridge.openWorkspaceFile(path);
+}
+
+/**
+ * Put a question whose answer failed or was stopped back in the message
+ * box, unless the user has already started typing another one.
+ */
+function restoreUnansweredQuestion() {
+  const question = unansweredQuestion;
+  unansweredQuestion = "";
+  if (question && !byId("question").value.trim()) setQuestionDraft(question);
 }
 
 /**
@@ -1537,16 +3964,13 @@ function showError(message, tracePath = "") {
   applyingModels = false;
   closeAfterModelsApply = false;
   byId("model-download-status").textContent = message;
-  if (ready) {
-    byId("project-name").textContent = byId("workspace-path").value.split(/[\\/]/).pop();
-    updateProjectSummary();
-  }
   stopPhaseAnimation();
   resetAnswerStages();
   if (pendingTurn) {
     pendingTurn.answer.textContent = "Could not complete this answer.";
     pendingTurn.item.classList.add("failed");
     pendingTurn = null;
+    restoreUnansweredQuestion();
   }
   error.textContent = tracePath ? `${message} Trace: ${tracePath}` : message;
   error.classList.remove("hidden");
@@ -1558,12 +3982,410 @@ function showError(message, tracePath = "") {
     byId("cancel-model-download").classList.add("hidden");
     downloadingModel = null;
   }
+  installingModels = false;
+  shownErrorStatus = byId("model-download-status").textContent;
   setBusy(false);
-  if (!byId("first-run-setup").classList.contains("hidden")) {
-    byId("install-required").disabled = !readinessEnvironmentReady;
-  }
   byId("connection").textContent = "Error";
   requestAnimationFrame(() => error.scrollIntoView({ block: "nearest" }));
+}
+
+/**
+ * Hide an error that no longer applies, such as after a project opens.
+ *
+ * The Settings status line is cleared only while it still shows that
+ * error's text, so later messages there (such as download progress) stay.
+ */
+function clearError() {
+  const status = byId("model-download-status");
+  if (shownErrorStatus && status.textContent === shownErrorStatus) {
+    status.textContent = "";
+  }
+  shownErrorStatus = "";
+  error.classList.add("hidden");
+}
+
+/**
+ * Count the files a sync can import, update or remove, and those it keeps.
+ *
+ * @param changes The ``source_changes`` event: lists of copy paths under
+ *   ``added``, ``changed``, ``deleted`` and ``edited``.
+ * @returns The sentence at the top of the sync dialog.
+ */
+function sourceSyncSummary(changes) {
+  const files = (count) => `${count} file${count === 1 ? "" : "s"}`;
+  const count = changes.added.length + changes.changed.length + changes.deleted.length;
+  let text = `${files(count)} changed in the original folders since KíLín copied them.`;
+  if (changes.edited.length) {
+    text += ` KíLín keeps the ${files(changes.edited.length)} you edited in the project.`;
+  }
+  return text;
+}
+
+/**
+ * List the choices for one group of files; the first one is the default.
+ *
+ * @param group ``added``, ``changed``, ``deleted`` or ``edited``.
+ * @returns Pairs of sync action and label; empty for edited copies, which
+ *   are always kept.
+ */
+function sourceSyncChoices(group) {
+  return {
+    added: [["import", "Add"], ["keep", "Skip"]],
+    changed: [["replace", "Update"], ["keep_both", "Keep both"], ["keep", "Keep old"]],
+    deleted: [["delete", "Remove"], ["keep", "Keep"]],
+    edited: [],
+  }[group];
+}
+
+/**
+ * Choose the same kind of action for every file at once.
+ *
+ * @param changes The ``source_changes`` event.
+ * @param mode ``update`` brings every change in; ``both`` also keeps the
+ *   old copy of changed files and the copy of deleted ones.
+ * @returns Sync actions keyed by ``sources/`` path; edited copies are left
+ *   out, so they are kept.
+ */
+function sourceSyncPlan(changes, mode) {
+  const actions = mode === "both"
+    ? { added: "import", changed: "keep_both", deleted: "keep" }
+    : { added: "import", changed: "replace", deleted: "delete" };
+  const decisions = {};
+  for (const [group, action] of Object.entries(actions)) {
+    for (const path of changes[group]) decisions[path] = action;
+  }
+  return decisions;
+}
+
+/**
+ * Group the differing files under short headings, leaving out empty groups.
+ *
+ * @param changes The ``source_changes`` event.
+ * @returns Groups with their key, heading and ``sources/`` paths.
+ */
+function sourceSyncGroups(changes) {
+  return [
+    ["added", "New"],
+    ["changed", "Changed"],
+    ["deleted", "Deleted"],
+    ["edited", "Edited by you"],
+  ].filter(([group]) => changes[group].length).map(([group, title]) => ({
+    group, title, paths: changes[group],
+  }));
+}
+
+let sourceSyncChanges = null;
+
+/**
+ * Build one file row: its name, folder and choices.
+ *
+ * @param group The file's change group.
+ * @param path The copy's ``sources/`` path.
+ * @param index A number that keeps each row's radio group separate.
+ * @returns The list item.
+ */
+function sourceSyncRow(group, path, index) {
+  const item = document.createElement("li");
+  item.className = `sync-row ${group}`;
+  const relative = path.replace(/^sources\//, "");
+  const slash = relative.lastIndexOf("/");
+  const name = document.createElement("span");
+  name.className = "sync-name";
+  const file = document.createElement("strong");
+  file.textContent = relative.slice(slash + 1);
+  name.append(file);
+  if (slash > 0) {
+    const folder = document.createElement("small");
+    folder.textContent = relative.slice(0, slash);
+    name.append(folder);
+  }
+  item.append(name);
+  const choices = sourceSyncChoices(group);
+  if (!choices.length) {
+    const note = document.createElement("span");
+    note.className = "sync-kept";
+    note.textContent = "Your edit is kept";
+    item.append(note);
+    return item;
+  }
+  const options = document.createElement("div");
+  options.className = "segmented";
+  options.setAttribute("role", "radiogroup");
+  options.setAttribute("aria-label", `Action for ${relative}`);
+  choices.forEach(([action, label], position) => {
+    const option = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = `source-sync-${index}`;
+    input.value = action;
+    input.dataset.path = path;
+    input.checked = position === 0;
+    const text = document.createElement("span");
+    text.textContent = label;
+    option.append(input, text);
+    options.append(option);
+  });
+  item.append(options);
+  return item;
+}
+
+/**
+ * Switch the sync dialog between the quick buttons and the file list.
+ *
+ * @param fileByFile Whether to show the list of files with their choices.
+ */
+function setSourceSyncFileByFile(fileByFile) {
+  byId("source-sync-files").classList.toggle("hidden", !fileByFile);
+  byId("source-sync-quick").classList.toggle("hidden", fileByFile);
+  byId("source-sync-manual").classList.toggle("hidden", !fileByFile);
+}
+
+/**
+ * Ask what to do with the files whose originals changed.
+ *
+ * The quick buttons update everything, keep old and new copies, or keep
+ * the old copies; "Choose file by file" lists each file with its own
+ * choice. Copies the user edited are always kept.
+ *
+ * @param changes The ``source_changes`` event.
+ */
+function showSourceSync(changes) {
+  sourceSyncChanges = changes;
+  byId("source-sync-summary").textContent = sourceSyncSummary(changes);
+  const counts = byId("source-sync-counts");
+  const list = byId("source-sync-files");
+  counts.replaceChildren();
+  list.replaceChildren();
+  let index = 0;
+  for (const { group, title, paths } of sourceSyncGroups(changes)) {
+    const count = document.createElement("li");
+    count.className = `sync-count ${group}`;
+    count.textContent = `${paths.length} ${title.toLowerCase()}`;
+    counts.append(count);
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    const items = document.createElement("ul");
+    for (const path of paths) items.append(sourceSyncRow(group, path, index++));
+    list.append(heading, items);
+  }
+  byId("source-sync-both").classList.toggle("hidden", !changes.changed.length);
+  setSourceSyncFileByFile(false);
+  byId("source-sync").showModal();
+}
+
+/**
+ * Close the sync dialog and send the chosen actions to the core.
+ *
+ * @param decisions Sync actions keyed by ``sources/`` path.
+ */
+function syncSources(decisions) {
+  byId("source-sync").close();
+  if (busy || !bridge) return;
+  setBusy(true, "Updating sources and the index…");
+  bridge.syncProjectSources(JSON.stringify(decisions));
+}
+
+byId("source-sync-keep").addEventListener("click", () => byId("source-sync").close());
+byId("source-sync-both").addEventListener("click", () => syncSources(sourceSyncPlan(sourceSyncChanges, "both")));
+byId("source-sync-update").addEventListener("click", () => syncSources(sourceSyncPlan(sourceSyncChanges, "update")));
+byId("source-sync-pick").addEventListener("click", () => setSourceSyncFileByFile(true));
+byId("source-sync-back").addEventListener("click", () => setSourceSyncFileByFile(false));
+byId("source-sync-apply").addEventListener("click", () => {
+  const decisions = {};
+  for (const input of byId("source-sync-files").querySelectorAll("input:checked")) {
+    decisions[input.dataset.path] = input.value;
+  }
+  syncSources(decisions);
+});
+
+/**
+ * Count the copies of already imported sources that changed.
+ *
+ * @param changes The check's ``changes``: ``sources/`` paths by group.
+ * @returns Files the user can bring in, update or remove.
+ */
+function sourceAddPending(changes) {
+  return changes.added.length + changes.changed.length + changes.deleted.length;
+}
+
+/**
+ * Sum up what adding the checked sources would copy and leave out.
+ *
+ * @param check The ``sources_checked`` event: ``add`` (``name``, ``kind``,
+ *   ``files``, ``state``), left-out ``files``, ``skipped_folders`` and the
+ *   ``changes`` of sources already in the project.
+ * @returns The sentence at the top of the add dialog.
+ */
+function sourceAddSummary(check) {
+  const files = (count) => `${count} file${count === 1 ? "" : "s"}`;
+  const adding = check.add.filter((item) => item.state !== "existing");
+  const existing = check.add.filter((item) => item.state === "existing");
+  const count = adding.reduce((total, item) => total + item.files, 0);
+  if (!count && !existing.length) return "Nothing can be added: this project does not index these files.";
+  const parts = [];
+  if (count) parts.push(`KíLín will add ${files(count)}.`);
+  if (existing.length) {
+    const one = existing.length === 1;
+    const names = existing.map((item) => item.name).join(", ");
+    const pending = sourceAddPending(check.changes);
+    parts.push(pending
+      ? `${names} ${one ? "is" : "are"} already in the project; ${files(pending)} changed since ${one ? "it was" : "they were"} copied.`
+      : `${names} ${one ? "is" : "are"} already in the project, with no changes.`);
+  }
+  const left = check.files.length;
+  if (left) parts.push(`${files(left)} ${left === 1 ? "is" : "are"} left out because this project does not index ${left === 1 ? "it" : "them"}.`);
+  return parts.join(" ");
+}
+
+/**
+ * Say why a checked file is left out.
+ *
+ * @param file A left-out row with a reason code.
+ * @returns Short text shown next to the file.
+ */
+function sourceAddReason(file) {
+  if (file.reason_code === selectionReasonCodes?.FILE_TOO_LARGE) return "Too large";
+  if (file.reason_code === selectionReasonCodes?.EMPTY_FILE) return "Empty file";
+  return "File type not included";
+}
+
+let sourceAddPaths = [];
+
+/**
+ * Build one row of the add dialog.
+ *
+ * @param group ``added`` for files to add, ``left-out`` otherwise.
+ * @param relative Folder and file name to show.
+ * @param detail Muted text on the right.
+ * @returns The list item.
+ */
+function sourceAddRow(group, relative, detail) {
+  const item = document.createElement("li");
+  item.className = `sync-row ${group}`;
+  const slash = relative.lastIndexOf("/");
+  const name = document.createElement("span");
+  name.className = "sync-name";
+  const file = document.createElement("strong");
+  file.textContent = relative.slice(slash + 1);
+  name.append(file);
+  if (slash > 0) {
+    const folder = document.createElement("small");
+    folder.textContent = relative.slice(0, slash);
+    name.append(folder);
+  }
+  const side = document.createElement("span");
+  side.className = "sync-kept";
+  side.textContent = detail;
+  item.append(name, side);
+  return item;
+}
+
+/**
+ * Show what adding the dropped sources would copy, and ask to go on.
+ *
+ * Sources already in the project are matched by their original path: an
+ * unchanged one needs nothing, and files that changed since they were
+ * copied get the same choices as in the sync dialog. A different file
+ * with a taken name is copied under a new name.
+ *
+ * @param check The ``sources_checked`` event.
+ */
+function showSourceAdd(check) {
+  sourceAddPaths = check.sources;
+  const files = (count) => `${count} file${count === 1 ? "" : "s"}`;
+  const adding = check.add.filter((item) => item.state !== "existing");
+  const existing = check.add.filter((item) => item.state === "existing");
+  const count = adding.reduce((total, item) => total + item.files, 0);
+  const pending = sourceAddPending(check.changes);
+  byId("source-add-summary").textContent = sourceAddSummary(check);
+  const counts = byId("source-add-counts");
+  const list = byId("source-add-files");
+  counts.replaceChildren();
+  list.replaceChildren();
+  const { added, changed, deleted } = check.changes;
+  const differing = (item) => [...added, ...changed, ...deleted].filter((path) => (
+    path === `sources/${item.name}` || path.startsWith(`sources/${item.name}/`)
+  )).length;
+  const sections = [
+    ["added", "To add", count ? `${count} to add` : null, adding.map((item) => sourceAddRow(
+      "added", item.name, item.state === "renamed"
+        ? "Same name, different file · added under a new name"
+        : item.kind === "folder" ? files(item.files) : "File",
+    ))],
+    ["", "Already in the project", existing.length ? `${existing.length} already added` : null, existing.map((item) => sourceAddRow(
+      "", item.name, differing(item) ? `${files(differing(item))} changed since copied` : "No changes",
+    ))],
+  ];
+  // A chip only: the changed files are listed under their own headings.
+  sections.push(["changed", "", pending ? `${pending} changed` : null, []]);
+  // Radio names must not repeat those of the sync dialog's rows.
+  let index = 100000;
+  for (const { group, paths } of sourceSyncGroups(check.changes)) {
+    const heading = {
+      added: "New in the original", changed: "Changed in the original",
+      deleted: "Deleted from the original", edited: "Edited by you",
+    }[group];
+    sections.push([group, heading, null, paths.map((path) => sourceSyncRow(group, path, index++))]);
+  }
+  sections.push(
+    ["left-out", "Left out", check.files.length ? `${check.files.length} left out` : null, [
+      ...check.files.slice(0, 100).map((file) => sourceAddRow("left-out", file.path, sourceAddReason(file))),
+      ...(check.files.length > 100 ? [sourceAddRow("left-out", `and ${check.files.length - 100} more`, "")] : []),
+    ]],
+    ["left-out", "Not added", null, check.skipped_folders.map((name) => sourceAddRow(
+      "left-out", name, "No files this project indexes",
+    ))],
+  );
+  for (const [group, title, chip, rows] of sections) {
+    if (chip) {
+      const item = document.createElement("li");
+      item.className = `sync-count ${group}`;
+      item.textContent = chip;
+      counts.append(item);
+    }
+    if (!rows.length) continue;
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    const items = document.createElement("ul");
+    items.append(...rows);
+    list.append(heading, items);
+  }
+  const confirm = byId("source-add-confirm");
+  confirm.classList.toggle("hidden", !count && !pending);
+  confirm.textContent = count ? "Add" : "Update";
+  byId("source-add-cancel").textContent = count || pending ? "Cancel" : "Close";
+  byId("source-add").showModal();
+}
+
+byId("source-add-cancel").addEventListener("click", () => byId("source-add").close());
+byId("source-add-confirm").addEventListener("click", () => {
+  byId("source-add").close();
+  if (busy || !bridge) return;
+  const decisions = {};
+  for (const input of byId("source-add-files").querySelectorAll("input:checked")) {
+    decisions[input.dataset.path] = input.value;
+  }
+  setBusy(true, "Adding sources and updating the index…");
+  bridge.addProjectSources(JSON.stringify(sourceAddPaths), JSON.stringify(decisions));
+});
+
+/**
+ * Show Send, or Stop while an answer is generated. A chat read meanwhile
+ * shows a disabled Send: Stop belongs to the chat being answered.
+ */
+function updateSendButton() {
+  const answering = busy && ready && activity.classList.contains("answer-progress");
+  const stop = answering && !reading;
+  byId("send").disabled = !ready || (busy && !stop)
+    || Boolean(answerSettingsSave.pending) || answerSettingsSave.uncertain;
+  byId("send").classList.toggle("stopping", stop);
+  byId("send").querySelector("span").textContent = stop ? "■" : "↑";
+  const sendLabel = stop ? "Stop generation"
+    : answerSettingsSave.uncertain ? "Reopen project to verify settings"
+      : answerSettingsSave.pending ? "Saving answer settings…"
+        : "Send message";
+  byId("send").setAttribute("aria-label", sendLabel);
+  byId("send").title = sendLabel;
 }
 
 /**
@@ -1575,20 +4397,23 @@ function showError(message, tracePath = "") {
  */
 function setBusy(value, message = "") {
   busy = value;
-  byId("project-name").contentEditable = String(!value);
-  byId("topbar-project-name").contentEditable = String(!value);
   byId("backend").disabled = ready || value;
   for (const id of ["chat-model", "embedding-model", "query-format"]) byId(id).disabled = value;
-  // Settings can close while KíLín works; only unsaved edits must wait.
-  byId("close-models").disabled = false;
+  // Closing Settings is independent of new-project readiness.
+  showSetupLock();
   byId("conversation-name").contentEditable = String(!value);
   syncSourceDropTarget();
-  if (!value) activity.classList.remove("answer-progress");
-  byId("open").disabled = value || !bridge;
+  if (!value) {
+    activity.classList.remove("answer-progress");
+    byId("send").classList.remove("waiting");
+    answeringConversationId = "";
+  }
+  // A project can be prepared only once KíLín setup is done.
+  byId("open").disabled = value || !bridge || !kilinReady;
   const answering = value && ready && activity.classList.contains("answer-progress");
   byId("question-form").classList.toggle("composer-disabled", value && !answering);
   byId("question-form").setAttribute("aria-busy", String(value));
-  for (const id of ["attach-button", "attach-files", "attach-folder", "effort-button", "effort-model-range", "effort-depth-range"]) {
+  for (const id of ["attach-button", "attach-files", "attach-folder", "effort-button", "effort-model-range", "effort-depth-range", "effort-temperature"]) {
     byId(id).disabled = value || !ready;
   }
   // The next question can be typed while an answer is generated; sending
@@ -1599,16 +4424,17 @@ function setBusy(value, message = "") {
     byId("attach-menu").classList.add("hidden");
     byId("effort-menu").classList.add("hidden");
   }
-  byId("send").disabled = !ready || (value && !answering);
-  byId("send").classList.toggle("stopping", answering);
-  byId("send").querySelector("span").textContent = answering ? "■" : "↑";
-  byId("send").setAttribute("aria-label", answering ? "Stop generation" : "Send message");
-  byId("send").title = byId("send").getAttribute("aria-label");
+  updateSendButton();
   byId("stop").classList.toggle("hidden", !value || answering);
   byId("new-chat").disabled = value || !ready;
-  byId("branch-chat").disabled = value || !ready;
-  document.querySelectorAll(".conversation-item, .conversation-delete").forEach((item) => { item.disabled = value || !ready; });
-  byId("change-project").disabled = value;
+  // While an answer runs, other chats can still be read, not changed.
+  document.querySelectorAll(".conversation-item").forEach((item) => { item.disabled = (value && !answering) || !ready; });
+  syncGeneratingConversations();
+  document.querySelectorAll(".conversation-delete, .project-item, .project-settings, .message-branch").forEach((item) => { item.disabled = value || !ready; });
+  refreshFeedbackControls();
+  showMemoryPolicy();
+  byId("home-logo").disabled = value;
+  byId("new-project").disabled = value;
   byId("stop").disabled = !value;
   activity.classList.toggle("hidden", !value);
   byId("activity-text").textContent = message;
@@ -1719,6 +4545,10 @@ function showProgress(data) {
     details.push(`about ${seconds(data.eta_seconds)} left`);
   }
   byId("activity-detail").textContent = details.join(" · ");
+  if (data.stage === "building_source_cards") {
+    byId("source-card-progress").textContent =
+      `Generating source cards: ${data.current ?? 0} / ${data.total ?? 0}`;
+  }
 }
 
 /**
@@ -1789,6 +4619,11 @@ function openReference(item, source, button, holder) {
   holder.classList.add("expanded");
   button.classList.add("active");
   activeReference = { turnIndex, citation, button, holder, ...nodes };
+  if (reading) {
+    // The engine looks up lines in the chat it has open, not this one.
+    nodes.note.textContent = "Open this chat to see the source lines.";
+    return;
+  }
   bridge?.previewReference(turnIndex, activeReference.citation);
   nodes.preview.scrollIntoView({ block: "nearest" });
 }
@@ -1806,12 +4641,32 @@ function selectTurn(item, turn, citation = null) {
   selectedTurn = item;
   item.classList.add("selected");
   clearSourcePreview();
-  byId("references-for").textContent = turn.evidence?.length
-    ? `Sources for: ${turn.question}`
-    : "No sources saved for this answer.";
+  const evidence = turn.evidence || [];
+  const { labels, cited } = labelsForTurn(turn);
+  const sources = referencedSources(evidence, labels, cited);
+  // Use the summary already saved for routing; never summarize in the GUI.
+  const summary = turn.parameters?.representation?.summary;
+  const question = splitAttached(turn.question).question.replace(/\s+/g, " ").trim();
+  const fallback = question.length > 200
+    ? `${question.slice(0, 200).trimEnd()}…` : question || "Question unavailable";
+  const description = typeof summary === "string" && summary.trim()
+    ? summary.trim() : fallback;
+  const heading = byId("references-for");
+  heading.textContent = `Turn ${Number(item.dataset.turnIndex) + 1} — ${description}`;
+  const detail = !evidence.length
+    ? "No sources saved for this answer."
+    : cited && cited < evidence.length
+      ? `${cited} cited of ${evidence.length} passages read`
+      : "";
+  if (detail) {
+    const line = document.createElement("span");
+    line.className = "reference-statistics";
+    line.textContent = detail;
+    heading.append(line);
+  }
   const list = byId("references-list");
   list.replaceChildren();
-  for (const source of turn.evidence || []) {
+  for (const source of sources) {
     const holder = document.createElement("div");
     holder.className = "reference-entry";
     const button = document.createElement("button");
@@ -1820,7 +4675,7 @@ function selectTurn(item, turn, citation = null) {
     button.dataset.citation = String(source.citation);
     const number = document.createElement("span");
     number.className = "reference-number";
-    number.textContent = String(source.citation);
+    number.textContent = String(labels.get(Number(source.citation)));
     const path = document.createElement("span");
     path.className = "reference-path";
     path.textContent = `${source.path}:${source.start_line}-${source.end_line}`;
@@ -1868,6 +4723,64 @@ function renderSourcePreview(data) {
 
 
 /**
+ * Number the cited sources 1, 2, 3… in the order the answer cites them.
+ *
+ * Evidence numbers count all retrieved passages, so they can be large
+ * (143, 286…). Only the labels the user sees change; links still use the
+ * evidence numbers.
+ *
+ * @param markers Evidence numbers of each linked citation marker, in
+ *   reading order, such as [[143], [286, 288]].
+ * @param evidence The turn's evidence records.
+ * @returns Map from evidence number to shown label. Evidence the answer
+ *   does not cite follows, in its saved order.
+ */
+function citationLabels(markers, evidence) {
+  const labels = new Map();
+  const label = (number) => {
+    if (!labels.has(number)) labels.set(number, labels.size + 1);
+  };
+  markers.flat().forEach(label);
+  evidence.forEach((source) => label(Number(source.citation)));
+  return labels;
+}
+
+// Shown labels of each rendered turn and how many sources its answer
+// cites, shared by its answer and references.
+const turnCitationLabels = new WeakMap();
+
+/**
+ * Choose and order the sources the References panel lists.
+ *
+ * An answer may read many passages but cite only a few: list those, in
+ * their label order, unless the answer cites none.
+ *
+ * @param evidence The turn's evidence records.
+ * @param labels Map from evidence number to shown label.
+ * @param cited Number of distinct sources the answer cites.
+ * @returns The evidence records to list.
+ */
+function referencedSources(evidence, labels, cited) {
+  return evidence
+    .filter((source) => !cited || labels.get(Number(source.citation)) <= cited)
+    .sort((a, b) => labels.get(Number(a.citation)) - labels.get(Number(b.citation)));
+}
+
+/**
+ * Return the shown citation labels of a turn, numbering its evidence in
+ * order when its answer has not been rendered.
+ *
+ * @param turn Saved question, answer, and evidence data.
+ * @returns ``labels`` (evidence number to shown label) and ``cited``, the
+ *   number of distinct sources the answer cites; those have labels 1 to
+ *   ``cited``.
+ */
+function labelsForTurn(turn) {
+  return turnCitationLabels.get(turn)
+    || { labels: citationLabels([], turn.evidence || []), cited: 0 };
+}
+
+/**
  * Render answer text with links only for recognized numeric citations.
  *
  * @param answer Destination DOM element.
@@ -1884,22 +4797,36 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
   }
   // Markdown and citations are both recognized; only evidence numbers that
   // belong to this answer become links.
+  const markerNumbers = (marker) => {
+    const numbers = marker.slice(1, -1).split(",").map((value) => Number(value.trim()));
+    return numbers.every((number) => citations.has(number)) ? numbers : null;
+  };
+  // A first, unseen pass finds the linked markers in reading order, so
+  // they can be shown as 1, 2, 3… instead of evidence numbers.
+  const markers = [];
+  renderMarkdown(document.createElement("div"), parts.answer, (marker) => {
+    const numbers = markerNumbers(marker);
+    if (numbers) markers.push(numbers);
+    return null;
+  });
+  const labels = citationLabels(markers, turn.evidence || []);
+  turnCitationLabels.set(turn, { labels, cited: new Set(markers.flat()).size });
   const body = document.createElement("div");
   body.className = "answer-body";
   renderMarkdown(body, parts.answer, (marker) => {
-    const numbers = marker.slice(1, -1).split(",").map((value) => Number(value.trim()));
-    if (!numbers.every((number) => citations.has(number))) return null;
+    const numbers = markerNumbers(marker);
+    if (!numbers) return null;
     const superscript = document.createElement("sup");
     superscript.className = "answer-citation";
     numbers.forEach((number, index) => {
       if (index) superscript.append(document.createTextNode(","));
       const link = document.createElement("button");
       link.type = "button";
-      link.textContent = String(number);
-      link.setAttribute("aria-label", `Show reference ${number}`);
+      link.textContent = String(labels.get(number));
+      link.setAttribute("aria-label", `Show reference ${labels.get(number)}`);
       link.addEventListener("click", (event) => {
         event.stopPropagation();
-        showWorkspace(true);
+        chooseSidePanels(true);
         selectTurn(item, turn, number);
       });
       superscript.append(link);
@@ -1916,6 +4843,231 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
   }
 }
 
+/**
+ * Highlight the destination saved turn after a referenced chat opens.
+ */
+function highlightMemoryOrigin() {
+  if (!memoryNavigation) return;
+  const shown = reading?.id || activeConversationId;
+  if (shown !== memoryNavigation.conversationId) return;
+  const target = [...conversation.querySelectorAll(".turn:not(.pending)")]
+    [memoryNavigation.turnNumber - 1];
+  if (target) {
+    conversation.querySelectorAll(".memory-origin-highlight").forEach(
+      (item) => item.classList.remove("memory-origin-highlight"));
+    target.classList.add("memory-origin-highlight");
+    target.scrollIntoView({ block: "center" });
+  }
+  memoryNavigation = null;
+}
+
+/**
+ * Navigate to one currently active origin of a retrieved memory.
+ * @param origin Saved conversation ID and one-based turn number.
+ */
+function openMemoryOrigin(origin) {
+  if (!bridge || !origin || !Number.isSafeInteger(origin.turn_number)
+      || origin.turn_number < 1) return;
+  const candidate = lastConversationData?.conversations?.find((item) =>
+    item.conversation_id === origin.conversation_id);
+  if (!candidate) return;
+  memoryNavigation = {
+    conversationId: origin.conversation_id,
+    turnNumber: origin.turn_number,
+  };
+  if (origin.conversation_id === (reading?.id || activeConversationId)) {
+    highlightMemoryOrigin();
+  } else if (busy && answeringConversationId) {
+    readConversation(candidate);
+  } else if (!busy) {
+    setBusy(true, "Opening remembered conversation…");
+    bridge.selectConversation(origin.conversation_id);
+  } else {
+    memoryNavigation = null;
+  }
+}
+
+/**
+ * Request current trace summaries for the visible memory popover.
+ *
+ * @param entries Remembered-message identities and their preview elements.
+ */
+function requestMemorySummaries(entries) {
+  if (!bridge || !openProjectPath || !entries.length) return;
+  const requestId = ++memorySummarySequence;
+  for (const entry of entries) {
+    entry.preview.hidden = true;
+    entry.preview.textContent = "";
+    entry.preview.dataset.requestId = String(requestId);
+  }
+  memorySummaryPending.set(requestId, {project: openProjectPath, entries});
+  // Bound pending UI state if the backend becomes unavailable.
+  if (memorySummaryPending.size > 64) {
+    memorySummaryPending.delete(memorySummaryPending.keys().next().value);
+  }
+  bridge.requestMemorySummaries(openProjectPath, JSON.stringify({
+    request_id: requestId,
+    references: entries.map((item) => ({
+      turn_uuid: item.turnUuid, role: item.role, origins: item.origins,
+    })),
+  }));
+}
+
+/**
+ * Update previews only from the matching project and latest trace read.
+ *
+ * @param data Correlated memory_summaries reply from the engine.
+ */
+function receiveMemorySummaries(data) {
+  const pending = memorySummaryPending.get(data.request_id);
+  if (!pending) return;
+  memorySummaryPending.delete(data.request_id);
+  if (data.project !== openProjectPath || data.project !== pending.project
+      || data.error || !Array.isArray(data.summaries)) return;
+  for (const entry of pending.entries) {
+    if (entry.preview.dataset.requestId !== String(data.request_id)) continue;
+    const found = data.summaries.find((item) =>
+      item.turn_uuid === entry.turnUuid && item.role === entry.role);
+    const text = typeof found?.text === "string" ? found.text : "";
+    let displayed = text;
+    if (entry.role === "user") {
+      const characters = Array.from(text);
+      if (characters.length > 160) {
+        displayed = characters.slice(0, 159).join("") + "…";
+      }
+    }
+    entry.preview.textContent = displayed;
+    entry.preview.hidden = !displayed;
+  }
+}
+
+/**
+ * Add a compact, expandable memory reference control to the answer actions.
+ * Memory origins remain separate from documentary source citations.
+ * @param row Completed answer's action row.
+ * @param turn Saved turn including optional memory references.
+ */
+function appendMemoryProvenance(row, turn) {
+  const references = turn.parameters?.memory_references;
+  if (!Array.isArray(references) || !references.length) return;
+  const wrapper = document.createElement("div");
+  wrapper.className = "memory-provenance-wrapper";
+  wrapper.hidden = true;
+  const panel = document.createElement("section");
+  panel.className = "memory-provenance";
+  panel.id = `memory-provenance-${turn.conversation_turn_uuid}`;
+  panel.setAttribute("role", "region");
+  panel.setAttribute("aria-label", "Earlier conversation memory (not source evidence)");
+  // Group by durable turn identity so both roles use an active origin.
+  const groups = new Map();
+  const summaries = [];
+  for (const [index, reference] of references.entries()) {
+    const origins = Array.isArray(reference.origins) ? reference.origins : [];
+    const origin = origins.find((item) => lastConversationData?.conversations
+      ?.some((entry) => entry.conversation_id === item.conversation_id));
+    const key = typeof reference.turn_uuid === "string" && reference.turn_uuid
+      ? `turn:${reference.turn_uuid}`
+      : origin ? `origin:${origin.conversation_id}:${origin.turn_number}`
+        : `unavailable:${index}`;
+    if (!groups.has(key)) groups.set(key, {origin: null, messages: []});
+    const group = groups.get(key);
+    if (!group.origin && origin) group.origin = origin;
+    const role = reference.role === "user" ? "Question"
+      : reference.role === "assistant" ? "Answer" : "Message";
+    group.messages.push({
+      role, turnUuid: reference.turn_uuid,
+      origins: origins.filter((item) => lastConversationData?.conversations
+        ?.some((entry) => entry.conversation_id === item.conversation_id)),
+    });
+  }
+  for (const group of groups.values()) {
+    const origin = group.origin;
+    const details = lastConversationData?.conversations?.find((item) =>
+      item.conversation_id === origin?.conversation_id);
+    const item = document.createElement("section");
+    item.className = "memory-turn";
+    for (const message of group.messages) {
+      const link = document.createElement("button");
+      link.type = "button";
+      const alignment = message.role === "Question" ? "memory-question"
+        : message.role === "Answer" ? "memory-answer" : "memory-other";
+      link.className = `memory-message ${alignment}`;
+      const name = origin ? details.name : "Conversation unavailable";
+      const suffix = origin ? ` · Turn ${origin.turn_number} — ${message.role}`
+        : ` — ${message.role}`;
+      const nameLabel = document.createElement("span");
+      nameLabel.className = "memory-message-name";
+      nameLabel.textContent = name;
+      const roleLabel = document.createElement("span");
+      roleLabel.className = "memory-message-role";
+      roleLabel.textContent = suffix;
+      link.append(nameLabel, roleLabel);
+      if (origin && (message.role === "Question"
+          || message.role === "Answer")
+          && typeof message.turnUuid === "string") {
+        const preview = document.createElement("span");
+        preview.className = "memory-message-preview";
+        preview.hidden = true;
+        link.append(preview);
+        summaries.push({
+          turnUuid: message.turnUuid,
+          role: message.role === "Question" ? "user" : "assistant",
+          origins: message.origins,
+          preview,
+        });
+      }
+      link.title = origin
+        ? `Open ${name}${suffix}; not source evidence.`
+        : "Conversation unavailable; not source evidence.";
+      link.disabled = !origin;
+      if (origin) link.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openMemoryOrigin(origin);
+      });
+      item.append(link);
+    }
+    panel.append(item);
+  }
+  const count = references.length;
+  const description = `${count} conversation ${count === 1 ? "memory" : "memories"}`
+    + ` from ${groups.size} ${groups.size === 1 ? "turn" : "turns"}`
+    + " (not source evidence)";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "message-action memory-toggle";
+  toggle.title = description;
+  toggle.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24">'
+    + '<path d="M4 5h16v12H9l-5 4V5z"/>'
+    + '<path d="M8 9h8M8 13h5"/></svg>';
+  const badge = document.createElement("span");
+  badge.className = "memory-toggle-count";
+  badge.textContent = String(count);
+  toggle.append(badge);
+  toggle.setAttribute("aria-controls", panel.id);
+  const setExpanded = (expanded) => {
+    wrapper.hidden = !expanded;
+    row.classList.toggle("memory-expanded", expanded);
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} ${description}`);
+  };
+  setExpanded(false);
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setExpanded(wrapper.hidden);
+    if (!wrapper.hidden) requestMemorySummaries(summaries);
+  });
+  row.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || wrapper.hidden) return;
+    event.stopPropagation();
+    setExpanded(false);
+    toggle.focus();
+  });
+  row.classList.add("memory-available");
+  row.prepend(toggle);
+  wrapper.append(panel);
+  row.append(wrapper);
+}
+
 // Markdown blocks the renderer recognizes at the start of a line.
 const MARKDOWN_FENCE = /^\s*```/;
 const MARKDOWN_HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
@@ -1923,6 +5075,40 @@ const MARKDOWN_RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const MARKDOWN_QUOTE = /^\s{0,3}>\s?/;
 const MARKDOWN_BULLET = /^\s{0,3}[-*+]\s+/;
 const MARKDOWN_NUMBER = /^\s{0,3}\d{1,3}[.)]\s+/;
+// Display maths: a line starting with $$ or \[, up to the closing $$ or \].
+const MARKDOWN_MATH = /^\s*(\$\$|\\\[)/;
+// The line under a table's header: dashes per column, colons for alignment.
+const MARKDOWN_TABLE_DIVIDER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+/**
+ * Split one Markdown table row into its cell texts.
+ *
+ * Outer pipes are optional; an escaped pipe (\|) stays inside its cell.
+ *
+ * @param line Table row source line.
+ * @returns Trimmed cell texts, left to right.
+ */
+function markdownTableCells(line) {
+  let row = line.trim();
+  if (row.startsWith("|")) row = row.slice(1);
+  if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1);
+  return row.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
+}
+
+/**
+ * Detect a Markdown table: a header row, then a divider row with the same
+ * number of columns.
+ *
+ * @param lines All source lines.
+ * @param index Index of the candidate header row.
+ * @returns Whether a table starts at this line.
+ */
+function isMarkdownTableStart(lines, index) {
+  const header = lines[index];
+  const divider = lines[index + 1];
+  if (!header?.includes("|") || !divider?.includes("|") || !MARKDOWN_TABLE_DIVIDER.test(divider)) return false;
+  return markdownTableCells(header).length === markdownTableCells(divider).length;
+}
 
 /**
  * Detect Markdown lines that begin a block-level structure.
@@ -1931,16 +5117,39 @@ const MARKDOWN_NUMBER = /^\s{0,3}\d{1,3}[.)]\s+/;
  * @returns Whether the line starts a supported Markdown block.
  */
 function isMarkdownBlockStart(line) {
-  return [MARKDOWN_FENCE, MARKDOWN_HEADING, MARKDOWN_RULE, MARKDOWN_QUOTE, MARKDOWN_BULLET, MARKDOWN_NUMBER]
-    .some((pattern) => pattern.test(line));
+  return [MARKDOWN_FENCE, MARKDOWN_MATH, MARKDOWN_HEADING, MARKDOWN_RULE, MARKDOWN_QUOTE, MARKDOWN_BULLET,
+    MARKDOWN_NUMBER].some((pattern) => pattern.test(line));
+}
+
+/**
+ * Build LaTeX maths as MathML, which Qt WebEngine draws natively.
+ *
+ * KaTeX (``katex/katex.min.js``) writes the markup itself and runs
+ * without ``trust``, so commands such as \href are refused. LaTeX it
+ * cannot read, or a missing KaTeX, shows the original text instead.
+ *
+ * @param tex LaTeX between the delimiters.
+ * @param source The original text, delimiters included.
+ * @param display Whether it is display maths on its own line.
+ * @returns New element holding the maths.
+ */
+function mathNode(tex, source, display) {
+  const node = document.createElement(display ? "div" : "span");
+  node.className = display ? "answer-math display" : "answer-math";
+  try {
+    katex.render(tex, node, { displayMode: display, output: "mathml", throwOnError: true });
+  } catch {
+    node.textContent = source;
+  }
+  return node;
 }
 
 /**
  * Render model text as Markdown using DOM nodes only, never HTML parsing.
  *
  * Supports headings, paragraphs, bullet and numbered lists, block quotes,
- * fenced code, rules, and inline bold, italics, and code. Plain text simply
- * becomes paragraphs.
+ * fenced code, rules, tables, and inline bold, italics, and code. Plain
+ * text simply becomes paragraphs.
  *
  * @param host Element that receives the blocks.
  * @param text Model output without thinking text.
@@ -1959,10 +5168,69 @@ function renderMarkdown(host, text, linkCitation = null) {
       while (index < lines.length && !MARKDOWN_FENCE.test(lines[index])) code.push(lines[index++]);
       index += 1;
       const pre = document.createElement("pre");
+      if (/^\s*```[ \t]*latex[ \t]*$/i.test(line)) {
+        pre.className = "answer-latex-source";
+      }
       const element = document.createElement("code");
       element.textContent = code.join("\n");
       pre.append(element);
       host.append(pre);
+      continue;
+    }
+    if (MARKDOWN_MATH.test(line)) {
+      // Everything up to the matching $$ or \] is one display formula; it
+      // may also fit on one line, as in "$$ x^2 $$".
+      const first = line.trim();
+      const close = first.startsWith("$$") ? "$$" : "\\]";
+      let end = first.length > 2 && first.endsWith(close) ? index : -1;
+      for (let next = index + 1; end < 0 && next < lines.length; next += 1) {
+        if (lines[next].trim().endsWith(close)) end = next;
+      }
+      if (end < 0) {
+        // Never closed (or still streaming): keep the line as text.
+        const element = document.createElement("p");
+        element.textContent = line;
+        host.append(element);
+        index += 1;
+        continue;
+      }
+      const source = lines.slice(index, end + 1).map((part) => part.trim()).join("\n");
+      host.append(mathNode(source.slice(2, -2).trim(), source, true));
+      index = end + 1;
+      continue;
+    }
+    if (isMarkdownTableStart(lines, index)) {
+      const header = markdownTableCells(line);
+      // Alignment per column comes from the colons in the divider row.
+      const align = markdownTableCells(lines[index + 1]).map((cell) => (
+        cell.startsWith(":") && cell.endsWith(":") ? "center"
+          : cell.endsWith(":") ? "right" : cell.startsWith(":") ? "left" : ""));
+      index += 2;
+      const table = document.createElement("table");
+      const row = (cells, tag) => {
+        const element = document.createElement("tr");
+        header.forEach((_, column) => {
+          // Short rows get empty cells; extra cells are dropped.
+          const cell = document.createElement(tag);
+          if (align[column]) cell.style.textAlign = align[column];
+          appendInlineMarkdown(cell, cells[column] || "", linkCitation);
+          element.append(cell);
+        });
+        return element;
+      };
+      const head = document.createElement("thead");
+      head.append(row(header, "th"));
+      const body = document.createElement("tbody");
+      while (index < lines.length && lines[index].trim() && lines[index].includes("|")
+        && !isMarkdownBlockStart(lines[index])) {
+        body.append(row(markdownTableCells(lines[index++]), "td"));
+      }
+      table.append(head, body);
+      // A wide table scrolls sideways instead of widening the chat.
+      const frame = document.createElement("div");
+      frame.className = "answer-table";
+      frame.append(table);
+      host.append(frame);
       continue;
     }
     const heading = line.match(MARKDOWN_HEADING);
@@ -2009,7 +5277,8 @@ function renderMarkdown(host, text, linkCitation = null) {
       continue;
     }
     const paragraph = [];
-    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])) {
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])
+      && !isMarkdownTableStart(lines, index)) {
       paragraph.push(lines[index++]);
     }
     const element = document.createElement("p");
@@ -2018,9 +5287,12 @@ function renderMarkdown(host, text, linkCitation = null) {
   }
 }
 
-// Inline code, bold, italics (not inside words such as snake_case), and
-// citation markers such as [1] or [2, 3].
-const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[\d+(?:\s*,\s*\d+)*\])/g;
+// Inline code, bold, italics (not inside words such as snake_case),
+// external https links such as [text](https://…), citation markers such as
+// [1] or [2, 3], and maths: $$…$$, \(…\), or $…$ with no space just inside,
+// so prices such as "$5 and $10" stay text. Groups: 1 code, 2 bold,
+// 3 italics, 4 link, 5 citation, 6 maths.
+const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[[^\]\n]{1,100}\]\(https:\/\/[^\s)\n]+\))|(\[\d+(?:\s*,\s*\d+)*\])|(\$\$[^$]+?\$\$|\\\(.+?\\\)|(?<![\\\w$])\$(?![\s$])[^$\n]*?[^\s\\$]\$(?![\w$])|(?<![\\\w$])\$[^\s$\\]\$(?![\w$]))/g;
 
 /**
  * Render escaped inline Markdown and optionally link evidence citations.
@@ -2039,24 +5311,675 @@ function appendInlineMarkdown(element, text, linkCitation) {
       const code = document.createElement("code");
       code.textContent = match[1].slice(1, -1);
       element.append(code);
+    } else if (match[6]) {
+      element.append(before);
+      const source = match[6];
+      const wrap = source.startsWith("$$") ? 2 : source.startsWith("\\(") ? 2 : 1;
+      element.append(mathNode(source.slice(wrap, -wrap).trim(), source, false));
     } else if (match[2] || match[3]) {
       element.append(before);
       const node = document.createElement(match[2] ? "strong" : "em");
       appendInlineMarkdown(node, match[0].slice(match[2] ? 2 : 1, match[2] ? -2 : -1), linkCitation);
       element.append(node);
+    } else if (match[4]) {
+      element.append(before);
+      const parts = match[4].match(/^\[([^\]]+)\]\((https:\/\/[^)]+)\)$/);
+      let url = null;
+      try { url = parts ? new URL(parts[2]) : null; }
+      catch (_) { /* Invalid external links stay plain text. */ }
+      if (url && url.protocol === "https:" && url.hostname &&
+          !url.username && !url.password) {
+        // No href: WebEngine cannot speculatively fetch a link it only
+        // displays. A deliberate click delegates opening to the browser.
+        const link = document.createElement("button");
+        link.type = "button";
+        link.className = "external-link";
+        link.textContent = parts[1];
+        link.title = url.href;
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          bridge?.openExternalLink(url.href);
+        });
+        element.append(link);
+      } else {
+        element.append(match[4]);
+      }
     } else {
-      const link = linkCitation ? linkCitation(match[4]) : null;
+      const link = linkCitation ? linkCitation(match[5]) : null;
       // A linked citation sits right after its claim.
       if (link) before = before.replace(/[ \t]+$/, "");
-      element.append(before, link || match[4]);
+      element.append(before, link || match[5]);
     }
   }
   element.append(text.slice(last));
 }
 
+const MESSAGE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
 /**
- * Append a completed turn, enable answer selection, and show its
- * references.
+ * Format a turn's saved time for the actions under its messages.
+ *
+ * @param timestamp ISO 8601 time the turn was saved.
+ * @param now Current time, so today's messages show only the time.
+ * @returns "14:05" today, "28 Oct 14:05" this year, "28 Oct 2025 14:05"
+ *   before, or "" if the time is missing or invalid.
+ */
+function messageTime(timestamp, now = new Date()) {
+  const date = new Date(timestamp || "");
+  if (!timestamp || Number.isNaN(date.getTime())) return "";
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  if (date.toDateString() === now.toDateString()) return time;
+  const day = `${date.getDate()} ${MESSAGE_MONTHS[date.getMonth()]}`;
+  return date.getFullYear() === now.getFullYear()
+    ? `${day} ${time}` : `${day} ${date.getFullYear()} ${time}`;
+}
+
+/**
+ * Return an answer as the user sees it, for copying: no thinking, and
+ * citations with their shown numbers.
+ *
+ * @param turn Saved answer and its evidence.
+ * @returns Answer Markdown with linked markers such as "[143, 7]" shown as
+ *   "[1, 2]".
+ */
+function answerCopyText(turn) {
+  const { labels } = labelsForTurn(turn);
+  return splitThinking(turn.answer).answer.trim().replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (marker, inner) => {
+    const numbers = inner.split(",").map((value) => Number(value.trim()));
+    if (!numbers.every((number) => labels.has(number))) return marker;
+    return `[${numbers.map((number) => labels.get(number)).join(", ")}]`;
+  });
+}
+
+/**
+ * Put text on the clipboard. In the app Qt copies it, since the page may
+ * not; in a plain browser use the clipboard API, falling back to a hidden
+ * text box.
+ *
+ * @param text Text to copy.
+ */
+async function copyToClipboard(text) {
+  if (bridge) {
+    bridge.copyText(text);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    // Fall back below.
+  }
+  const box = document.createElement("textarea");
+  box.value = text;
+  box.setAttribute("readonly", "");
+  box.style.position = "fixed";
+  box.style.opacity = "0";
+  document.body.append(box);
+  box.select();
+  document.execCommand("copy");
+  box.remove();
+}
+
+/**
+ * Build the row shown under a message on hover or focus: Copy, Branch from
+ * here, and the message's time.
+ *
+ * @param text Text the Copy button puts on the clipboard.
+ * @param timestamp The turn's saved time, or "" while it is not saved.
+ * @param label What is copied, for the button's accessible name.
+ * @param onBranch Starts a branch from this message.
+ * @returns New element placed right after the message.
+ */
+function messageActions(text, timestamp, label, onBranch) {
+  const row = document.createElement("div");
+  row.className = "message-actions";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "message-action";
+  copy.title = "Copy";
+  copy.setAttribute("aria-label", `Copy ${label}`);
+  copy.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>';
+  copy.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await copyToClipboard(text);
+    copy.title = "Copied";
+    copy.classList.add("copied");
+    setTimeout(() => {
+      copy.title = "Copy";
+      copy.classList.remove("copied");
+    }, 1500);
+  });
+  const branch = document.createElement("button");
+  branch.type = "button";
+  branch.className = "message-action message-branch";
+  branch.title = "Branch from here";
+  branch.setAttribute("aria-label", `Branch from this ${label}`);
+  branch.disabled = busy;
+  branch.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12h5c3.5 0 4.5-6 8-6h4M17 3l3 3-3 3M8 12c3.5 0 4.5 6 8 6h4M17 15l3 3-3 3"/></svg>';
+  branch.addEventListener("click", (event) => {
+    event.stopPropagation();
+    onBranch();
+  });
+  row.append(copy, branch);
+  const shown = messageTime(timestamp);
+  if (shown) {
+    const time = document.createElement("time");
+    time.dateTime = timestamp;
+    time.title = new Date(timestamp).toLocaleString();
+    time.textContent = shown;
+    row.append(time);
+  }
+  return row;
+}
+
+/**
+ * Return user feedback for a saved message, or its neutral default.
+ * @param turnUuid UUID of the committed conversation turn.
+ * @param role Message role: user or assistant.
+ * @returns Save state and reaction.
+ */
+function messageFeedback(turnUuid, role) {
+  return feedbackData.entries?.[turnUuid]?.[role]
+    || { saved: false, reaction: "neutral" };
+}
+
+/**
+ * Determine whether an intent forbids indexing regardless of feedback.
+ * @param intentId Saved intent identifier.
+ * @returns True if project-owned intent policy is never.
+ */
+function memoryIntentNever(intentId) {
+  const record = projectBehaviorData?.intents?.find((item) =>
+    item.id === intentId);
+  return record?.memory?.values?.indexing === "never";
+}
+
+/**
+ * Repaint button state after feedback, policy, or busy-state changes.
+ */
+function refreshFeedbackControls() {
+  for (const button of conversation.querySelectorAll(".message-feedback")) {
+    const { turnUuid, feedbackRole: role, feedbackAction: action } = button.dataset;
+    const state = messageFeedback(turnUuid, role);
+    const active = action === "save" ? state.saved
+      : state.reaction === action;
+    const loaded = feedbackData.project === openProjectPath
+      && Boolean(feedbackData.revision);
+    button.disabled = !ready || busy || !loaded || Boolean(feedbackSave.pending)
+      || !turnUuid || !button.closest(".turn")?.dataset.conversationId;
+    button.classList.toggle("feedback-active", active);
+    button.classList.toggle("feedback-disliked", active && action === "disliked");
+    button.setAttribute("aria-pressed", String(active));
+    const forbidden = memoryIntentNever(button.closest(".turn")?.dataset.intentId);
+    button.title = forbidden && action !== "disliked"
+      ? "This intent cannot be indexed, even when saved or liked."
+      : action === "save" ? (active ? "Remove from memory" : "Save to memory")
+        : action === "liked" ? "Like this message"
+          : role === "assistant"
+            ? "Dislike this answer (exclude from memory and, when enabled, context)"
+            : "Dislike this question (exclude from memory indexing)";
+  }
+  for (const row of conversation.querySelectorAll(".message-actions")) {
+    row.classList.toggle("feedback-selected", Boolean(row.querySelector(
+      ".message-feedback.feedback-active")));
+  }
+}
+
+/**
+ * Load the active project's feedback and last memory-index status.
+ */
+function requestMemoryState() {
+  if (!bridge || !ready || !openProjectPath) return;
+  bridge.requestConversationFeedback(openProjectPath);
+  bridge.requestMemoryStatus(openProjectPath);
+}
+
+/**
+ * Accept a feedback snapshot only if it belongs to the current project.
+ * @param data Response from the core.
+ */
+function receiveFeedback(data) {
+  if (data.project !== openProjectPath) return;
+  if (data.error) {
+    feedbackData = { project: "", revision: "", entries: {} };
+    refreshFeedbackControls();
+    error.textContent = `Could not read conversation feedback: ${data.error}`;
+    error.classList.remove("hidden");
+    return;
+  }
+  if (feedbackSave.pending) return;
+  feedbackData = {
+    project: data.project, revision: data.revision, entries: data.entries,
+  };
+  refreshFeedbackControls();
+}
+
+/**
+ * Match a feedback save response and restore controls on failure.
+ * @param data Correlated save result.
+ */
+function receiveFeedbackSave(data) {
+  const pending = feedbackSave.pending;
+  if (!pending || pending.project !== data.project
+      || pending.requestId !== data.request_id
+      || pending.turnUuid !== data.turn_uuid
+      || pending.role !== data.role) return;
+  feedbackSave.pending = null;
+  const row = [...conversation.querySelectorAll(".message-actions")].find(
+    (item) => [...item.querySelectorAll(".message-feedback")].some(
+      (button) => button.dataset.turnUuid === data.turn_uuid
+        && button.dataset.feedbackRole === data.role));
+  const status = row?.querySelector(".message-feedback-status");
+  if (data.error) {
+    if (status) status.textContent = data.error;
+    bridge.requestConversationFeedback(openProjectPath);
+  } else {
+    feedbackData = {
+      project: data.project, revision: data.revision, entries: data.entries,
+    };
+    if (status) status.textContent = "Saved.";
+  }
+  refreshFeedbackControls();
+}
+
+/**
+ * Describe the last built index without treating cached counts as current.
+ * @param data Read-only index status from the core.
+ */
+function receiveMemoryStatus(data) {
+  if (data.project !== openProjectPath) return;
+  memoryIndexState = data;
+  const status = byId("memory-index-status");
+  if (data.error) {
+    status.textContent = data.error;
+    status.classList.add("tool-error");
+  } else if (!data.enabled) {
+    status.textContent = "Conversation memory is disabled. Feedback remains saved.";
+    status.classList.remove("tool-error");
+  } else if (!data.indexed) {
+    status.textContent = "No memory index yet. It updates when needed, or use Update.";
+    status.classList.remove("tool-error");
+  } else {
+    status.textContent = `Last index: ${data.records} messages `
+      + `(${data.questions} questions, ${data.answers} answers), `
+      + `${data.vectors} unique embeddings.`
+      + (data.feedback_stale ? " Feedback changed; update pending." : "");
+    status.classList.remove("tool-error");
+  }
+  showMemoryPolicy();
+}
+
+/**
+ * Request an explicit memory update without reindexing scientific sources.
+ */
+function syncMemoryIndex() {
+  if (!bridge || busy || !ready || memorySyncPending
+      || projectBehaviorData?.project !== openProjectPath
+      || !projectBehaviorData.memory.values.enabled) return;
+  memorySyncPending = true;
+  setBusy(true, "Updating conversation memory…");
+  byId("memory-index-status").textContent =
+    "Updating project memory; embedding new messages if needed…";
+  bridge.syncConversationMemory(openProjectPath);
+}
+
+/**
+ * Load an authoritative, paged list of saved messages from the core.
+ * @param offset Starting offset, default zero.
+ */
+function requestMemoryMessages(offset = 0) {
+  if (!bridge || !ready || !openProjectPath) return;
+  memoryMessagesRequestedOffset = offset;
+  if (memoryMessagePage?.project !== openProjectPath) {
+    memoryMessagePage = null;
+    renderMemoryMessages();
+  }
+  byId("memory-messages-status").textContent = "Loading saved messages…";
+  bridge.requestMemoryMessages(openProjectPath, offset);
+}
+
+/**
+ * Render text-only, project-scoped memory rows without interpreting HTML.
+ */
+function renderMemoryMessages() {
+  const list = byId("memory-messages-list");
+  list.replaceChildren();
+  const page = memoryMessagePage?.project === openProjectPath
+    ? memoryMessagePage : null;
+  const status = byId("memory-messages-status");
+  const previous = byId("memory-previous");
+  const next = byId("memory-next");
+  const items = Array.isArray(page?.messages) ? page.messages : [];
+  previous.disabled = !page || !items.length || busy
+    || memoryExcludeSave.pending || page.offset === 0;
+  next.disabled = !page || !items.length || busy
+    || memoryExcludeSave.pending
+    || page.offset + items.length >= page.total;
+  if (!page) {
+    status.textContent = "Open a project to inspect saved messages.";
+    return;
+  }
+  if (page.error) {
+    status.textContent = page.error;
+    status.classList.add("tool-error");
+    return;
+  }
+  status.classList.remove("tool-error");
+  if (!page.total) {
+    status.textContent = "No saved messages in active conversations.";
+    return;
+  }
+  const end = page.offset + items.length;
+  status.textContent = `Showing ${page.offset + 1}–${end} of ${page.total}`;
+  for (const item of items) {
+    const row = document.createElement("div");
+    row.className = "memory-manage-row";
+    const details = document.createElement("div");
+    details.className = "memory-manage-details";
+    const title = document.createElement("span");
+    title.className = "memory-manage-title";
+    const role = item.role === "user" ? "Question" : "Answer";
+    title.textContent = `${item.conversation_name} · Turn `
+      + `${item.turn_number} — ${role}`;
+    title.title = title.textContent;
+    const preview = document.createElement("span");
+    preview.className = "memory-manage-preview";
+    preview.textContent = item.preview;
+    const state = document.createElement("span");
+    state.className = "memory-manage-state";
+    state.textContent = {
+      eligible: "Eligible", excluded: "Excluded",
+      disliked: "Disliked", policy: "Not indexed by policy",
+    }[item.status] || "Not indexed";
+    details.append(title, preview, state);
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "secondary memory-manage-action";
+    action.textContent = item.excluded ? "Restore" : "Exclude";
+    action.title = item.excluded
+      ? "Allow this message under current project and intent policies"
+      : "Exclude this message from future memory retrieval";
+    action.disabled = busy || Boolean(memoryExcludeSave.pending);
+    action.addEventListener("click", () => setMemoryExclusion(item));
+    row.append(details, action);
+    list.append(row);
+  }
+}
+
+/**
+ * Accept only the requested project and page, discarding stale responses.
+ * @param data Core inventory response.
+ */
+function receiveMemoryMessages(data) {
+  if (data.project !== openProjectPath
+      || data.offset !== memoryMessagesRequestedOffset) return;
+  memoryMessagePage = data;
+  renderMemoryMessages();
+}
+
+/**
+ * Request a revision-checked explicit exclusion without changing ratings.
+ * @param item Saved message from the authoritative inventory.
+ */
+function setMemoryExclusion(item) {
+  const page = memoryMessagePage;
+  if (!bridge || busy || !ready || memoryExcludeSave.pending
+      || page?.project !== openProjectPath || !page.revision) return;
+  const requestId = ++memoryExcludeSave.nextId;
+  memoryExcludeSave.pending = {
+    requestId, project: openProjectPath,
+    turnUuid: item.turn_uuid, role: item.role,
+  };
+  renderMemoryMessages();
+  byId("memory-messages-status").textContent = "Saving exclusion…";
+  bridge.setMemoryExclusion(JSON.stringify({
+    project: openProjectPath, conversation_id: item.conversation_id,
+    turn_uuid: item.turn_uuid, role: item.role,
+    excluded: !item.excluded, revision: page.revision,
+    request_id: requestId,
+  }));
+}
+
+/**
+ * Match an exclusion acknowledgement before refreshing saved memory state.
+ * @param data Correlated backend result.
+ */
+function receiveMemoryExclusion(data) {
+  const pending = memoryExcludeSave.pending;
+  if (!pending || data.project !== pending.project
+      || data.request_id !== pending.requestId
+      || data.turn_uuid !== pending.turnUuid
+      || data.role !== pending.role) return;
+  memoryExcludeSave.pending = null;
+  if (data.error) {
+    error.textContent = `Could not change memory exclusion: ${data.error}`;
+    error.classList.remove("hidden");
+    memoryMessagePage = null;
+    bridge.requestConversationFeedback(openProjectPath);
+  } else {
+    feedbackData = {
+      project: data.project, revision: data.revision,
+      entries: data.entries,
+    };
+    refreshFeedbackControls();
+  }
+  requestMemoryMessages(memoryMessagesRequestedOffset);
+}
+
+/**
+ * Persist a single button action only for the matching project and turn.
+ * @param button Feedback button associated with a completed turn.
+ */
+function setMessageFeedback(button) {
+  if (!bridge || busy || feedbackSave.pending || !ready
+      || feedbackData.project !== openProjectPath) return;
+  const { turnUuid, feedbackRole: role, feedbackAction: action } = button.dataset;
+  const conversationId = button.closest(".turn")?.dataset.conversationId;
+  if (!turnUuid || !conversationId || !feedbackData.revision) return;
+  const previous = messageFeedback(turnUuid, role);
+  const next = { ...previous };
+  if (action === "save") next.saved = !next.saved;
+  else next.reaction = next.reaction === action ? "neutral" : action;
+  const requestId = ++feedbackSave.nextId;
+  feedbackSave.pending = {
+    requestId, project: openProjectPath, turnUuid, role,
+  };
+  const status = button.closest(".message-actions")?.querySelector(
+    ".message-feedback-status");
+  if (status) status.textContent = "Saving…";
+  refreshFeedbackControls();
+  bridge.saveMessageFeedback(JSON.stringify({
+    project: openProjectPath, conversation_id: conversationId,
+    turn_uuid: turnUuid, role, saved: next.saved, reaction: next.reaction,
+    revision: feedbackData.revision, request_id: requestId,
+  }));
+}
+
+/**
+ * Attach Save, Like, and Dislike to one committed message.
+ * @param row Existing Copy and Branch action row.
+ * @param turn Saved turn including a durable UUID.
+ * @param role User question or assistant answer.
+ */
+function appendFeedbackActions(row, turn, role) {
+  if (!/^[0-9a-f]{32}$/.test(turn.conversation_turn_uuid || "")) return;
+  for (const [action, label, icon] of [
+    ["save", "Save", '<path d="M5 4h14v17l-7-5-7 5z"/>'],
+    ["liked", "Like", '<path d="M7 10v11H4V10h3zm3 11h8l3-10-2-2h-5l1-6-2-1-5 9v10z"/>'],
+    ["disliked", "Dislike", '<path d="M7 14V3H4v11h3zm3-11h8l3 10-2 2h-5l1 6-2 1-5-9V3z"/>'],
+  ]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "message-action message-feedback";
+    button.dataset.turnUuid = turn.conversation_turn_uuid;
+    button.dataset.feedbackRole = role;
+    button.dataset.feedbackAction = action;
+    button.setAttribute("aria-label", `${label} ${role === "user" ? "question" : "answer"}`);
+    button.innerHTML = `<svg aria-hidden="true" viewBox="0 0 24 24">${icon}</svg>`;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      setMessageFeedback(button);
+    });
+    row.append(button);
+  }
+  const status = document.createElement("span");
+  status.className = "message-feedback-status";
+  status.setAttribute("role", "status");
+  row.append(status);
+  refreshFeedbackControls();
+}
+
+/**
+ * Add Copy, Branch from here, and time rows under a turn's question and
+ * answer.
+ *
+ * @param item Conversation article holding the two messages.
+ * @param turn Saved question and answer.
+ */
+function addMessageActions(item, turn) {
+  const question = item.querySelector(".user-message");
+  const answer = item.querySelector(".answer-message");
+  const asked = splitAttached(turn.question).question;
+  if (question) {
+    const row = messageActions(asked, turn.timestamp, "question", () => branchFromMessage(item, false, asked));
+    row.classList.add("user-actions");
+    appendFeedbackActions(row, turn, "user");
+    question.after(row);
+  }
+  if (answer) {
+    const row = messageActions(answerCopyText(turn), turn.timestamp, "answer",
+      () => branchFromMessage(item, true, ""));
+    appendFeedbackActions(row, turn, "assistant");
+    appendMemoryProvenance(row, turn);
+    answer.after(row);
+  }
+}
+
+/**
+ * Open an empty chat: the one on screen when it has no turns yet, otherwise
+ * one the engine reuses or creates, so unused empty chats do not pile up.
+ *
+ * @param draft Question to put in the message box, or "".
+ */
+function openEmptyChat(draft) {
+  if (busy) return;
+  if (!conversation.querySelector(".turn")) {
+    if (draft) setQuestionDraft(draft);
+    byId("question").focus();
+    return;
+  }
+  branchDraft = draft;
+  setBusy(true, "Starting a new conversation…");
+  bridge.newConversation();
+}
+
+/**
+ * Branch the conversation at one message. From an answer, the branch keeps
+ * every turn up to it; from a question, the turns before it, with the
+ * question put back in the message box to edit and send again.
+ *
+ * @param item Conversation article holding the message.
+ * @param withAnswer Whether the branch keeps this turn's answer.
+ * @param draft Question to put back in the message box, or "".
+ */
+function branchFromMessage(item, withAnswer, draft) {
+  // A chat being read is not the one the engine has open.
+  if (busy || reading) return;
+  // Count saved turns only: a stopped answer on screen was never saved.
+  const saved = [...conversation.querySelectorAll(".turn:not(.pending):not(.stopped)")];
+  const index = saved.indexOf(item);
+  if (index < 0) return;
+  if (index === 0 && !withAnswer) {
+    // Nothing to keep before the first question: an empty chat will do.
+    openEmptyChat(draft);
+    return;
+  }
+  branchDraft = draft;
+  setBusy(true, "Branching this conversation…");
+  bridge.branchConversation(withAnswer ? index + 1 : index);
+}
+
+// The list KíLín adds under a question with attached files; older chats
+// listed the original paths under "Attached paths to consider".
+const ATTACHED_LIST = /\n\nAttached (?:files|paths to consider):\n((?:- [^\n]+(?:\n|$))+)$/;
+
+/**
+ * Split a saved question into the user's text and its attached files.
+ *
+ * @param text Question as sent to the engine.
+ * @returns ``question`` (the user's text) and ``files`` (attached paths).
+ */
+function splitAttached(text) {
+  const value = String(text || "");
+  const match = value.match(ATTACHED_LIST);
+  if (!match) return { question: value, files: [] };
+  return {
+    question: value.slice(0, match.index),
+    files: match[1].trim().split("\n").map((line) => line.slice(2).trim()),
+  };
+}
+
+/**
+ * Show a question with its attached files as chips under the text.
+ *
+ * A file in sources opens its place in the workspace tree; a path from an
+ * older chat, never copied, is shown by name only.
+ *
+ * @param element The question bubble.
+ * @param text Question as sent to the engine.
+ */
+function fillQuestion(element, text) {
+  const { question, files } = splitAttached(text);
+  element.textContent = question;
+  if (!files.length) return;
+  const row = document.createElement("div");
+  row.className = "question-attachments";
+  for (const path of files) {
+    const inSources = path.startsWith("sources/");
+    const chip = document.createElement(inSources ? "button" : "span");
+    chip.className = "question-attachment";
+    chip.textContent = path.replace(/\/$/, "").split(/[\\/]/).pop() || path;
+    chip.title = inSources ? `Show ${path} in the workspace` : path;
+    if (inSources) {
+      chip.type = "button";
+      chip.addEventListener("click", () => revealWorkspacePath(path));
+    }
+    row.append(chip);
+  }
+  element.append(row);
+}
+
+/**
+ * Open the Workspace panel at a file or folder and briefly highlight it.
+ *
+ * @param path Workspace-relative path; a folder ends with "/".
+ */
+function revealWorkspacePath(path) {
+  showWorkspace(true);
+  const target = path.replace(/\/$/, "");
+  const tree = byId("workspace-tree");
+  const row = [...tree.querySelectorAll(".tree-file")].find((line) => line.dataset.path === target)
+    || [...tree.querySelectorAll(".tree-folder")].find((folder) => folder.dataset.path === target)?.querySelector("summary");
+  if (!row) {
+    // Only a notice: an answer may be on its way.
+    error.textContent = `${target} is no longer in the workspace.`;
+    error.classList.remove("hidden");
+    return;
+  }
+  // Unfold every folder above it.
+  for (let node = row.parentElement; node && node !== tree; node = node.parentElement) {
+    if (node.tagName === "DETAILS") node.open = true;
+  }
+  row.scrollIntoView({ block: "center" });
+  row.focus({ preventScroll: true });
+  row.classList.remove("revealed");
+  void row.offsetWidth;
+  row.classList.add("revealed");
+}
+
+/**
+ * Append a completed turn and enable its answer/reference interactions.
  *
  * @param turn Saved question, answer, and evidence data.
  */
@@ -2064,31 +5987,41 @@ function addTurn(turn) {
   const item = document.createElement("article");
   item.className = "turn";
   item.dataset.turnIndex = String(conversation.children.length);
+  item.dataset.conversationId = reading?.id || activeConversationId;
+  item.dataset.intentId = turn.parameters?.intent || "";
   const question = document.createElement("div");
   question.className = "user-message";
-  question.textContent = turn.question;
+  fillQuestion(question, turn.question);
   const answer = document.createElement("div");
   answer.className = "answer-message";
-  answer.tabIndex = 0;
-  answer.setAttribute("aria-label", "Select this answer to view its references");
-  answer.addEventListener("click", () => {
-    showWorkspace(true);
-    selectTurn(item, turn);
-  });
-  answer.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      showWorkspace(true);
-      selectTurn(item, turn);
-    }
-  });
+  bindAnswerSelection(answer, item, turn);
   renderAnswer(answer, turn, item);
   // A saved answer shows the timing and tokens it showed when it arrived.
   const timeline = renderTimeline(turn.timeline || null, turn);
   item.append(...[question, timeline, answer].filter(Boolean));
+  addMessageActions(item, turn);
   conversation.append(item);
+  refreshFeedbackControls();
   selectTurn(item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
+}
+
+/**
+ * Mark only the chat currently producing an answer in the sidebar.
+ *
+ * The answering chat stays marked while another conversation is read.
+ * The marker is presentation state and never enters saved conversation data.
+ */
+function syncGeneratingConversations() {
+  const generating = busy && activity.classList.contains("answer-progress")
+    ? answeringConversationId : "";
+  document.querySelectorAll(".conversation-item").forEach((item) => {
+    const active = Boolean(generating)
+      && item.dataset.conversationId === generating;
+    item.classList.toggle("generating", active);
+    item.setAttribute("aria-label", active
+      ? `${item.textContent} (generating answer)` : item.textContent);
+  });
 }
 
 /**
@@ -2104,7 +6037,11 @@ function renderConversations(data) {
   list.replaceChildren();
   let activeName = "";
   let activeEmpty = false;
-  for (const item of data.conversations || []) {
+  const mode = sidebarPref("conversations-sort", "updated");
+  const orderKey = `conversations-order:${openProjectPath}`;
+  const ordered = sidebarConversationOrder(data.conversations || [], mode, sidebarPref(orderKey, []));
+  const rows = [];
+  for (const item of ordered) {
     if (item.conversation_id === activeConversationId) {
       activeName = item.name;
       activeEmpty = Boolean(item.empty);
@@ -2118,11 +6055,13 @@ function renderConversations(data) {
     row.className = "conversation-row";
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `conversation-item${item.conversation_id === activeConversationId ? " active" : ""}${provisional ? " provisional" : ""}`;
+    const shown = reading ? reading.id : activeConversationId;
+    button.className = `conversation-item${item.conversation_id === shown ? " active" : ""}${provisional ? " provisional" : ""}${unreadConversations.has(item.conversation_id) ? " unread" : ""}`;
     button.dataset.conversationId = item.conversation_id;
     button.textContent = name;
     let opening = null;
     button.addEventListener("click", () => {
+      if (readConversation(item)) return;
       if (busy || item.conversation_id === activeConversationId) return;
       // Wait briefly so a double-click renames instead of opening.
       clearTimeout(opening);
@@ -2137,30 +6076,154 @@ function renderConversations(data) {
       clearTimeout(opening);
       if (!busy && !provisional) renameInSidebar(row, button, item);
     });
-    button.title = `${name}\nDouble-click to rename`;
+    button.title = `${name}\nDouble-click or right-click to rename`;
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      if (provisional) return;
+      showWorkspaceMenu(event.clientX, event.clientY, [
+        ["Rename", () => renameInSidebar(row, button, item)],
+        ["Delete…", () => remove.click()],
+      ]);
+    });
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "conversation-delete";
     remove.textContent = "×";
     remove.setAttribute("aria-label", `Delete ${item.name}`);
     remove.title = "Delete conversation";
-    remove.addEventListener("click", () => {
-      if (busy || !confirm(`Delete “${item.name}”?`)) return;
+    remove.addEventListener("click", async () => {
+      if (busy) return;
+      const deleting = await askKilin(`Delete “${item.name}”?`, "", "Delete");
+      if (!deleting || busy) return;
       setBusy(true, "Deleting conversation…");
       bridge.deleteConversation(item.conversation_id);
     });
     row.append(button, remove);
     list.append(row);
+    rows.push([row, item.conversation_id]);
   }
-  byId("conversation-name").textContent = activeEmpty ? "" : activeName;
-  byId("conversation-name").classList.toggle("hidden", activeEmpty);
+  if (mode === "manual") {
+    const ids = rows.map(([, id]) => id);
+    for (const [row, id] of rows) {
+      makeReorderable(row, id, ids, (order) => {
+        setSidebarPref(orderKey, order);
+        renderConversations(lastConversationData);
+      });
+    }
+  }
+  syncGeneratingConversations();
+  const heading = reading ? reading.name : activeEmpty ? "" : activeName;
+  byId("conversation-name").textContent = heading;
+  byId("conversation-name").classList.toggle("hidden", !heading);
+  updateChatSummary();
+}
+
+/**
+ * Show a chat read-only while another one is answered, or go back to the
+ * answering chat.
+ *
+ * @param item The clicked chat's record from the backend.
+ * @returns Whether the click was handled here; false opens the chat as
+ *   usual.
+ */
+function readConversation(item) {
+  const id = item.conversation_id;
+  if (reading && id === activeConversationId) {
+    returnToAnswer();
+    return true;
+  }
+  if (!answeringConversationId || id === activeConversationId) return false;
+  if (reading?.id !== id) {
+    // The engine is busy answering, so Qt reads the saved file.
+    reading = { ...reading, id, name: item.name };
+    bridge.viewConversation(id);
+  }
+  return true;
+}
+
+/**
+ * Show the saved turns of the chat being read, keeping the answering chat's
+ * content aside.
+ *
+ * @param turns Saved turns from ``conversation_viewed``, or null when the
+ *   chat could not be read.
+ */
+function showReadConversation(turns) {
+  if (!reading.live) {
+    reading.live = [...conversation.childNodes];
+    reading.scroll = conversationScroll.scrollTop;
+    reading.count = currentTurnCount;
+  }
+  conversation.replaceChildren();
+  clearReferences();
+  if (turns) {
+    turns.forEach(addTurn);
+  } else {
+    const note = document.createElement("p");
+    note.className = "reading-failed";
+    note.textContent = "KíLín could not read this conversation.";
+    conversation.append(note);
+  }
+  renderConversations(lastConversationData);
+  highlightMemoryOrigin();
+  updateChatSummary(turns?.length || 0);
+  updateSendButton();
+}
+
+/**
+ * Leave the chat being read and show the answering chat again.
+ */
+function returnToAnswer() {
+  if (!reading) return;
+  const { live, scroll, count } = reading;
+  reading = null;
+  if (live) {
+    conversation.replaceChildren(...live);
+    clearReferences();
+    conversationScroll.scrollTop = scroll;
+    updateChatSummary(count);
+  }
+  unreadConversations.delete(activeConversationId);
+  renderConversations(lastConversationData);
+  updateSendButton();
+}
+
+/**
+ * Ask a yes/no question in a KíLín dialog instead of the system pop-up.
+ *
+ * Cancel has focus first, so Enter does not confirm by accident; Escape
+ * also cancels.
+ *
+ * @param title Short question, such as "Delete “Notes”?".
+ * @param message One sentence on what KíLín will do; empty hides it.
+ * @param action Label of the confirming button, such as "Delete".
+ * @param other Label of an optional third button, such as "Keep both".
+ * @returns Promise of true when the user confirms, "other" for the third
+ *   button, false otherwise.
+ */
+function askKilin(title, message, action, other = "") {
+  const dialog = byId("kilin-ask");
+  byId("kilin-ask-title").textContent = title;
+  byId("kilin-ask-message").textContent = message;
+  byId("kilin-ask-message").classList.toggle("hidden", !message);
+  byId("kilin-ask-confirm").textContent = action;
+  byId("kilin-ask-other").textContent = other;
+  byId("kilin-ask-other").classList.toggle("hidden", !other);
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(
+      dialog.returnValue === "confirm" || (dialog.returnValue === "other" && "other")),
+    { once: true });
+    dialog.returnValue = "";
+    dialog.showModal();
+    byId("kilin-ask-cancel").focus();
+  });
 }
 
 /**
  * Keep the text an answer had generated when the user pressed Stop.
  *
- * Stop restarts the engine, so the partial answer is never saved; it stays
- * on screen, marked as stopped, until the user opens another chat.
+ * A stopped answer is never saved; it stays on screen, marked as stopped,
+ * until the user opens another chat.
  *
  * @param current The pending turn that was stopped.
  */
@@ -2175,8 +6238,37 @@ function keepStoppedTurn(current) {
   current.item.classList.remove("pending");
   current.item.classList.add("stopped");
   current.answer.classList.remove("answer-phase", "streaming");
-  current.durationLine.textContent = `Stopped after ${formatDuration(elapsed)} · not saved`;
+  // Keep the steps it went through, ending with the Stop, like "Took …".
+  const record = {
+    elapsed_ms: elapsed,
+    steps: timelineSteps(current.timeline || [], current.started + elapsed),
+  };
+  const line = renderTimeline(record, { parameters: { usage: current.usage } });
+  const stop = document.createElement("li");
+  stop.className = "timeline-stopped";
+  stop.textContent = "Stopped at your request";
+  // The last step, before the token count.
+  const list = line.querySelector(".answer-timeline");
+  list.insertBefore(stop, list.querySelector(".timeline-usage"));
+  const tokens = usageSum(current.usage);
+  line.querySelector("summary").textContent = [
+    `Stopped after ${formatDuration(elapsed)}`,
+    tokens ? `${formatTokens(tokens)} tokens` : "",
+  ].filter(Boolean).join(" · ");
+  current.durationLine.replaceWith(line);
+  current.durationLine = line;
   stoppedTurn = { item: current.item, conversationId: activeConversationId };
+}
+
+/**
+ * Once the answer has ended, or a restarted engine is ready, turn the answer
+ * showing "Stopping…" into a stopped one, kept on screen when it had text.
+ */
+function finishStopping() {
+  if (!pendingTurn?.stopping) return;
+  stopPhaseAnimation();
+  keepStoppedTurn(pendingTurn);
+  pendingTurn = null;
 }
 
 /**
@@ -2257,13 +6349,68 @@ function clearAskingConversation() {
 }
 
 /**
+ * Pick the three questions an empty chat offers.
+ *
+ * With packaged defaults, source-grounded questions come first: three
+ * intents at random, each with one question at random. Project-customized
+ * suggestions suppress generated ones in ``renderConversationEmpty``.
+ * When there are fewer than three intents, for example without
+ * sources, the type's fixed suggestions fill the rest: its first two
+ * ("What can you do for me?" and "How do I add my files?"), then one of
+ * the others at random, so each new chat can show another example.
+ * The examples shown last time are skipped while there are others.
+ *
+ * @param questions Ready-to-send {intent, question} items.
+ * @param fixed The project type's fixed suggestions.
+ * @param shownBefore Texts shown in the last empty chat.
+ * @returns Up to three distinct texts.
+ */
+function chooseSuggestions(questions, fixed, shownBefore = []) {
+  const shuffled = (items) => [...items].sort(() => Math.random() - 0.5);
+  const intents = new Set();
+  const picked = [];
+  for (const item of shuffled(questions)) {
+    if (intents.has(item.intent)) continue;
+    intents.add(item.intent);
+    picked.push(item.question);
+  }
+  const [first, second, ...rest] = fixed;
+  const unseen = rest.filter((text) => !shownBefore.includes(text));
+  const examples = [...shuffled(unseen), ...shuffled(rest)];
+  const pool = [...picked, first, second, ...examples];
+  return [...new Set(pool.filter(Boolean))].slice(0, 3);
+}
+
+/**
+ * Check whether a project's saved landing text overrides the type default.
+ *
+ * Source-generated text is supplemental; an explicit project setting
+ * takes precedence, even if an older generated pool is still in memory.
+ *
+ * @param field Either "suggestions" or "welcome_prompts".
+ * @returns Whether the saved values differ from the packaged type.
+ */
+function hasCustomLandingText(field) {
+  const saved = projectPresentation?.[field];
+  const packaged = projectTypes[activeProjectTypeId]?.[field];
+  return Array.isArray(saved) && Array.isArray(packaged)
+    && (saved.length !== packaged.length
+      || saved.some((item, index) => item !== packaged[index]));
+}
+
+/**
  * Render the project-type welcome screen for an empty conversation.
  */
 function renderConversationEmpty() {
   conversation.replaceChildren();
-  const type = projectTypes[activeProjectTypeId] || {};
+  const type = projectPresentation && openProjectPath
+    ? projectPresentation : projectTypes[activeProjectTypeId] || {};
+  const fixedPrompts = type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts;
   const content = {
-    prompts: type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts,
+    // Headings about the project's own sources replace the fixed ones.
+    prompts: openProjectPath && sourceWelcome.length
+      && !hasCustomLandingText("welcome_prompts")
+      ? sourceWelcome : fixedPrompts,
     suggestions: type.suggestions?.length ? type.suggestions : genericEmptyChat.suggestions,
   };
   let promptIndex = Math.floor(Math.random() * content.prompts.length);
@@ -2277,16 +6424,18 @@ function renderConversationEmpty() {
   prompt.textContent = content.prompts[promptIndex];
   const suggestions = document.createElement("div");
   suggestions.className = "prompt-suggestions";
-  // The type's first suggestion is always shown; two others vary.
-  const [first, ...rest] = content.suggestions;
-  const choices = [first, ...rest.sort(() => Math.random() - 0.5).slice(0, 2)].filter(Boolean);
+  const source = openProjectPath && !hasCustomLandingText("suggestions")
+    ? sourceQuestions : [];
+  const choices = chooseSuggestions(source, content.suggestions,
+    lastEmptySuggestions[activeProjectTypeId] || []);
+  lastEmptySuggestions[activeProjectTypeId] = choices;
   for (const text of choices) {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = text;
     button.addEventListener("click", () => {
       const question = byId("question");
-      question.value = text;
+      setQuestionDraft(text);
       question.focus();
       // Select the "…" so typing the missing part replaces it.
       const gap = text.indexOf("…");
@@ -2346,7 +6495,10 @@ function renderEffortPicker() {
   const depth = currentDepth();
   if (levels.length !== 5 || depth.length !== 5) return;
   // The effort is named by the model level; search depth is a count.
-  byId("effort-name").textContent = levels[selectedModelLevel].name;
+  byId("effort-level-name").textContent = levels[selectedModelLevel].name;
+  showThinkingSwitch(levels[selectedModelLevel].model);
+  byId("effort-temperature").value = byId("temperature").value;
+  byId("effort-temperature").disabled = busy;
   for (const [kind, index] of [["model", selectedModelLevel], ["depth", selectedDepthStep]]) {
     byId(`effort-${kind}-detail`).textContent = kind === "model"
       ? levels[index].model.split("/").pop()
@@ -2362,6 +6514,24 @@ function renderEffortPicker() {
     `${levels[selectedModelLevel].name} · ${depth[selectedDepthStep]}`;
   byId("effort-button").title =
     `${levels[selectedModelLevel].name}: ${levels[selectedModelLevel].model.split("/").pop()} · search depth ${depth[selectedDepthStep]} passages`;
+}
+
+/**
+ * Show the Thinking switch under "Lagom ›" as Settings → Answers has it.
+ *
+ * Both are one setting: the switch only sets the Answers checkbox, which
+ * saves it to the open project. Without a detected template prompt
+ * difference, the switch remains disabled; capability is not inferred.
+ *
+ * @param model Model of the chosen effort level.
+ */
+function showThinkingSwitch(model) {
+  const detected = modelHasThinkingSwitch(model);
+  const on = byId("thinking").checked;
+  for (const input of document.querySelectorAll('input[name="effort-thinking"]')) {
+    input.checked = (input.value === "on") === on;
+    input.disabled = busy || !detected;
+  }
 }
 
 /**
@@ -2417,7 +6587,6 @@ function advanceAnswerStage() {
  */
 function queueAnswerStage(key, detail) {
   if (!pendingTurn) return;
-  markTimelineStep(detail);
   if (answerStageKey === key) return;
   if (answerStageQueue.some((stage) => stage.key === key)) return;
   answerStageQueue.push({ key, detail });
@@ -2426,48 +6595,65 @@ function queueAnswerStage(key, detail) {
 }
 
 /**
- * Record the moment a step started, for the expandable timeline.
+ * Display an activity start emitted by the core timeline recorder.
  *
- * @param label Step description, as shown in the shimmering line.
+ * @param activity Indexed activity with the core's phase and description.
  */
-function markTimelineStep(label) {
+function markTimelineStep(activity) {
   const timeline = pendingTurn?.timeline;
-  if (!timeline || timeline.at(-1)?.label === label) return;
-  timeline.push({ label, at: performance.now() });
+  if (!timeline || activity.index !== timeline.length) return;
+  timeline.push({
+    phase: activity.phase,
+    label: activity.label,
+    at: performance.now(),
+  });
 }
 
 /**
- * Record how long a completed answer took and how long each step took.
+ * Estimate in-flight step durations for the live activity display.
  *
- * The record is saved with the project, so a resumed conversation shows the
- * same "Took Ns" line and step list as when the answer arrived.
- *
- * @param current The pending turn being completed.
- * @param turn Saved turn with its routing parameters.
- * @param totalMs Time from Ask to the complete answer.
- * @returns The total time and each step's label and duration.
+ * @param timeline Steps with ``label`` and start time ``at``, in order.
+ * @param end Time the last step ended, or now for a step still running.
+ * @returns Each reported activity's label and estimated duration in
+ *   milliseconds. No core activity is filtered by the GUI.
  */
-function timelineRecord(current, turn, totalMs) {
-  const end = current.started + totalMs;
-  const steps = (current.timeline || []).filter((step) => step.label !== "Starting");
-  const query = turn.parameters?.retrieval_query;
-  return {
-    elapsed_ms: Math.round(totalMs),
-    steps: steps.map((step, index) => ({
-      label: query && /semantic search/i.test(step.label)
-        ? `${step.label} for “${query}”`
-        : step.label,
-      ms: Math.round(Math.max(0, (steps[index + 1]?.at ?? end) - step.at)),
-    })),
-  };
+function timelineSteps(timeline, end) {
+  return timeline.map((step, index) => ({
+    label: step.label,
+    ms: Math.round(Math.max(0, (timeline[index + 1]?.at ?? end) - step.at)),
+  }));
+}
+
+/**
+ * Add one row per step, with its duration, to a timeline list.
+ *
+ * Used both while an answer is made and for the saved "Took …" list, so
+ * they look the same.
+ *
+ * @param list The ``answer-timeline`` list to fill.
+ * @param steps Step labels and durations in milliseconds.
+ * @param running Whether the last step is still going on.
+ */
+function appendTimelineRows(list, steps, running = false) {
+  steps.forEach((step, index) => {
+    const row = document.createElement("li");
+    if (running && index === steps.length - 1) row.className = "timeline-running";
+    const label = document.createElement("span");
+    label.textContent = step.label;
+    const time = document.createElement("span");
+    time.className = "timeline-time";
+    time.textContent = step.ms < 100 ? "<0.1s" : `${(step.ms / 1000).toFixed(1)}s`;
+    row.append(label, time);
+    list.append(row);
+  });
 }
 
 /**
  * Build the collapsed "Took Ns · Xk tokens" line; expanding it lists each
  * step and how long it took.
  *
- * @param record Saved timing from timelineRecord, or null for an answer
- *   saved before timings were kept (then only its tokens are shown).
+ * @param record Core-owned answer timeline stored with the turn, or null
+ *   for an older answer without timing data.
  * @param turn Saved turn with its token usage.
  * @returns The line, or null when there is neither a timing nor tokens.
  */
@@ -2487,23 +6673,46 @@ function renderTimeline(record, turn) {
   }
   const list = document.createElement("ol");
   list.className = "answer-timeline";
-  for (const step of record?.steps || []) {
-    const row = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = step.label;
-    const time = document.createElement("span");
-    time.className = "timeline-time";
-    time.textContent = step.ms < 100 ? "<0.1s" : `${(step.ms / 1000).toFixed(1)}s`;
-    row.append(label, time);
-    list.append(row);
-  }
+  appendTimelineRows(list, record?.steps || []);
   if (tokens) {
     const row = document.createElement("li");
     row.className = "timeline-usage";
     const label = document.createElement("span");
-    label.textContent = `Tokens: ${usage.input_tokens.toLocaleString()} read, ${usage.output_tokens.toLocaleString()} written`;
+    const parameters = turn.parameters || {};
+    const model = typeof parameters.chat_model === "string"
+      ? parameters.chat_model : "";
+    const modelSummary = typeof parameters.model_summary === "string"
+      ? parameters.model_summary : "";
+    const settings = [];
+    const thinking = typeof parameters.thinking_effective === "boolean"
+      ? parameters.thinking_effective : parameters.thinking;
+    if (typeof thinking === "boolean") {
+      settings.push(thinking ? "thinking on" : "thinking off");
+    }
+    // Previous conversations have no core-formatted model summary.
+    if (!modelSummary && typeof parameters.temperature === "number"
+        && Number.isFinite(parameters.temperature)) {
+      settings.push(`T=${parameters.temperature}`);
+    }
+    if (Number.isInteger(parameters.max_new_tokens)
+        && parameters.max_new_tokens > 0) {
+      settings.push(`${parameters.max_new_tokens.toLocaleString()} max tokens`);
+    }
+    label.textContent = [
+      `Tokens: ${usage.input_tokens.toLocaleString()} read`,
+      `${usage.output_tokens.toLocaleString()} written`,
+    ].join(", ");
     row.append(label);
     list.append(row);
+    if (modelSummary || model) {
+      const modelRow = document.createElement("li");
+      modelRow.className = "timeline-model";
+      const modelLabel = document.createElement("span");
+      modelLabel.textContent = modelSummary || `Model: ${model}${settings.length
+        ? ` (${settings.join(", ")})` : ""}`;
+      modelRow.append(modelLabel);
+      list.append(modelRow);
+    }
   }
   details.append(summary, list);
   return details;
@@ -2515,7 +6724,8 @@ function renderTimeline(record, turn) {
  * @param turn Completed answer and saved conversation metadata.
  */
 function completeAfterAnswerStages(turn) {
-  // Freeze the timer when the answer arrives, not after the stage animation.
+  unansweredQuestion = "";
+  // Freeze the display timer; final timing comes from the saved turn.
   if (pendingTurn && pendingTurn.elapsedMs === null) {
     pendingTurn.elapsedMs = performance.now() - pendingTurn.started;
   }
@@ -2531,7 +6741,8 @@ function completeAfterAnswerStages(turn) {
  * @param detail Optional supporting status text.
  */
 function showTurnPhase(label, detail = "") {
-  if (!pendingTurn) return;
+  // Steps reported just before Stop took effect do not undo "Stopping".
+  if (!pendingTurn || pendingTurn.stopping) return;
   pendingTurn.phase = label;
   pendingTurn.detail.textContent = detail;
   pendingTurn.detail.classList.toggle("hidden", !detail);
@@ -2607,11 +6818,21 @@ function paintPendingTurn() {
   if (!pendingTurn) return;
   const dots = Math.floor(performance.now() / 400) % 4;
   pendingTurn.label.textContent = `${pendingTurn.phase}${".".repeat(dots)}`;
+  if (pendingTurn.stopping) {
+    // Shown above a streamed answer too, where the phase label is gone.
+    pendingTurn.timer.textContent = `Stopping${".".repeat(dots)}`;
+    return;
+  }
   const tokens = usageSum(pendingTurn.usage);
   pendingTurn.timer.textContent = formatDuration(
     pendingTurn.elapsedMs ?? performance.now() - pendingTurn.started)
     + (tokens ? ` · ${formatTokens(tokens)} tokens` : "");
-  if (pendingTurn.durationLine) pendingTurn.durationLine.textContent = pendingTurn.timer.textContent;
+  // Live estimates only; the completed turn supplies core timings.
+  const list = pendingTurn.steps;
+  if (list && pendingTurn.durationLine.open) {
+    list.replaceChildren();
+    appendTimelineRows(list, timelineSteps(pendingTurn.timeline, performance.now()), true);
+  }
 }
 
 /**
@@ -2628,23 +6849,29 @@ function addPendingTurn(question) {
   item.dataset.turnIndex = String(conversation.children.length);
   const questionNode = document.createElement("div");
   questionNode.className = "user-message";
-  questionNode.textContent = question;
+  fillQuestion(questionNode, question);
   const answer = document.createElement("div");
   answer.className = "answer-message answer-phase";
   const phaseHeader = document.createElement("div");
   phaseHeader.className = "answer-phase-header";
   const phaseLabel = document.createElement("span");
   phaseLabel.className = "answer-phase-label";
-  const phaseTimerLabel = document.createElement("span");
-  phaseTimerLabel.className = "answer-phase-timer";
-  phaseHeader.append(phaseLabel, phaseTimerLabel);
+  phaseHeader.append(phaseLabel);
   const phaseDetail = document.createElement("div");
   phaseDetail.className = "answer-phase-detail";
   answer.append(phaseHeader, phaseDetail);
-  item.append(questionNode, answer);
+  // The steps are listed as they happen, folded like the "Took …" summary
+  // it becomes when the answer arrives; expanding it follows the route live.
+  const durationLine = document.createElement("details");
+  durationLine.className = "answer-duration";
+  const timer = document.createElement("summary");
+  const steps = document.createElement("ol");
+  steps.className = "answer-timeline";
+  durationLine.append(timer, steps);
+  item.append(questionNode, durationLine, answer);
   conversation.append(item);
   pendingTurn = {
-    item, answer, label: phaseLabel, timer: phaseTimerLabel, detail: phaseDetail,
+    item, answer, label: phaseLabel, timer, steps, durationLine, detail: phaseDetail,
     phase: "Generating", started: performance.now(), elapsedMs: null,
     timeline: [],
   };
@@ -2654,6 +6881,44 @@ function addPendingTurn(question) {
   phaseTimer = setInterval(paintPendingTurn, 200);
   queueAnswerStage("starting", "Starting");
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
+}
+
+/**
+ * Present one actionable prompt before displaying a waiting status.
+ *
+ * @param card Fully built tool plan or option question.
+ */
+function showToolPrompt(card) {
+  if (!pendingTurn) return;
+  pendingTurn.prompt?.remove();
+  pendingTurn.prompt = card;
+  pendingTurn.answer.append(card);
+  resetAnswerStages();
+  showTurnPhase("Waiting", "Waiting for your choice");
+  byId("activity-text").textContent = "Waiting for your choice";
+  byId("activity-detail").textContent = "";
+  conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  card.querySelector("button")?.focus({ preventScroll: true });
+}
+
+/**
+ * Submit a prompt once and immediately leave its waiting display.
+ *
+ * @param card The currently active prompt, not an earlier detached card.
+ * @param value Engine plan-choice value or option index.
+ * @param message Progress label after the explicit user decision.
+ */
+function submitToolPrompt(card, value, message) {
+  if (!bridge || !pendingTurn || pendingTurn.prompt !== card) return;
+  card.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+  pendingTurn.prompt = null;
+  card.remove();
+  error.classList.add("hidden");
+  resetAnswerStages();
+  queueAnswerStage(`choice:${value}`, message);
+  byId("activity-text").textContent = message;
+  byId("activity-detail").textContent = "";
+  bridge.choosePlan(value);
 }
 
 /**
@@ -2673,19 +6938,21 @@ function showToolPlan(plan) {
   facts.className = "tool-plan-facts";
   facts.textContent = [plan.scope, ...(plan.details || [])].join(" · ");
   const duration = (seconds) => (seconds < 1 ? "instant" : `about ${formatDuration(seconds * 1000)}`);
-  const calls = plan.batches_to_run === 1 ? "1 model call" : `${plan.batches_to_run} model calls`;
+  const network = plan.operation === "network";
+  const calls = network ? `${plan.batches_to_run} reference lookups`
+    : plan.batches_to_run === 1 ? "1 model call" : `${plan.batches_to_run} model calls`;
   const actions = document.createElement("div");
   actions.className = "tool-plan-actions";
   const choices = [
-    [PLAN_CHOICE_CONTINUE, "primary", "Read everything", `${calls} · ${duration(plan.estimated_seconds)}`],
+    [PLAN_CHOICE_CONTINUE, "primary", network ? "Authorize lookup" : "Read everything",
+      network ? calls : `${calls} · ${duration(plan.estimated_seconds)}`],
     [PLAN_CHOICE_QUICK, "secondary", plan.quick_label || "Quick sample",
-      `${plan.quick_note || `A sample of ${plan.quick_items}`} · ${duration(plan.quick_seconds)}`],
+      network ? `Authorize ${plan.quick_items} reference lookups`
+        : `${plan.quick_note || `A sample of ${plan.quick_items}`} · ${duration(plan.quick_seconds)}`],
   ];
-  const choose = (choice) => {
-    card.remove();
-    queueAnswerStage(`choice:${choice}`, choice === PLAN_CHOICE_CANCEL ? "Cancelling" : "Starting");
-    bridge.choosePlan(choice);
-  };
+  const choose = (choice) => submitToolPrompt(
+    card, choice, choice === PLAN_CHOICE_CANCEL ? "Cancelling" : "Starting",
+  );
   for (const [choice, style, label, note] of choices) {
     const button = document.createElement("button");
     button.type = "button";
@@ -2703,16 +6970,17 @@ function showToolPlan(plan) {
   const cancel = document.createElement("button");
   cancel.type = "button";
   cancel.className = "tool-plan-cancel";
-  cancel.textContent = "Cancel";
+  cancel.textContent = network ? "Stay offline" : "Cancel";
   cancel.addEventListener("click", () => choose(PLAN_CHOICE_CANCEL));
   actions.append(cancel);
   card.append(summary, facts, actions);
-  pendingTurn.answer.append(card);
-  conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", plan.summary);
+  showToolPrompt(card);
 }
 
 /**
- * Show a tool's question with one button per option, plus Cancel.
+ * Show a choice with options; tool dialogs may also offer Cancel.
  *
  * @param choice Question and option labels from the tool.
  */
@@ -2725,11 +6993,9 @@ function showToolChoice(choice) {
   question.textContent = choice.question;
   const actions = document.createElement("div");
   actions.className = "tool-choice-options";
-  const answer = (value, label) => {
-    card.remove();
-    queueAnswerStage(`choice:${value}`, value === "cancel" ? "Cancelling" : `Using ${label}`);
-    bridge.choosePlan(value);
-  };
+  const answer = (value, label) => submitToolPrompt(
+    card, value, value === "cancel" ? "Cancelling" : `Using ${label}`,
+  );
   (choice.options || []).forEach((label, index) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -2738,19 +7004,25 @@ function showToolChoice(choice) {
     button.addEventListener("click", () => answer(`option:${index}`, label.replace(/ \(.*\)$/, "")));
     actions.append(button);
   });
-  const cancel = document.createElement("button");
-  cancel.type = "button";
-  cancel.className = "secondary tool-choice-cancel";
-  cancel.textContent = "Cancel";
-  cancel.addEventListener("click", () => answer("cancel", ""));
-  actions.append(cancel);
+  if (choice.allow_cancel !== false) {
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "secondary tool-choice-cancel";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => answer("cancel", ""));
+    actions.append(cancel);
+  }
   card.append(question, actions);
-  pendingTurn.answer.append(card);
-  conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", choice.question);
+  showToolPrompt(card);
 }
 
 /**
- * Enable pointer and keyboard selection of a completed answer.
+ * Select an answer without disrupting text selection or panel visibility.
+ *
+ * Ordinary clicks select an answer only when the panels are already open.
+ * A deliberate keyboard activation can still open them for accessibility.
  *
  * @param answer Focusable answer element.
  * @param item Parent conversation article.
@@ -2759,15 +7031,18 @@ function showToolChoice(choice) {
 function bindAnswerSelection(answer, item, turn) {
   answer.tabIndex = 0;
   answer.setAttribute("aria-label", "Select this answer to view its references");
-  const choose = () => {
-    showWorkspace(true);
+  answer.addEventListener("click", (event) => {
+    if (!shell.classList.contains("sidebar-open")
+        || window.getSelection()?.isCollapsed === false
+        || event.target?.closest("button, a, summary")) return;
     selectTurn(item, turn);
-  };
-  answer.addEventListener("click", choose);
+  });
   answer.addEventListener("keydown", (event) => {
+    if (event.target !== answer) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      choose();
+      chooseSidePanels(true);
+      selectTurn(item, turn);
     }
   });
 }
@@ -2781,7 +7056,13 @@ function bindAnswerSelection(answer, item, turn) {
 function completePendingTurn(turn) {
   stopPhaseAnimation();
   resetAnswerStages();
-  updateProjectSummary(currentTurnCount + 1);
+  if (reading?.live) {
+    // Finished while another chat is read: mark the answering chat unread.
+    reading.count += 1;
+    unreadConversations.add(activeConversationId);
+  } else {
+    updateChatSummary(currentTurnCount + 1);
+  }
   const current = pendingTurn;
   if (!current) {
     addTurn(turn);
@@ -2790,22 +7071,32 @@ function completePendingTurn(turn) {
   }
   pendingTurn = null;
   current.item.classList.remove("pending");
-  // "Took Ns" only; expanding it shows the routing steps and their times.
-  const record = timelineRecord(
-    current, turn, current.elapsedMs ?? performance.now() - current.started);
-  const timeline = renderTimeline(record, turn);
-  if (current.durationLine) current.durationLine.replaceWith(timeline);
-  else current.item.insertBefore(timeline, current.answer);
+  current.item.dataset.conversationId = activeConversationId;
+  current.item.dataset.intentId = turn.parameters?.intent || "";
+  // A completed answer uses only the timeline committed by the core.
+  // Local phase timings remain a visual estimate for a running/stopped turn.
+  const timeline = renderTimeline(turn.timeline || null, turn);
+  if (current.durationLine) {
+    if (timeline) current.durationLine.replaceWith(timeline);
+    else current.durationLine.remove();
+  } else if (timeline) {
+    current.item.insertBefore(timeline, current.answer);
+  }
   current.durationLine = timeline;
-  // Keep the timing with the project so a resumed chat shows it too.
-  if (bridge && turn.timestamp) bridge.saveAnswerTimeline(turn.timestamp, JSON.stringify(record));
   // The text was shown live as it was generated; now add citation links.
   current.answer.classList.remove("answer-phase", "streaming");
   current.answer.replaceChildren();
   bindAnswerSelection(current.answer, current.item, turn);
   renderAnswer(current.answer, turn, current.item, current.thinkingMs);
-  selectTurn(current.item, turn);
-  conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  addMessageActions(current.item, turn);
+  pointToSourceControls(turn);
+  refreshFeedbackControls();
+  if (reading?.live) {
+    renderConversations(lastConversationData);
+  } else {
+    selectTurn(current.item, turn);
+    conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  }
   setBusy(false);
 }
 
@@ -2874,30 +7165,6 @@ function thoughtsBlock(text, label, open = false) {
 }
 
 /**
- * Name an intent for display, using the project type's list.
- * @param intentId Configured project-type intent ID.
- */
-function intentName(intentId) {
-  const names = projectTypes[activeProjectTypeId]?.intents || {};
-  return names[intentId] || String(intentId || "").replaceAll("_", " ");
-}
-
-/**
- * Describe which earlier turns the answer sees, such as "Recent 2 + turn 3".
- * @param data Turn parameters containing history metadata.
- */
-function describeHistory(data) {
-  const ids = data.history_turn_ids || [];
-  if (!ids.length) return "No earlier conversation needed";
-  const related = data.related_turn_ids || [];
-  const recent = ids.filter((id) => !related.includes(id));
-  const parts = [];
-  if (recent.length) parts.push(`the last ${recent.length === 1 ? "turn" : `${recent.length} turns`}`);
-  if (related.length) parts.push(`turn${related.length === 1 ? "" : "s"} ${related.join(", ")}`);
-  return `Including ${parts.join(" and ")} from the conversation`;
-}
-
-/**
  * Show generated text live in the pending answer.
  *
  * @param text Newly generated text.
@@ -2912,11 +7179,6 @@ function appendAnswerText(text) {
   if (!current.streaming) {
     current.streaming = true;
     resetAnswerStages();
-    markTimelineStep("Generating the answer");
-    // Live elapsed time above the answer; it becomes "Took …" at the end.
-    current.durationLine = document.createElement("div");
-    current.durationLine.className = "answer-duration";
-    current.item.insertBefore(current.durationLine, current.answer);
     current.answer.classList.remove("answer-phase");
     current.answer.classList.add("streaming");
     current.answer.replaceChildren();
@@ -2934,18 +7196,23 @@ function appendAnswerText(text) {
     const body = current.thoughts.querySelector(".answer-thoughts-text");
     body.textContent = parts.thinking;
     body.scrollTop = body.scrollHeight;
-    if (!parts.thinkingOpen && current.thinkingMs == null) {
-      current.thinkingMs = performance.now() - current.thinkingStarted;
+    if (parts.thinkingOpen) current.thinkingSeen = true;
+    if (!parts.thinkingOpen && !current.thinkingDone) {
+      current.thinkingDone = true;
+      // Thinking that arrives finished in one piece, as from a tool's
+      // model calls, took an unknown time: it is not "Thought for 0s".
+      if (current.thinkingSeen) current.thinkingMs = performance.now() - current.thinkingStarted;
       current.thoughts.open = false;
-      current.thoughts.querySelector("summary").textContent =
-        `Thought for ${formatDuration(current.thinkingMs)}`;
+      current.thoughts.querySelector("summary").textContent = current.thinkingMs == null
+        ? "Show thinking" : `Thought for ${formatDuration(current.thinkingMs)}`;
     }
   }
   current.body.replaceChildren();
   renderMarkdown(current.body, parts.answer);
   const nearBottom = conversationScroll.scrollHeight - conversationScroll.scrollTop
     - conversationScroll.clientHeight < 120;
-  if (nearBottom) conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  // The chat being read keeps its own scroll position.
+  if (nearBottom && !reading?.live) conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
 
 /**
@@ -2958,9 +7225,66 @@ function onEvent(raw) {
   const data = JSON.parse(raw);
   if (data.event === "trace_ready") {
     activeTracePath = data.trace_path || "";
+    markActiveConversationFile();
+  } else if (data.event === "backend_preference_saved") {
+    confirmedBackendPreference = data.backend;
+    // Qt requests a fresh readiness check only after its write succeeds.
+    // Do not use the former backend's status while that check is pending.
+    kilinReady = false;
+    readinessEnvironmentReady = false;
+    readinessMissingCount = 0;
+    byId("readiness-status").textContent = "Checking";
+    byId("readiness-summary").textContent = "Checking the selected backend…";
+    showSetupLock();
+  } else if (data.event === "backend_preference_failed") {
+    // A second selection may already be pending: only revert the failed one.
+    if (!ready && byId("backend").value === data.backend) {
+      byId("backend").value = confirmedBackendPreference;
+      showModelFields();
+    }
+    error.textContent = data.message;
+    error.classList.remove("hidden");
+    byId("model-download-status").textContent = data.message;
+  } else if (data.event === "terms_acceptance_saved") {
+    if (!acceptingTerms || data.version !== pendingTermsVersion) return;
+    acceptingTerms = false;
+    pendingTermsVersion = "";
+    if (data.version !== termsVersion) {
+      // The page now shows different terms than the version Qt saved.
+      termsAccepted = false;
+      acknowledgedTermsVersion = "";
+      termsVersion = "";
+      byId("terms-agree").checked = false;
+      setWelcomeError("The terms have changed. Review and accept them again.");
+      bridge?.requestReadiness();
+    } else {
+      acknowledgedTermsVersion = data.version;
+      termsAccepted = true;
+      setWelcomeError("");
+      byId("welcome").close?.();
+    }
+    showSetupConfirmations();
+  } else if (data.event === "terms_acceptance_failed") {
+    if (!acceptingTerms || data.version !== pendingTermsVersion) return;
+    acceptingTerms = false;
+    pendingTermsVersion = "";
+    setWelcomeError(data.message || "Could not save the agreement. Try again.");
+    if (data.reason === "outdated_version") {
+      // Do not reuse a checkbox checked for terms that are no longer current.
+      termsAccepted = false;
+      acknowledgedTermsVersion = "";
+      termsVersion = "";
+      byId("terms-agree").checked = false;
+      bridge?.requestReadiness();
+    }
+    showSetupConfirmations();
   } else if (data.event === "readiness") {
     requiredModels = data.required_models || [];
     readinessEnvironmentReady = Boolean(data.environment_ready);
+    installCommand = data.install_command || installCommand;
+    installCommands = data.install_commands || {
+      [data.backend]: installCommand,
+    };
     cachedModels = new Set(data.cached_models || []);
     const card = byId("first-run-setup");
     const steps = byId("readiness-steps");
@@ -2968,7 +7292,8 @@ function onEvent(raw) {
     const runtime = document.createElement("li");
     runtime.textContent = data.environment_ready
       ? `${String(data.backend).toUpperCase()} runtime is ready`
-      : `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run kilin --gui`;
+      : data.unavailable_reason
+        || `${String(data.backend).toUpperCase()} runtime is missing; install it with ${installCommands[data.backend] || "the KíLín installer"}, then restart KíLín`;
     runtime.classList.toggle("complete", data.environment_ready);
     steps.append(runtime);
     const replacements = data.replacements || {};
@@ -2981,28 +7306,81 @@ function onEvent(raw) {
           ? `Missing: ${modelId} (installed alternative: ${replacements[modelId]})`
           : `Missing: ${modelId}`;
       item.classList.toggle("complete", present);
+      // Found again while downloading, to show that model's progress.
+      item.dataset.model = modelId;
       steps.append(item);
     }
+    // A readiness reply can predate a Qt terms-write acknowledgement.
+    folderConfirmed = Boolean(data.folder_confirmed);
+    const nextTermsVersion = data.terms_version || "";
+    if (termsVersion && termsVersion !== nextTermsVersion) {
+      byId("terms-agree").checked = false;
+    }
+    termsVersion = nextTermsVersion;
+    const savedReadiness = acknowledgedTermsVersion === termsVersion
+      && Boolean(acknowledgedTermsVersion);
+    const termsJustAccepted = savedReadiness && Boolean(data.terms_accepted);
+    if (termsJustAccepted || (acknowledgedTermsVersion && !savedReadiness)) {
+      acknowledgedTermsVersion = "";
+    }
+    if (!acceptingTerms) {
+      termsAccepted = Boolean(data.terms_accepted) || savedReadiness;
+    }
+    const folderStep = document.createElement("li");
+    folderStep.textContent = folderConfirmed
+      ? `Projects folder: ${data.projects_folder}`
+      : "Confirm the projects folder below";
+    folderStep.classList.toggle("complete", folderConfirmed);
+    const termsStep = document.createElement("li");
+    termsStep.textContent = termsAccepted
+      ? "Terms of use accepted"
+      : "Accept the terms of use";
+    termsStep.classList.toggle("complete", termsAccepted);
+    steps.append(folderStep, termsStep);
+    renderTerms(data.terms || "");
+    byId("copyright").textContent = data.copyright || "";
+    // The terms dialog closes only on a confirmed write, not on readiness.
+    if (!termsAccepted && termsVersion) showWelcome();
+    else if (termsAccepted && !acceptingTerms) byId("welcome").close?.();
+    const setupReady = Boolean(data.ready) && folderConfirmed && termsAccepted;
+    if (folderConfirmed && termsAccepted) clearSetupReminder();
     // Always available; it opens by itself when something is missing.
     card.classList.remove("hidden");
-    if (!data.ready) card.open = true;
-    const missing = data.missing_models.length + (data.environment_ready ? 0 : 1);
-    byId("readiness-status").textContent = data.ready ? "Ready" : `${missing} missing`;
-    byId("readiness-status").classList.toggle("ready", Boolean(data.ready));
-    byId("readiness-summary").textContent = data.ready
+    if (!setupReady) card.open = true;
+    const missing = data.missing_models.length + (data.environment_ready ? 0 : 1)
+      + (folderConfirmed ? 0 : 1) + (termsAccepted ? 0 : 1);
+    byId("readiness-status").textContent = setupReady ? "Ready" : `${missing} missing`;
+    byId("readiness-status").classList.toggle("ready", setupReady);
+    byId("readiness-summary").textContent = setupReady
       ? "KíLín is ready."
+      : data.ready
+        ? !folderConfirmed && !termsAccepted
+          ? "Confirm the projects folder and accept the terms of use to finish setup."
+          : !folderConfirmed
+            ? "Confirm the projects folder to finish setup."
+            : "Accept the terms of use to finish setup."
+      : !data.environment_ready
+        ? data.unavailable_reason || `${String(data.backend).toUpperCase()} runtime is not installed.`
       : data.missing_models.length === 1
         ? "1 required model needs to be downloaded."
         : `${data.missing_models.length} required models need to be downloaded.`;
-    byId("install-required").disabled = !data.environment_ready || !data.missing_models.length;
+    // The user's last setup step completed it: back to the normal view.
+    const setupJustFinished = setupReady && !kilinReady;
+    kilinReady = setupReady;
+    readinessMissingCount = data.missing_models.length;
     byId("install-required").classList.toggle("hidden", !data.missing_models.length);
     // Compatible models already on this computer can be used instead.
     byId("use-installed").classList.toggle("hidden", !data.can_use_installed);
-    byId("use-installed").disabled = !data.environment_ready;
+    showSetupLock();
     refreshModelStatus();
-    if (!data.ready) {
+    if (!setupReady) {
+      // Explain missing new-project requirements without locking Settings.
       byId("models-panel").classList.remove("hidden");
-      byId("close-models").focus();
+      byId("first-run-setup").focus?.();
+      if (termsJustAccepted && !folderConfirmed) pointToProjectsFolder();
+    } else if (setupJustFinished) {
+      card.open = false;
+      closeModels();
     }
   } else if (data.event === "installed_models_used") {
     savedLevels = data.effort_levels || savedLevels;
@@ -3022,9 +7400,12 @@ function onEvent(raw) {
     byId("first-run-setup").open = true;
     byId("readiness-status").textContent = "Downloading";
     byId("readiness-status").classList.remove("ready");
-    byId("install-required").disabled = true;
+    installingModels = true;
+    showSetupLock();
     byId("readiness-time").textContent = "Starting download. Remaining time depends on model size and network speed.";
     updateDownloadMeter(null);
+    // One model downloads at a time; the others wait their turn.
+    for (const modelId of data.models || []) showModelStep(modelId, `Waiting: ${modelId}`);
   } else if (data.event === "installation_progress") {
     const progress = downloadProgress(data);
     const percent = progress.percent == null ? "" : ` · ${progress.percent.toFixed(1)}%`;
@@ -3036,10 +7417,13 @@ function onEvent(raw) {
     byId("activity-text").textContent = `Downloading ${data.model_id}`;
     byId("activity-detail").textContent = progress.text;
     updateDownloadMeter(progress.percent);
+    showModelStep(data.model_id, `Downloading: ${data.model_id}${percent}`);
   } else if (data.event === "installation_model_complete") {
     cachedModels.add(data.model_id);
+    showModelStep(data.model_id, `Ready: ${data.model_id}`, true);
     byId("readiness-time").textContent = `${data.model_id} completed in ${seconds(data.model_seconds)} · ${seconds(data.elapsed_seconds)} total`;
   } else if (data.event === "installation_complete") {
+    installingModels = false;
     setupCompletionVisible = true;
     byId("readiness-status").textContent = "Ready";
     byId("readiness-status").classList.add("ready");
@@ -3051,12 +7435,13 @@ function onEvent(raw) {
     showSettings(data);
   } else if (data.event === "projects") {
     renderSavedProjects(data.projects || []);
+    renderSidebarProjects(savedProjects, openProjectPath);
   } else if (data.event === "conversation_delete_started") {
     const button = [...document.querySelectorAll(".conversation-item")]
       .find((item) => item.dataset.conversationId === data.conversation_id);
     button?.closest(".conversation-row")?.remove();
     byId("activity-text").textContent = "Conversation removed. Preserving its trace and opening the next chat…";
-    byId("activity-detail").textContent = "The archived trace remains in logs/traces/deleted.";
+    byId("activity-detail").textContent = "The archived trace remains in logs/traces/.deleted/.";
   } else if (data.event === "preview") {
     data.roots.forEach((root, index) => {
       const original = selectedSources[index];
@@ -3083,93 +7468,49 @@ function onEvent(raw) {
     setBusy(true, data.message);
   } else if (data.event === "answer_delta") {
     appendAnswerText(data.text || "");
+  } else if (data.event === "answer_activity") {
+    // The core emits exactly the activities persisted with the turn.
+    // Phase messages update status, but must not invent timeline rows.
+    markTimelineStep(data);
+    queueAnswerStage(`activity:${data.index}`, data.label);
   } else if (data.event === "answer_phase") {
     activity.classList.add("answer-progress");
     if (data.phase === ANSWER_PHASE_ROUTING) {
-      queueAnswerStage("intent", "Identifying intent");
       byId("activity-text").textContent = "Identifying what the question asks for";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_ROUTED) {
-      queueAnswerStage("intent-done", `${intentName(data.intent)} identified`);
-      queueAnswerStage("history", describeHistory(data));
-      // Retrieval steps follow from their own phases; "none" shows none.
+      byId("activity-text").textContent = "Selecting conversation context";
+      byId("activity-detail").textContent = "";
     } else if (data.phase === ENGINE_PHASE_LOADING_MODEL) {
       const name = String(data.model_id || "the model").split("/").pop();
-      queueAnswerStage("loading", `Loading ${name}`);
       byId("activity-text").textContent = `Loading ${name}`;
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_RETRIEVING) {
-      // Show what retrieval is doing (semantic search, lexical search, …);
-      // generic and result-count messages are skipped.
-      const message = data.message || "Searching project evidence";
-      if (/^(Embedding|Running|Searching|Checking|Combining|Expanding|Finding|Scanning)\b/.test(message)) {
-        queueAnswerStage(`retrieval:${message}`, message.replace(/^Embedding the query and running /, "Running "));
-      }
       byId("activity-text").textContent = data.message || "Searching project evidence";
       byId("activity-detail").textContent = "";
+    } else if (data.phase === ANSWER_PHASE_MEMORY_RETRIEVING
+        || data.phase === ANSWER_PHASE_MEMORY_READY) {
+      byId("activity-text").textContent = data.message || "Retrieving conversation memories";
+      byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.choice) {
-      // A tool asks which option the user means, such as which paper.
-      queueAnswerStage("choice", "Waiting for your choice");
       showToolChoice(data.choice);
-      byId("activity-text").textContent = "Waiting for your choice";
-      byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.plan) {
-      // An expensive tool run waits for Continue, Quick, or Cancel.
-      queueAnswerStage("plan", "Waiting for your choice");
       showToolPlan(data.plan);
-      byId("activity-text").textContent = "Waiting for your choice";
-      byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING) {
-      queueAnswerStage(`processing:${data.current ?? ""}`, data.message || "Working");
       byId("activity-text").textContent = data.message || "Working";
       byId("activity-detail").textContent = "";
-    } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY && data.skipped) {
-      // No retrieval needed: no step to show.
-    } else if (
-      data.phase === ANSWER_PHASE_EVIDENCE_READY &&
-      (data.document !== undefined || data.tool !== undefined)
-    ) {
-      // Document reading or a tool describes its own result.
-      queueAnswerStage("preparing", data.message || "Reading the document");
-      byId("activity-text").textContent = data.message || "Reading the document";
-      byId("activity-detail").textContent = "";
-    } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY && data.reused) {
-      queueAnswerStage("preparing", `Reusing ${data.evidence_count} references from earlier turns`);
-      byId("activity-text").textContent = "Follow-up: reusing the previous references";
-      byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY) {
-      queueAnswerStage(
-        "preparing",
-        data.evidence_count == null
-          ? "Preparing retrieved evidence"
-          : data.related_count
-            ? `Found ${data.evidence_count - data.related_count} references + ${data.related_count} from earlier turns`
-            : `Found ${data.evidence_count} references`,
-      );
-      byId("activity-text").textContent = data.evidence_count == null
-        ? "Preparing retrieved evidence for the model"
-        : `Preparing ${data.evidence_count} retrieved references for the model`;
+      byId("activity-text").textContent = data.message || "Preparing answer";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_GENERATING) {
-      // The model reads its whole prompt before the first word appears;
-      // streamed text replaces this label.
-      queueAnswerStage(
-        "reading",
-        data.evidence_count
-          ? `Reading ${data.evidence_count} references`
-          : "Reading the conversation",
-      );
-      byId("activity-text").textContent = data.evidence_count == null
-        ? "The model is reading the prompt"
-        : `The model is reading ${data.evidence_count} references before writing`;
+      byId("activity-text").textContent = data.message || "Generating answer";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_SAVING) {
-      queueAnswerStage("saving", data.message || "Saving the answer");
-      byId("activity-text").textContent = data.message || "Saving this turn to the conversation";
+      byId("activity-text").textContent = data.message || "Saving conversation";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_COMPLETED) {
       stopPhaseAnimation();
-      byId("activity-text").textContent = data.message || "Displaying the completed response";
+      byId("activity-text").textContent = data.message || "Answer ready";
       byId("activity-detail").textContent = "";
     }
   } else if (data.event === "model_download_started") {
@@ -3186,6 +7527,7 @@ function onEvent(raw) {
     applyingModels = false;
     cachedModels = new Set(data.cached_models || [...cachedModels]);
     modelRoles = data.model_roles || modelRoles;
+    thinkingSwitches = data.thinking_switches || thinkingSwitches;
     // Without an open project, keep the levels for project creation.
     if (data.effort_levels) savedLevels = data.effort_levels;
     else savedLevels = { ...savedLevels, [activeBackend]: cloneLevels(draftLevels) };
@@ -3195,13 +7537,37 @@ function onEvent(raw) {
     if (data.profile) { profile = data.profile; byId("query-format").value = profile.query_format; showModelFields(); }
     else saveModelFields();
     modelsBaseline = currentModelSettings();
-    byId("model-download-status").textContent = "Model settings applied.";
+    byId("model-download-status").textContent = ready
+      ? "Saved in profile.ini. The next answer uses it."
+      : "Saved in preferences.json for new projects.";
     setBusy(false);
     renderModelsPanel();
     if (closeAfterModelsApply) hideModels();
     closeAfterModelsApply = false;
+  } else if (data.event === "answer_settings_saved") {
+    answerSettingsSaved(data);
+  } else if (data.event === "answer_settings_failed") {
+    answerSettingsFailed(data);
+  } else if (data.event === "source_cards_applied"
+      || data.event === "source_cards_regenerated") {
+    applyingSourceCards = false;
+    if (data.source_cards) showSourceCardSettings(data.source_cards);
+    showSourceCardSummary(data.source_card_summary);
+    byId("source-card-progress").textContent = "Card indexing complete.";
+    byId("model-download-status").textContent =
+      data.event === "source_cards_applied"
+        ? "Saved source-card settings in profile.ini."
+        : "Source cards regenerated; other indexes unchanged.";
+    setBusy(false);
+  } else if (data.event === "indexing_applied") {
+    applyingIndexing = false;
+    profile = data.profile;
+    showIndexingFields();
+    byId("model-download-status").textContent = "Saved in profile.ini and the index is rebuilt. The next answer uses it.";
+    setBusy(false);
   } else if (data.event === "model_downloaded") {
     cachedModels.add(data.model_id);
+    thinkingSwitches = data.thinking_switches || thinkingSwitches;
     downloadingModel = null;
     byId("cancel-model-download").classList.add("hidden");
     byId("model-download-status").textContent = `${data.model_id} downloaded in ${seconds(data.elapsed_seconds || 0)}.`;
@@ -3217,6 +7583,10 @@ function onEvent(raw) {
   } else if (data.event === "progress") {
     showProgress(data);
   } else if (data.event === "opened") {
+    finishStopping();
+    reading = null;
+    // An error from an earlier attempt no longer applies to this project.
+    clearError();
     usageTotals = data.usage || usageTotals;
     renderUsage();
     ready = true;
@@ -3226,9 +7596,42 @@ function onEvent(raw) {
       savedLevels = data.effort_levels || savedLevels;
       savedRouters = data.router_models || savedRouters;
       savedDepth = data.search_depth || savedDepth;
+      // Settings shows this project's own values, never start-screen edits.
+      byId("backend").value = profile.backend;
+      showIndexingFields();
       showModelFields();
+      if (data.source_cards) showSourceCardSettings(data.source_cards);
     }
+    showSourceCardSummary(data.source_card_summary);
+    byId("source-card-progress").textContent = "";
     activeProjectTypeId = data.type_id;
+    // Reopening the same project need not discard a queued save that has
+    // not yet been acknowledged. A different project starts fresh.
+    const keepPendingAnswers = openProjectPath === data.project
+      && Boolean(answerSettingsSave.pending);
+    // Set before the lists are drawn: chats keep their order per project.
+    if (openProjectPath !== data.project) {
+      projectBehaviorData = null;
+      behaviorSave.pending = null;
+      feedbackData = { project: "", revision: "", entries: {} };
+      feedbackSave.pending = null;
+      memoryMessagePage = null;
+      memoryMessagesRequestedOffset = 0;
+      memoryExcludeSave.pending = null;
+      memoryIndexState = null;
+      memorySyncPending = false;
+      memoryNavigation = null;
+      displayedMemoryProject = "";
+      displayedMemoryRevision = "";
+    }
+    const pending = pendingSourceQuestions?.project === data.project
+      ? pendingSourceQuestions : null;
+    sourceQuestions = pending?.questions || [];
+    sourceWelcome = pending?.welcome || [];
+    pendingSourceQuestions = null;
+    openProjectPath = data.project;
+    projectPresentation = data.behavior_presentation || null;
+    requestProjectBehavior();
     messageAttachments = [];
     renderAttachments();
     selectedSources.length = 0;
@@ -3246,19 +7649,44 @@ function onEvent(raw) {
     renderConversations(data);
     data.turns.forEach(addTurn);
     restoreStoppedTurn();
-    if (!data.turns.length) renderConversationEmpty();
-    byId("workspace-path").value = data.project;
+    // A stopped first answer stays on screen instead of the welcome.
+    if (!conversation.children.length) renderConversationEmpty();
     byId("workspace-location").textContent = data.project;
+    renderSidebarProjects(savedProjects, openProjectPath);
+    // A renamed project keeps Settings open: show its new name.
+    showProjectSettings();
+    if (bridge) bridge.listSavedProjects("");
     renderWorkspace(data.workspace_files);
-    showWorkspace(Boolean(data.turns.length));
-    byId("temperature").value = data.temperature;
-    byId("max-new-tokens").value = data.max_new_tokens ?? "";
-    byId("thinking").checked = data.thinking;
-    byId("project-name").textContent = data.project.split(/[\\/]/).pop();
-    updateProjectSummary(data.turns.length);
+    // Open by default, unless the user closed the panel.
+    showWorkspace(sidePanelChoice ?? true);
+    if (!keepPendingAnswers) resetAnswerSettings(data);
+    // The open project now owns its Answers settings.
+    answerSettingsEdited = false;
+    updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
+    requestMemoryState();
+    // The attached files are now in sources and indexed.
+    if (attachedAsk) {
+      const ask = attachedAsk;
+      attachedAsk = null;
+      sendQuestion(ask);
+    }
+  } else if (data.event === "question_suggestions") {
+    const questions = (data.questions || []).filter((item) => item?.question);
+    const welcome = (data.welcome || []).filter((text) => typeof text === "string" && text);
+    if (data.project === openProjectPath) {
+      sourceQuestions = questions;
+      sourceWelcome = welcome;
+      if (conversation.querySelector(".conversation-empty")) renderConversationEmpty();
+    }
+    pendingSourceQuestions = { project: data.project, questions, welcome };
   } else if (data.event === "conversation_opened") {
+    finishStopping();
+    reading = null;
+    unreadConversations.delete(data.active_conversation_id);
+    // An error from an earlier attempt no longer applies to this conversation.
+    clearError();
     usageTotals = data.usage || usageTotals;
     renderUsage();
     stopPhaseAnimation();
@@ -3271,21 +7699,30 @@ function onEvent(raw) {
     conversation.replaceChildren();
     clearReferences();
     renderConversations(data);
+    if (data.workspace_files) renderWorkspace(data.workspace_files);
     data.turns.forEach(addTurn);
     restoreStoppedTurn();
-    if (!data.turns.length) {
-      renderConversationEmpty();
-      showWorkspace(false);
-    }
-    byId("temperature").value = data.temperature;
-    byId("max-new-tokens").value = data.max_new_tokens ?? "";
-    byId("thinking").checked = data.thinking;
-    updateProjectSummary(data.turns.length);
+    // A stopped first answer stays on screen instead of the welcome.
+    if (!conversation.children.length) renderConversationEmpty();
+    if (!answerSettingsSave.pending) resetAnswerSettings(data);
+    // The open project now owns its Answers settings.
+    answerSettingsEdited = false;
+    updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
+    highlightMemoryOrigin();
+    requestMemoryState();
+    if (branchDraft) {
+      // A branch from a question: edit it and send it again.
+      setQuestionDraft(branchDraft);
+      byId("question").focus();
+    }
+    branchDraft = null;
   } else if (data.event === "conversations") {
     renderConversations(data);
+    if (data.workspace_files) renderWorkspace(data.workspace_files);
     setBusy(false);
+    bridge?.requestMemoryStatus(openProjectPath);
   } else if (data.event === "reference_preview") {
     renderSourcePreview(data);
   } else if (data.event === "reference_error") {
@@ -3293,6 +7730,18 @@ function onEvent(raw) {
         && data.citation === activeReference.citation) {
       activeReference.note.textContent = data.message;
     }
+  } else if (data.event === "source_changes") {
+    showSourceSync(data);
+  } else if (data.event === "projects_folder") {
+    showProjectsFolder(data);
+  } else if (data.event === "projects_folder_cancelled") {
+    finishProjectsFolderSwitch();
+  } else if (data.event === "projects_folder_failed") {
+    finishProjectsFolderSwitch(data.message);
+  } else if (data.event === "sources_checked") {
+    if (attachedAsk) return addAttachedSources(data);
+    setBusy(false);
+    showSourceAdd(data);
   } else if (data.event === "folder_changed") {
     renderWorkspace(data.workspace_files);
     setBusy(false);
@@ -3301,13 +7750,71 @@ function onEvent(raw) {
     completeAfterAnswerStages(data.turn);
     renderUsage();
     if (data.workspace_files) renderWorkspace(data.workspace_files);
+    bridge?.requestMemoryStatus(openProjectPath);
+  } else if (data.event === "project_behavior") {
+    renderProjectBehavior(data);
+  } else if (data.event === "conversation_feedback") {
+    receiveFeedback(data);
+  } else if (data.event === "message_feedback") {
+    receiveFeedbackSave(data);
+  } else if (data.event === "memory_messages") {
+    receiveMemoryMessages(data);
+  } else if (data.event === "memory_summaries") {
+    receiveMemorySummaries(data);
+  } else if (data.event === "memory_exclusion") {
+    receiveMemoryExclusion(data);
+  } else if (data.event === "memory_status") {
+    receiveMemoryStatus(data);
+  } else if (data.event === "memory_sync_started") {
+    if (data.project === openProjectPath) {
+      byId("memory-index-status").textContent = "Updating conversation memory…";
+    }
+  } else if (data.event === "memory_synced") {
+    if (data.project === openProjectPath) {
+      memorySyncPending = false;
+      setBusy(false);
+      byId("memory-index-status").textContent = data.changed
+        ? `Updated conversation memory; ${data.embedded_count} new embeddings.`
+        : "Conversation memory is already current.";
+    }
+  } else if (data.event === "memory_sync_failed") {
+    if (data.project === openProjectPath) {
+      memorySyncPending = false;
+      setBusy(false);
+      byId("memory-index-status").textContent = data.message;
+      byId("memory-index-status").classList.add("tool-error");
+    }
+  } else if (data.event === "settings_info") {
+    settingsCatalog = data.catalog;
+    applySettingsHelp(document);
+  } else if (data.event === "settings_info_failed") {
+    console.warn("Could not load settings explanations:", data.message);
+  } else if (data.event === "tool_settings") {
+    renderToolSettings(data);
+  } else if (data.event === "conversation_viewed") {
+    if (reading?.id === data.conversation_id) showReadConversation(data.turns);
+  } else if (data.event === "answer_cancelled") {
+    // Stopped cleanly: nothing was saved, and the project stays open.
+    resumeAfterStop = false;
+    if (data.usage) usageTotals = data.usage;
+    renderUsage();
+    finishStopping();
+    // The stopped answer is already on screen; there is no restart to
+    // show it again after.
+    stoppedTurn = null;
+    restoreUnansweredQuestion();
+    setBusy(false);
   } else if (data.event === "reset") {
     renderConversationEmpty();
     clearReferences();
-    updateProjectSummary(0);
+    updateChatSummary(0);
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "stopped") {
+    if (answerSettingsSave.pending) answerSettingsSave.uncertain = true;
+    answerSettingsSave.pending = null;
+    answerSettingsSave.queued = null;
+    restoreUnansweredQuestion();
     setupCompletionVisible = false;
     byId("readiness-meter").classList.add("hidden");
     byId("readiness-meter").classList.remove("indeterminate");
@@ -3316,18 +7823,20 @@ function onEvent(raw) {
       downloadingModel = null;
       byId("cancel-model-download").classList.add("hidden");
     }
+    if (installingModels) {
+      // Check again what is installed; setup stays open until it is done.
+      installingModels = false;
+      showSetupLock();
+      bridge?.requestReadiness();
+    }
     if (resumeAfterStop) {
       resumeAfterStop = false;
-      stopPhaseAnimation();
       resetAnswerStages();
-      keepStoppedTurn(pendingTurn);
-      pendingTurn = null;
       ready = false;
-      setBusy(true, "Reopening project after interruption…");
-      bridge.resumeProjectConversation(
-        byId("workspace-path").value,
-        activeConversationId,
-      );
+      // The answer keeps showing "Stopping…" while the project reopens; the
+      // reopening steps stay hidden, as during the answer.
+      setBusy(true, "Reopening the chat after Stop…");
+      bridge.resumeProjectConversation(openProjectPath, activeConversationId);
       return;
     }
     ready = false;
@@ -3339,10 +7848,29 @@ function onEvent(raw) {
     setup.classList.remove("hidden");
     showWorkspace(false);
     clearReferences();
-    byId("connection").textContent = "Stopped · reopen your project";
+    // Stop preserves any committed or nonempty project directory.
+    const preservedProjects = data.preserved_projects || [];
+    byId("connection").textContent = preservedProjects.length
+      ? "Stopped · project files preserved"
+      : data.removed_projects?.length
+        ? "Stopped · empty preparation folder removed"
+        : "Stopped · reopen your project";
+    if (preservedProjects.length) {
+      const locations = preservedProjects.join(", ");
+      error.textContent = `Project files were kept at: ${locations}. `
+        + "Reopen a completed project or inspect an unfinished folder "
+        + "before removing it.";
+      error.classList.remove("hidden");
+    }
     setBusy(false);
-    bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+    bridge.requestSettings(byId("type-id").value, "");
+    if (data.removed_projects?.length || preservedProjects.length) {
+      bridge.listSavedProjects("");
+    }
   } else if (data.event === "backend_failed") {
+    answerSettingsSave.pending = null;
+    answerSettingsSave.queued = null;
+    answerSettingsSave.uncertain = true;
     ready = false;
     updateFloatingHeader();
     chat.classList.add("hidden");
@@ -3354,9 +7882,11 @@ function onEvent(raw) {
     clearReferences();
     showError(data.message, data.trace_path || activeTracePath);
   } else if (data.event === "backend_restarted") {
-    const reopenProject = ready
-      && byId("workspace-path").value.trim()
-      && activeConversationId;
+    answerSettingsSave.pending = null;
+    answerSettingsSave.queued = null;
+    answerSettingsSave.uncertain = true;
+    restoreUnansweredQuestion();
+    const reopenProject = ready && openProjectPath && activeConversationId;
     error.classList.add("hidden");
     setupCompletionVisible = true;
     byId("readiness-time").textContent = data.message;
@@ -3366,37 +7896,155 @@ function onEvent(raw) {
     ready = false;
     setBusy(false);
     byId("connection").textContent = "Ready";
-    bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+    bridge.requestSettings(byId("type-id").value, "");
     bridge.requestReadiness();
     if (reopenProject) {
       setBusy(true, "Reopening the project after backend recovery…");
-      bridge.resumeProjectConversation(
-        byId("workspace-path").value.trim(),
-        activeConversationId,
-      );
+      bridge.resumeProjectConversation(openProjectPath, activeConversationId);
     }
   } else if (data.event === "workspace_conflict") {
     // Creation never reuses a project; opening one is a separate decision.
     setBusy(false);
     error.textContent = data.message;
     error.classList.remove("hidden");
-    const resume = data.existing_project && confirm(
-      `A project already exists at ${data.workspace}.\n\nOpen that project instead? Selected sources and new-project settings will not be applied.\n\nCancel to choose another destination.`,
-    );
-    if (resume) {
-      setBusy(true, "Opening the existing project...");
-      bridge.resumeProject(data.workspace);
-    } else {
-      openModels();
-      byId("workspace-path").focus();
-    }
+    const asking = data.existing_project
+      ? askKilin("Open the existing project?",
+        `A project already exists at ${data.workspace}. KíLín opens it without the new sources and settings; Cancel to choose another place.`,
+        "Open project")
+      : Promise.resolve(false);
+    asking.then((resume) => {
+      if (resume) {
+        setBusy(true, "Opening the existing project...");
+        bridge.resumeProject(data.workspace);
+      } else {
+        openModels();
+        byId("workspace-path").focus();
+      }
+    });
   } else if (data.event === "error") {
+    // A failed switch may already have released the previous session.
+    // Do not show its stale conversation or claim it is still active.
+    if (data.resume_released) returnToLaunch();
+    if (typeof applyingSourceCards !== "undefined" && applyingSourceCards) {
+      applyingSourceCards = false;
+      if (sourceCardSettings) showSourceCardSettings(sourceCardSettings);
+    }
+    if (applyingIndexing) {
+      // Not saved: show the settings still in effect.
+      applyingIndexing = false;
+      showIndexingFields();
+    }
+    if (data.pending_choice === true) {
+      // The engine rejected an unrelated command, not this answer.
+      // It is still waiting; preserve the controls and busy state.
+      error.textContent = data.message;
+      error.classList.remove("hidden");
+      pendingTurn?.prompt?.querySelector("button")?.focus({ preventScroll: true });
+      return;
+    }
+    if (attachedAsk) {
+      // Adding the attached files failed: give the question back.
+      setQuestionDraft(attachedAsk.question);
+      messageAttachments = attachedAsk.attachments;
+      attachedAsk = null;
+      renderAttachments();
+    }
+    branchDraft = null;
     showError(data.message, data.trace_path || activeTracePath);
   }
 }
 
 // UI handlers validate user input before issuing bridge commands.
-byId("browse-workspace").addEventListener("click", () => bridge?.chooseWorkspace());
+byId("reload-project-behavior").addEventListener(
+  "click", () => requestProjectBehavior(true),
+);
+byId("save-index-capabilities").addEventListener(
+  "click", () => saveIndexCapabilities(),
+);
+byId("reset-index-capabilities").addEventListener(
+  "click", () => saveIndexCapabilities(true),
+);
+byId("save-memory-policy").addEventListener(
+  "click", () => saveMemoryPolicy(),
+);
+byId("reset-memory-policy").addEventListener(
+  "click", () => saveMemoryPolicy(true),
+);
+byId("sync-memory-index").addEventListener("click", syncMemoryIndex);
+byId("memory-previous").addEventListener("click", () => {
+  requestMemoryMessages(Math.max(0, memoryMessagesRequestedOffset - 100));
+});
+byId("memory-next").addEventListener("click", () => {
+  requestMemoryMessages(memoryMessagesRequestedOffset + 100);
+});
+byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
+byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
+byId("use-legacy-workspace").addEventListener(
+  "click", useLegacyProjectsFolder,
+);
+byId("confirm-workspace").addEventListener("click", () => {
+  if (!bridge || busy) return;
+  if (ready) return changeProjectsFolder(false);
+  clearSetupReminder();
+  // The engine restarts with the confirmed folder, then setup is rechecked.
+  switchingProjectsFolder = true;
+  setBusy(true, "Confirming the projects folder…");
+  bridge.confirmProjectsFolder();
+});
+byId("terms-agree").addEventListener("change", () => {
+  if (byId("terms-agree").checked) byId("welcome-hint").classList.add("hidden");
+  showSetupConfirmations();
+});
+byId("accept-terms").addEventListener("click", () => {
+  if (termsAccepted) return byId("welcome").close();
+  if (acceptingTerms || !bridge || !termsVersion || !byId("terms-agree").checked) return;
+  // Only the Qt write acknowledgement permits closing the dialog.
+  acceptingTerms = true;
+  pendingTermsVersion = termsVersion;
+  setWelcomeError("");
+  showSetupConfirmations();
+  bridge.acceptTerms(pendingTermsVersion);
+});
+// Escape cannot skip the terms before they are accepted. The browser may
+// close a dialog opened without a click despite a cancelled "cancel", so
+// Escape is stopped first and a dialog closed anyway is reopened.
+byId("welcome").addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || termsAccepted) return;
+  event.preventDefault();
+  remindWelcome();
+});
+byId("welcome").addEventListener("cancel", (event) => {
+  if (termsAccepted) return;
+  event.preventDefault();
+  remindWelcome();
+});
+byId("welcome").addEventListener("close", () => {
+  if (termsAccepted || !termsVersion) return;
+  byId("welcome").showModal();
+  remindWelcome();
+});
+byId("view-terms").addEventListener("click", showWelcome);
+for (const link of document.querySelectorAll("#welcome .external-link")) {
+  // Opened by the system browser, never inside KíLín.
+  link.addEventListener("click", () => bridge?.openExternalLink(link.dataset.url));
+}
+byId("project-title").addEventListener("change", renameProjectFromSettings);
+byId("project-title").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
+  if (event.key === "Escape") {
+    // Escape puts the name back; it does not close Settings here.
+    event.preventDefault();
+    event.stopPropagation();
+    event.target.value = projectName(openProjectPath);
+    event.target.blur();
+  }
+});
+byId("delete-project").addEventListener("click", deleteOpenProject);
+// Enter or leaving the field saves an open project's indexing settings;
+// the number arrows only edit, so each click does not start a rebuild.
+for (const id of ["extensions", "max-file-bytes", "target-tokens", "max-tokens", "overlap-tokens"]) {
+  saveOnEnter(byId(id), saveIndexingEdits);
+}
 const dropZone = byId("drop-zone");
 dropZone.addEventListener("click", () => bridge?.chooseSources());
 dropZone.addEventListener("dragover", (event) => { event.preventDefault(); dropZone.classList.add("drag-over"); });
@@ -3418,17 +8066,52 @@ byId("send").addEventListener("click", (event) => {
   event.preventDefault();
   resumeAfterStop = true;
   byId("send").disabled = true;
+  // The button spins until KíLín is ready again, so Stop never looks frozen.
+  byId("send").classList.add("waiting");
   byId("activity-text").textContent = "Stopping generation…";
-  bridge.stopOperation();
+  if (pendingTurn) {
+    pendingTurn.elapsedMs ??= performance.now() - pendingTurn.started;
+    // "Stopping…" shows once, in the summary line; the phase lines go.
+    resetAnswerStages();
+    pendingTurn.label.closest(".answer-phase-header")?.remove();
+    pendingTurn.detail.remove();
+    pendingTurn.stopping = true;
+    paintPendingTurn();
+  }
+  // The engine ends the answer and stays loaded (answer_cancelled); only an
+  // engine that does not respond is restarted (stopped).
+  bridge.cancelAnswer();
 });
 byId("open-models").addEventListener("click", openModels);
 byId("models-hint-button").addEventListener("click", openModels);
 byId("close-models").addEventListener("click", closeModels);
+for (const tab of document.querySelectorAll(".settings-tab")) {
+  tab.addEventListener("click", () => { clearSettingsStatus(); showSettingsTab(tab.dataset.tab); });
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = [...document.querySelectorAll(".settings-tab")];
+    const index = tabs.indexOf(tab);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+      : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    showSettingsTab(tabs[next].dataset.tab);
+    tabs[next].focus();
+  });
+}
+showSettingsTab(settingsTab);
 byId("models-panel").addEventListener("click", (event) => {
   if (event.target === byId("models-panel")) closeModels();
 });
 byId("install-required").addEventListener("click", () => {
-  if (busy || !bridge) return;
+  if (!bridge) return;
+  // While the required models download, this button stops them.
+  if (installingModels) {
+    byId("install-required").disabled = true;
+    byId("install-required").textContent = "Stopping…";
+    bridge.stopOperation();
+    return;
+  }
+  if (busy) return;
   setBusy(true, "Checking required models…");
   bridge.installRequiredModels();
 });
@@ -3442,7 +8125,7 @@ byId("cancel-model-download").addEventListener("click", () => {
 });
 byId("project-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (busy || !bridge) return;
+  if (busy || !bridge || needsNewProjectSetup()) return;
   if (!profile) return showError("Settings are still loading. Try again in a moment.");
   if (!installedBackends[activeBackend]) {
     openModels();
@@ -3463,21 +8146,31 @@ byId("project-form").addEventListener("submit", (event) => {
     byId("model-download-status").textContent = "Download the selected models in Settings before preparing the project.";
     return;
   }
+  const cardProblem = sourceCardProblem();
+  if (cardProblem) {
+    openModels();
+    return showError(cardProblem);
+  }
   const selected = Object.fromEntries(
     selectedSources.map((path) => [path, [...(checkedFiles.get(path) || [])]]),
   );
   const included = selectedSources.filter((path) => selected[path].length);
   if (selectedSources.length && !included.length) return showError("Select at least one file.");
   error.classList.add("hidden");
-  if (!included.length && !byId("workspace-path").value.trim()) {
-    openModels();
-    byId("workspace-path").focus();
-    return showError("Choose a workspace folder to create a project without sources.");
+  // A name set in Settings names the project. Without one, the core
+  // allocates a free source-derived or "new-project" directory atomically.
+  const name = byId("project-title").value.trim();
+  if (/[\\/]/.test(name) || name.startsWith(".")) {
+    return showError("A project name cannot start with a dot or contain / or \\.");
   }
+  if (savedProjects.some((project) => project.name === name)) {
+    return showError(`A project named ${name} already exists. Choose another name in Settings.`);
+  }
+  const destination = name ? projectPath(name) : "";
   setBusy(true, "Opening project…");
   requestAnimationFrame(() => activity.scrollIntoView({ block: "nearest" }));
   bridge.openProject(
-    JSON.stringify(included), byId("type-id").value, byId("workspace-path").value.trim(),
+    JSON.stringify(included), byId("type-id").value, destination,
     JSON.stringify(selected), JSON.stringify(collectSettings()),
   );
 });
@@ -3485,6 +8178,13 @@ byId("question-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const question = byId("question").value.trim();
   if (!question || busy || !ready) return;
+  if (answerSettingsSave.pending || answerSettingsSave.uncertain) {
+    error.textContent = answerSettingsSave.uncertain
+      ? "Reopen the project to verify its answer settings before asking."
+      : "Answer settings are still saving. Send after they are confirmed.";
+    error.classList.remove("hidden");
+    return;
+  }
   error.classList.add("hidden");
   const temperature = Number(byId("temperature").value);
   if (!byId("temperature").value.trim() || !Number.isFinite(temperature) || temperature < 0) {
@@ -3495,42 +8195,274 @@ byId("question-form").addEventListener("submit", (event) => {
   if (answerTokens && (!Number.isInteger(maxNewTokens) || maxNewTokens < 1)) {
     return showError("Choose a positive answer-token limit or leave it blank.");
   }
-  byId("question").value = "";
-  addPendingTurn(question);
-  showAskingConversation(question);
-  setBusy(true, "Finding evidence and answering…");
-  const attachedContext = messageAttachments.length
-    ? `\n\nAttached paths to consider:\n${messageAttachments.map((path) => `- ${path}`).join("\n")}`
-    : "";
+  const answerSettings = {
+    temperature, max_new_tokens: maxNewTokens,
+    thinking: byId("thinking").checked,
+  };
+  // An input can still contain a draft when Submit fires before Change.
+  // Never let ask() persist that draft as a side effect of answering.
+  if (!sameAnswerSettings(answerSettings, confirmedAnswerSettings())) {
+    queueAnswerSettings(answerSettings);
+    error.textContent = "Saving answer settings. Send after confirmation.";
+    error.classList.remove("hidden");
+    return;
+  }
+  setQuestionDraft("");
+  // A question goes to the chat the engine has open.
+  returnToAnswer();
+  const ask = {
+    question, attachments: messageAttachments, files: [], leftOut: [],
+    effort: JSON.stringify({ model: selectedModelLevel, search_depth: selectedDepthStep }),
+    settings: confirmedAnswerSettings(),
+  };
   messageAttachments = [];
   renderAttachments();
-  const effort = JSON.stringify({ model: selectedModelLevel, search_depth: selectedDepthStep });
-  bridge.askQuestion(`${question}${attachedContext}`, effort, JSON.stringify({
-    temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens,
-    _title_question: question,
-  }));
+  if (!ask.attachments.length) return sendQuestion(ask);
+  // Copy attached files into sources first, so the answer can search them.
+  attachedAsk = ask;
+  setBusy(true, "Adding the attached files to sources…");
+  bridge.checkProjectSources(JSON.stringify(ask.attachments));
 });
-byId("question").addEventListener("keydown", (event) => {
+
+/**
+ * Show the projects folder in Settings; after a switch, list its projects.
+ *
+ * @param data The ``projects_folder`` event: ``folder`` in use, ``saved``
+ *   choice ("" for the default), and whether that choice is ``missing``.
+ */
+function showProjectsFolder(data) {
+  projectsFolderInfo = data;
+  byId("workspace-path").value = data.folder;
+  byId("workspace-path").title = data.folder;
+  showProjectSettings();
+  if (!switchingProjectsFolder) return;
+  // The engine restarted with the new folder: list the projects there.
+  switchingProjectsFolder = false;
+  setBusy(false);
+  bridge.requestSettings(byId("type-id").value, "");
+  bridge.requestReadiness();
+  refreshSavedProject();
+}
+
+/**
+ * Show what Settings can change: the backend and projects folder, in KíLín
+ * setup, only on the start screen (disabled with a project open); Delete
+ * only with a project open.
+ */
+function showProjectSettings() {
+  // The buttons always show; they are disabled while a project is open,
+  // and Use default also while the default folder is in use.
+  const why = ready ? "Change it from the start screen." : "";
+  byId("browse-workspace").disabled = ready;
+  // Also disabled while the standard folder is the one saved; without a
+  // saved folder, Confirm projects folder confirms the one in use.
+  byId("default-workspace").disabled = ready || !projectsFolderInfo?.saved
+    || projectsFolderInfo.saved === projectsFolderInfo.standard;
+  byId("use-legacy-workspace").disabled = ready || busy;
+  byId("use-legacy-workspace").title = why;
+  byId("browse-workspace").title = why;
+  byId("default-workspace").title = why;
+  // A note only when the chosen folder is missing.
+  const missing = Boolean(projectsFolderInfo?.missing);
+  byId("workspace-note").textContent = missing
+    ? `${projectsFolderInfo.saved} is not available, so KíLín uses the default folder.`
+    : "";
+  byId("workspace-note").classList.toggle("hidden", !missing);
+  const legacy = projectsFolderInfo?.legacy || "";
+  const canReuseLegacy = Boolean(
+    legacy && legacy !== projectsFolderInfo?.folder,
+  );
+  byId("legacy-workspace-choice").classList.toggle(
+    "hidden", !canReuseLegacy,
+  );
+  byId("legacy-workspace-note").textContent = canReuseLegacy
+    ? `Existing KíLín projects may be at ${legacy}. Use that folder to `
+      + "keep working with them, or confirm a different folder. "
+      + "No project files will be moved."
+    : "";
+  showSetupConfirmations();
+  // An open project keeps the backend it was made with.
+  byId("backend").title = ready ? "Set when the project was created." : "";
+  // On the start screen the name is for the next new project.
+  byId("delete-project").classList.toggle("hidden", !ready);
+  if (ready) byId("project-title").value = projectName(openProjectPath);
+}
+
+/**
+ * Return a project's name: the last part of its folder path.
+ *
+ * @param path The project folder.
+ */
+function projectName(path) {
+  return path.split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
+/**
+ * Rename the open project from Settings: Enter or leaving the field saves,
+ * Escape puts the name back.
+ */
+function renameProjectFromSettings() {
+  const input = byId("project-title");
+  // On the start screen the name waits for the next new project.
+  if (!ready) return;
+  const current = projectName(openProjectPath);
+  const name = input.value.trim();
+  if (!name || name === current || busy) {
+    input.value = current;
+    return;
+  }
+  setBusy(true, "Renaming project…");
+  bridge.renameProject(name);
+}
+
+/**
+ * Confirm, then close the open project and move it to the deleted folder
+ * in the projects folder.
+ */
+async function deleteOpenProject() {
+  if (!bridge || !ready || busy) return;
+  const folder = openProjectPath;
+  const name = projectName(folder);
+  if (!await askKilin(
+    `Delete ${name}?`,
+    "Are you sure you want to delete this project?",
+    "Delete",
+  )) return;
+  hideModels();
+  returnToLaunch();
+  // Sent after closing: the engine refuses to delete an open project.
+  bridge.deleteProject(folder);
+}
+
+/**
+ * Return where a new project with this name goes.
+ *
+ * @param name Folder name of the new project.
+ * @returns "<projects folder>/<name>".
+ */
+function projectPath(name) {
+  const root = byId("workspace-path").value.replace(/[\\/]+$/, "");
+  return `${root}/${name}`;
+}
+
+/**
+ * Choose another projects folder, or go back to the default one.
+ *
+ * Qt saves the choice and restarts the engine, so this is offered only on
+ * the start screen while KíLín is idle.
+ *
+ * @param useDefault Whether to go back to the default folder.
+ */
+function changeProjectsFolder(useDefault) {
+  if (!bridge || busy) return;
+  if (ready) {
+    error.textContent = "Go back to the start screen to change the projects folder.";
+    error.classList.remove("hidden");
+    return;
+  }
+  // Set before Browse: Qt answers only once a folder is chosen.
+  switchingProjectsFolder = true;
+  if (!useDefault) return bridge.chooseProjectsFolder();
+  setBusy(true, "Switching to the default projects folder…");
+  bridge.useDefaultProjectsFolder();
+}
+
+/**
+ * Reuse a previous installed-app projects directory without moving files.
+ *
+ * Qt rechecks the old folder before saving it as the user's choice.
+ */
+function useLegacyProjectsFolder() {
+  if (!bridge || busy || !projectsFolderInfo?.legacy) return;
+  if (ready) return changeProjectsFolder(false);
+  switchingProjectsFolder = true;
+  setBusy(true, "Opening the previous projects folder…");
+  bridge.useLegacyProjectsFolder();
+}
+
+/**
+ * Restore the start screen after a cancelled or failed folder selection.
+ *
+ * @param message Error text, or an empty string for a cancelled chooser.
+ */
+function finishProjectsFolderSwitch(message = "") {
+  if (switchingProjectsFolder) {
+    switchingProjectsFolder = false;
+    setBusy(false);
+  }
+  if (message) showError(message);
+}
+
+/**
+ * Ask a question; attached files, already in sources, are listed under it.
+ *
+ * @param ask Question, its attached ``sources/`` paths (``files``), names
+ *   that could not be added (``leftOut``), and the answer settings.
+ */
+function sendQuestion(ask) {
+  if (answerSettingsSave.pending || answerSettingsSave.uncertain) {
+    setQuestionDraft(ask.question);
+    messageAttachments = ask.attachments;
+    renderAttachments();
+    error.textContent = "Confirm answer settings before sending the question.";
+    error.classList.remove("hidden");
+    return;
+  }
+  unansweredQuestion = ask.question;
+  answeringConversationId = activeConversationId;
+  const listed = ask.files.map((path) => `- ${path}`).join("\n");
+  const text = listed ? `${ask.question}\n\nAttached files:\n${listed}` : ask.question;
+  addPendingTurn(text);
+  showAskingConversation(ask.question);
+  setBusy(true, "Finding evidence and answering…");
+  bridge.askQuestion(text, ask.effort, JSON.stringify({ ...ask.settings, _title_question: ask.question }));
+  if (ask.leftOut.length) {
+    error.textContent = `KíLín could not add ${ask.leftOut.join(", ")}, so the answer does not use ${ask.leftOut.length === 1 ? "it" : "them"}.`;
+    error.classList.remove("hidden");
+  }
+}
+
+/**
+ * Add a question's attached files to sources without the add dialog.
+ *
+ * Files already in sources are only referred to; the question is asked
+ * when the refreshed project arrives (``opened``), or now when nothing new
+ * has to be copied.
+ *
+ * @param check The ``sources_checked`` event for the attached paths.
+ */
+function addAttachedSources(check) {
+  const ask = attachedAsk;
+  ask.files = check.add.map((item) => `sources/${item.name}${item.kind === "folder" ? "/" : ""}`);
+  ask.leftOut = [...check.files.map((file) => file.path), ...check.skipped_folders];
+  if (!check.add.some((item) => item.state !== "existing")) {
+    attachedAsk = null;
+    return sendQuestion(ask);
+  }
+  setBusy(true, "Adding the attached files and updating the index…");
+  bridge.addProjectSources(JSON.stringify(check.sources), "{}");
+}
+const questionInput = byId("question");
+questionInput.addEventListener("input", resizeQuestionInput);
+// Side-panel dragging also changes the input width, without a window resize.
+// Ignore height-only observations to avoid a resize feedback loop.
+let questionWidth = questionInput.offsetWidth;
+new ResizeObserver(() => {
+  const width = questionInput.offsetWidth;
+  if (width === questionWidth) return;
+  questionWidth = width;
+  resizeQuestionInput();
+}).observe(questionInput);
+resizeQuestionInput();
+questionInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     byId("question-form").requestSubmit();
   }
 });
 conversationScroll.addEventListener("scroll", updateFloatingHeader, { passive: true });
-byId("project-name").addEventListener("input", () => {
-  byId("topbar-project-name").textContent = byId("project-name").textContent.trim();
-});
-byId("new-chat").addEventListener("click", () => {
-  if (busy) return;
-  showWorkspace(false);
-  setBusy(true, "Starting a new conversation…");
-  bridge.newConversation();
-});
-byId("branch-chat").addEventListener("click", () => {
-  if (busy) return;
-  setBusy(true, "Branching this conversation…");
-  bridge.branchConversation();
-});
+byId("conversation-name").addEventListener("input", () => updateChatSummary());
+byId("new-chat").addEventListener("click", () => openEmptyChat(""));
 /**
  * Send a valid edited conversation title to the backend.
  */
@@ -3538,29 +8470,38 @@ function commitConversationName() {
   const name = byId("conversation-name").textContent.trim();
   if (!busy && activeConversationId && name) bridge.renameConversation(activeConversationId, name);
 }
-/**
- * Rename the current project when the edited title differs.
- */
-function commitProjectName() {
-  const name = byId("project-name").textContent.trim();
-  const current = byId("workspace-path").value.split(/[\\/]/).pop();
-  if (!busy && ready && name && name !== current) {
-    setBusy(true, "Renaming project…");
-    bridge.renameProject(name);
-  }
-}
-byId("topbar-project-name").addEventListener("input", () => {
-  byId("project-name").textContent = byId("topbar-project-name").textContent;
-});
-for (const [id, commit] of [["conversation-name", commitConversationName], ["project-name", commitProjectName], ["topbar-project-name", commitProjectName]]) {
+for (const [id, commit] of [["conversation-name", commitConversationName]]) {
   byId(id).addEventListener("blur", commit);
   byId(id).addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
   });
 }
-byId("change-project").addEventListener("click", () => {
-  if (busy) return;
+/**
+ * Close the open project and show the start screen, where a project can be
+ * resumed or created.
+ */
+function returnToLaunch() {
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  answerSettingsSave.uncertain = false;
   bridge.closeProject();
+  openProjectPath = "";
+  projectPresentation = null;
+  sourceQuestions = [];
+  sourceWelcome = [];
+  pendingSourceQuestions = null;
+  projectBehaviorData = null;
+  behaviorSave.pending = null;
+  feedbackData = { project: "", revision: "", entries: {} };
+  feedbackSave.pending = null;
+  memoryIndexState = null;
+  memorySyncPending = false;
+  memoryMessagePage = null;
+  memoryMessagesRequestedOffset = 0;
+  memoryExcludeSave.pending = null;
+  memoryNavigation = null;
+  displayedMemoryProject = "";
+  displayedMemoryRevision = "";
   ready = false;
   updateFloatingHeader();
   chat.classList.add("hidden");
@@ -3568,7 +8509,6 @@ byId("change-project").addEventListener("click", () => {
   byId("conversations-panel").classList.add("hidden");
   byId("toggle-conversations").classList.add("hidden");
   setup.classList.remove("hidden");
-  byId("workspace-path").value = "";
   selectedSources.length = 0;
   previewRoots.clear();
   previewSkipped.clear();
@@ -3576,12 +8516,58 @@ byId("change-project").addEventListener("click", () => {
   renderPreview();
   showWorkspace(false);
   clearReferences();
+  byId("project-title").value = "";
+  showProjectSettings();
   bridge.requestSettings(byId("type-id").value, "");
   setBusy(false);
   refreshSavedProject();
+}
+
+// The logo and the Projects ＋ lead back to the start screen, where new
+// projects are made; both are disabled while busy.
+for (const id of ["home-logo", "new-project"]) {
+  byId(id).addEventListener("click", () => {
+    if (busy) return;
+    byId("leave-project").showModal();
+  });
+}
+// Each left-panel section folds, and sorts from its ⋯ menu; both choices
+// are remembered on this computer.
+for (const section of document.querySelectorAll(".sidebar-section")) {
+  const name = section.dataset.section;
+  const toggle = section.querySelector(".sidebar-section-toggle");
+  const fold = (collapsed) => {
+    section.classList.toggle("collapsed", collapsed);
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  };
+  fold(sidebarPref(`${name}-collapsed`, false));
+  toggle.addEventListener("click", () => {
+    const collapsed = !section.classList.contains("collapsed");
+    fold(collapsed);
+    setSidebarPref(`${name}-collapsed`, collapsed);
+  });
+}
+byId("sort-projects").addEventListener("click", (event) => {
+  event.stopPropagation();
+  showSidebarSortMenu(event.currentTarget, "projects",
+    () => renderSidebarProjects(savedProjects, openProjectPath));
+});
+byId("sort-conversations").addEventListener("click", (event) => {
+  event.stopPropagation();
+  showSidebarSortMenu(event.currentTarget, "conversations",
+    () => lastConversationData && renderConversations(lastConversationData));
+});
+byId("leave-project-cancel").addEventListener("click", () => byId("leave-project").close());
+byId("kilin-ask-cancel").addEventListener("click", () => byId("kilin-ask").close("cancel"));
+byId("kilin-ask-other").addEventListener("click", () => byId("kilin-ask").close("other"));
+byId("kilin-ask-confirm").addEventListener("click", () => byId("kilin-ask").close("confirm"));
+byId("leave-project-confirm").addEventListener("click", () => {
+  byId("leave-project").close();
+  if (busy) return;
+  returnToLaunch();
 });
 byId("toggle-workspace").addEventListener("click", () => {
-  showWorkspace(!shell.classList.contains("sidebar-open"));
+  chooseSidePanels(!shell.classList.contains("sidebar-open"));
 });
 byId("toggle-conversations").addEventListener("click", () => {
   showConversations(shell.classList.contains("conversations-hidden"));
@@ -3602,8 +8588,40 @@ byId("effort-button").addEventListener("click", (event) => {
   // One composer menu at a time.
   byId("usage-menu").classList.add("hidden");
   byId("usage-button").setAttribute("aria-expanded", "false");
+  // The project may have changed Thinking since the menu was last open.
+  renderEffortPicker();
   menu.classList.toggle("hidden");
   byId("effort-button").setAttribute("aria-expanded", String(!menu.classList.contains("hidden")));
+});
+byId("effort-name").addEventListener("click", () => {
+  const open = byId("effort-thinking").classList.toggle("hidden") === false;
+  byId("effort-name").setAttribute("aria-expanded", String(open));
+});
+for (const input of document.querySelectorAll('input[name="effort-thinking"]')) {
+  input.addEventListener("change", () => {
+    // The Answers checkbox is the setting; its change listener keeps a
+    // start-screen choice for the next new project.
+    byId("thinking").checked = input.value === "on";
+    byId("thinking").dispatchEvent(new Event("change"));
+  });
+}
+byId("effort-temperature").addEventListener("change", () => {
+  // The Answers field performs the existing validation and project save.
+  byId("temperature").value = byId("effort-temperature").value;
+  byId("temperature").dispatchEvent(new Event("change"));
+  byId("effort-temperature").value = byId("temperature").value;
+});
+byId("thinking").addEventListener("change", () => {
+  // Both Thinking controls share the Answers setting and its save queue.
+  // On the start screen the selected value belongs to the next project.
+  if (ready && busy) {
+    byId("thinking").checked = answerSettingsSave.queued?.thinking
+      ?? answerSettingsSave.pending?.settings.thinking
+      ?? savedAnswerThinking;
+  } else if (ready) {
+    saveAnswerNumbers();
+  }
+  renderEffortPicker();
 });
 byId("effort-model-range").addEventListener("input", (event) => {
   setEffortLevel("model", event.target.value);
@@ -3626,17 +8644,22 @@ byId("attach-folder").addEventListener("click", () => {
   bridge?.chooseAttachmentFolder();
 });
 byId("appearance").addEventListener("change", (event) => applyAppearance(event.target.value));
+for (const id of ["thinking", "temperature", "max-new-tokens"]) {
+  byId(id).addEventListener("change", () => { if (!ready) answerSettingsEdited = true; });
+}
+for (const id of ["temperature", "max-new-tokens"]) {
+  rememberValue(byId(id));
+  byId(id).addEventListener("change", saveAnswerNumbers);
+}
 byId("type-id").addEventListener("change", () => {
-  hideResume();
-  bridge?.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+  bridge?.requestSettings(byId("type-id").value, "");
   refreshSavedProject();
 });
-byId("workspace-path").addEventListener("input", queueSavedProjectRefresh);
-byId("workspace-path").addEventListener("change", () => {
-  bridge?.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
-  refreshSavedProject();
+byId("backend").addEventListener("change", () => {
+  if (!ready) bridge?.setBackendPreference(byId("backend").value);
+  saveModelFields();
+  showModelFields();
 });
-byId("backend").addEventListener("change", () => { saveModelFields(); showModelFields(); });
 byId("query-format").addEventListener("change", () => {
   refreshModelStatus();
   if (!byId("models-panel").classList.contains("hidden")) renderModelsPanel();
@@ -3661,6 +8684,16 @@ document.addEventListener("keydown", (event) => {
 });
 for (const id of ["extensions", "max-file-bytes"]) byId(id).addEventListener("change", previewSources);
 
+byId("save-source-card-models").addEventListener(
+  "click", saveSourceCardSettings,
+);
+byId("save-source-card-policy").addEventListener(
+  "click", saveSourceCardSettings,
+);
+byId("regenerate-source-cards").addEventListener(
+  "click", regenerateSourceCards,
+);
+
 // Attach the bridge only after Qt exposes the channel; then request state.
 new QWebChannel(qt.webChannelTransport, (channel) => {
   bridge = channel.objects.kilin;
@@ -3676,13 +8709,10 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
     }
     renderAttachments();
   });
-  bridge.workspaceSelected.connect((path) => {
-    byId("workspace-path").value = path;
-    bridge.requestSettings(byId("type-id").value, path);
-    refreshSavedProject();
-  });
-  bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+  bridge.requestSettingsInfo();
+  bridge.requestSettings(byId("type-id").value, "");
   bridge.requestReadiness();
+  bridge.requestProjectsFolder();
   showWorkspace(false);
   renderEffortPicker();
   setBusy(false);
@@ -3795,7 +8825,7 @@ for (const side of ["left", "right"]) {
       if (startWidth) shell.style.setProperty(`--${side}-width`, startWidth);
       else shell.style.removeProperty(`--${side}-width`);
       if (side === "left") showConversations(false);
-      else showWorkspace(false);
+      else chooseSidePanels(false);
       positionPanelResizers();
       syncSourceDropTarget();
       return;
@@ -3820,3 +8850,61 @@ panelObserver.observe(shell);
 panelObserver.observe(byId("conversations-panel"));
 panelObserver.observe(document.querySelector(".side-panels"));
 window.addEventListener("resize", positionPanelResizers);
+
+// Draggable border between the Workspace and References panels.
+const WORKSPACE_SHARE_LIMITS = [15, 85];
+const sideDivider = byId("side-divider");
+
+/**
+ * Apply a remembered or dragged Workspace height, within its limits.
+ *
+ * @param share Requested percentage of the side column for Workspace;
+ *   null restores the default even split.
+ */
+function setWorkspaceShare(share) {
+  const panels = document.querySelector(".side-panels");
+  if (share === null) {
+    panels.style.removeProperty("--workspace-share");
+    return;
+  }
+  const [min, max] = WORKSPACE_SHARE_LIMITS;
+  panels.style.setProperty("--workspace-share", `${Math.round(Math.min(max, Math.max(min, share)))}%`);
+}
+
+let sideDividerPress = 0;
+sideDivider.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  // Detect double-clicks here: pointer capture can suppress dblclick.
+  if (event.timeStamp - sideDividerPress < 400) {
+    sideDividerPress = 0;
+    setWorkspaceShare(null);
+    try { localStorage.removeItem("kilin-workspace-share"); } catch {}
+    return;
+  }
+  sideDividerPress = event.timeStamp;
+  sideDivider.setPointerCapture(event.pointerId);
+  sideDivider.classList.add("dragging");
+  document.body.classList.add("resizing-panels", "resizing-rows");
+});
+sideDivider.addEventListener("pointermove", (event) => {
+  if (!sideDivider.hasPointerCapture(event.pointerId)) return;
+  sideDividerPress = 0;  // A drag is not the first half of a double-click.
+  const box = document.querySelector(".side-panels").getBoundingClientRect();
+  setWorkspaceShare(((event.clientY - box.top) / box.height) * 100);
+});
+const finishSideDivider = (event) => {
+  if (!sideDivider.hasPointerCapture(event.pointerId)) return;
+  sideDivider.releasePointerCapture(event.pointerId);
+  sideDivider.classList.remove("dragging");
+  document.body.classList.remove("resizing-panels", "resizing-rows");
+  try {
+    localStorage.setItem("kilin-workspace-share", document.querySelector(".side-panels").style.getPropertyValue("--workspace-share"));
+  } catch {}
+  syncSourceDropTarget();
+};
+sideDivider.addEventListener("pointerup", finishSideDivider);
+sideDivider.addEventListener("pointercancel", finishSideDivider);
+try {
+  const saved = parseFloat(localStorage.getItem("kilin-workspace-share"));
+  if (Number.isFinite(saved)) setWorkspaceShare(saved);
+} catch {}

@@ -39,6 +39,15 @@ class TestMarkdownExtraction(unittest.TestCase):
         )
         self.assertEqual("".join(unit.text for unit in units), text)
 
+    def test_headings_with_levels(self) -> None:
+        lines = "# Title\n```\n# not a heading\n```\n## Methods\n".splitlines(
+            keepends=True
+        )
+        self.assertEqual(
+            sources_md.markdown_headings(lines),
+            [(1, 1, "Title"), (5, 2, "Methods")],
+        )
+
     def test_single_heading_without_preamble(self) -> None:
         """Avoid an empty preamble when the first line is a heading."""
 

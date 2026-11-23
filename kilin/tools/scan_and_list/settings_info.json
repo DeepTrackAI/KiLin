@@ -1,0 +1,25 @@
+{
+  "format": "settings-info-v1",
+  "settings": {
+    "case_sensitive": {
+      "title": "Case-sensitive matching",
+      "summary": "Distinguishes uppercase and lowercase letters during text matching.",
+      "description": "When enabled, matching uses exact letter case. When disabled, matching ignores case differences."
+    },
+    "whole_words": {
+      "title": "Whole-word matching",
+      "summary": "Requires matched terms to form complete words.",
+      "description": "Prevents finding the search term merely inside a longer word."
+    },
+    "context_lines": {
+      "title": "Context lines",
+      "summary": "Sets how many neighboring lines are shown around a match.",
+      "description": "Adds nearby source lines to each match for inspection without modifying the underlying source."
+    },
+    "max_listed": {
+      "title": "Maximum listed results",
+      "summary": "Caps the number of matches or items returned in a list.",
+      "description": "A lower cap produces shorter reports even when additional candidates exist in the source."
+    }
+  }
+}

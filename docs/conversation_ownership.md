@@ -36,7 +36,7 @@ The OS lock belongs to a persistent *companion file*, such as:
 ```text
 logs/traces/
     conversation_2026-10-12T20-00-00.json
-    conversation_2026-10-12T20-00-00.json.lock
+    .conversation_2026-10-12T20-00-00.json.lock
 ```
 
 On macOS/Linux, the lock uses nonblocking `fcntl.flock`. On Windows, it uses
@@ -46,6 +46,8 @@ lock cannot be attached to its replaceable inode. The companion remains on
 disk after closure; **its existence does not mean that the file is locked**.
 Do not remove lock files while KíLín may still be using them, because a
 removed/recreated companion can break coordination between writers.
+The leading dot hides the sidecar in Finder and typical Linux file browsers.
+This fresh-release convention does not migrate legacy lock filenames.
 
 ## Lifetimes and ownership
 
@@ -77,6 +79,28 @@ A tracing-disabled RAG session *still saves checkpoints* and retains
 exclusive ownership. This is important because disabling diagnostic tracing
 must not disable persistence protection.
 
+Core answer timelines are included directly in each serialized
+`ConversationTurn` before the checkpoint commit. They therefore share the
+conversation's existing atomic write and ownership lease rather than
+creating another timing file or introducing a post-commit update. The
+GUI consumes the saved turn directly; it does not maintain a separate
+presentation timing file for notebook, API, or GUI answers.
+
+## Stable turn IDs and separate feedback ownership
+
+Each committed turn includes a `conversation_turn_uuid` allocated when the
+completed turn is constructed, alongside its timestamp. Branching preserves
+these IDs, and invalid or duplicate stored identities are not repaired.
+The original checkpoint remains authoritative for questions and answers.
+
+User Save/Like/Dislike feedback is stored in a separate project-local
+`memory/feedback.json`. Its independent companion-file lock and atomic
+replacement protect feedback without rewriting conversation checkpoints
+or changing their hashes. Archiving a conversation does not delete shared
+feedback; another branch retaining the turn UUID can still use it.
+See [Conversation memory](conversation_memory.md) for the strict schema,
+revision checks, and active-origin rules.
+
 ## Switching, resetting, and archiving
 
 When switching conversations, RAG acquires (or validates) the target lock
@@ -93,10 +117,21 @@ RAG borrows it rather than acquiring a second lock.
 `RAGSession.reset()` archives the current file while owning its path and
 continues with a fresh conversation under that same path. The GUI's
 `ConversationStore.archive()` borrows the active owner where applicable,
-then moves the JSON to `logs/traces/deleted/`. In the deletion flow, the GUI
-closes the old logger with `emit_event=False` to release ownership without
-rewriting the already archived JSON. An inactive conversation is locked
-independently during archival.
+then moves only the JSON to `logs/traces/.deleted/`. The hidden lock
+companion remains at its original path even while a borrowed writer holds
+the lease. The GUI closes the old logger with `emit_event=False` to release
+ownership without rewriting the archived JSON. An inactive conversation is
+locked independently during archival; a competing owner prevents deletion.
+
+Archived conversations are excluded from the active catalog. There is no
+in-app restore command. Exceptional restoration requires closing all KíLín
+instances using the project, moving the archived JSON back to
+`logs/traces/`, and reopening the project. Returning it under its original
+filename reuses the hidden lock. If an archive collision added a suffix,
+restore to an unused conversation filename; a different filename receives
+its own companion upon first use. A manual move performed while a writer is
+active does not participate in the locking protocol. In macOS Finder, use
+Command-Shift-Period to reveal the hidden `.deleted` folder if necessary.
 
 ## Atomic writes and cleanup
 
@@ -106,7 +141,8 @@ uniquely named temporary file in the destination directory and atomically
 replaces the destination after completing the write. A pre-existing `.tmp`
 symlink cannot redirect the write; an unsuccessful write or replacement
 removes the temporary file and preserves the prior destination. The same
-helper is used for cached source text and GUI answer timelines. File-format
+helper is used for cached source text. Answer timelines are included in
+conversation checkpoints, not written separately. File-format
 choices (such as indentation and sorting) remain with the callers.
 
 This atomicity concerns **one file at a time**. It does not synchronize
@@ -158,6 +194,21 @@ companion file and modifying the JSON. They do not provide encryption,
 resistance to hostile local processes, a durable disk-flush guarantee, or a
 transaction spanning multiple files or the store's in-memory registry.
 
+## Change impact and verification
+
+The persistent companion exists because atomically replacing the JSON would
+replace the inode on which a direct file lock was held. Borrowed ownership
+and delegated active-state writing prevent the store and trace logger from
+becoming competing writers within one session. Do not replace those
+mechanisms with an existence check on `.lock` or a second metadata writer.
+
+For a format or ownership change, inspect `conversation_format.py`,
+`conversation_ownership.py`, `atomic_writes.py`, `ConversationStore`,
+`TraceLogger` and the RAG/GUI callers together. Preserve validation before
+switch-away and correct cleanup for owned versus borrowed leases. Update
+saved-state fixtures, trace consumers and the corresponding diagram; a
+format-compatible reader does not prove correct writer coordination.
+
 ## Regression testing
 
 The following suites cover the main ownership guarantees:
@@ -166,7 +217,7 @@ The following suites cover the main ownership guarantees:
 python -m pytest -q \
     tests/kilin/test_conversation_ownership.py \
     tests/kilin/test_trace_logging.py \
-    tests/kilin/test_rag.py \
+    tests/kilin/test_rag__conversation.py \
     tests/kilin/test_conversations.py \
     tests/kilin/gui/test__conversation_ownership.py
 ```
@@ -179,3 +230,8 @@ with isolated local files and no model downloads.
 
 The project requires Python 3.12. Verify platform-specific locking on macOS
 and Windows in addition to any local CI environment.
+
+## Related
+
+[Answering lifecycle](answering_pipeline.md), [Trace recording](trace_recording.md),
+[GUI protocol](gui_protocol.md), [Security](security.md).
