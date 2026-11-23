@@ -83,13 +83,29 @@ class TestSidebarLogoFrontend(unittest.TestCase):
         for name in ("kilin-qilin.png", "kilin-qilin-dark.png",
                      "kilin-qilin-head.png", "kilin-qilin-head-dark.png"):
             self.assertTrue((icons / name).is_file())
-        # Preserve the attribution history of the previous illustration.
+        # Brand permissions are separate from the software license.
         credit = (icons / "README.md").read_text(encoding="utf-8")
-        for text in ("RootOfAllLight", "CC BY-SA 4.0",
-                     "kilin-qilin-head-dark"):
-            self.assertIn(text, credit)
+        self.assertIn("kilin-qilin-head-dark", credit)
+        self.assertIn("BRAND_LICENSE.md", credit)
+        brand = (_ROOT / "assets/brand/README.md").read_text(
+            encoding="utf-8"
+        )
+        for document in (credit, brand):
+            self.assertIn("## Name and artwork permissions", document)
+            self.assertIn("BRAND_LICENSE.md", document)
+            self.assertNotIn("## Attribution history", document)
+        terms = (icons / "BRAND_LICENSE.md").read_text(encoding="utf-8")
+        self.assertIn("not licensed under Apache License 2.0", terms)
+        self.assertIn(
+            "https://github.com/DeepTrackAI/KiLin/blob/main/LICENSE",
+            terms,
+        )
+        self.assertNotIn("](../../../LICENSE)", terms)
+        self.assertIn("unmodified KíLín release", terms)
+        self.assertIn("modified fork", terms)
         project = (_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('"icons/README.md",', project)
+        self.assertIn('"icons/BRAND_LICENSE.md",', project)
         self.assertIn('"icons/*.png",', project)
 
     def test_sections_have_fold_sort_and_new(self):

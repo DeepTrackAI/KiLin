@@ -35,6 +35,20 @@ if grep -Eq '@KILIN_SPEC@|@KILIN_WHEEL_SHA@' "$launcher"; then
 fi
 bash -n "$launcher"
 plutil -lint "$plist"
+short_version=$(/usr/libexec/PlistBuddy -c \
+    'Print :CFBundleShortVersionString' "$plist")
+build_version=$(/usr/libexec/PlistBuddy -c \
+    'Print :CFBundleVersion' "$plist")
+source_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' \
+    "$project_dir/pyproject.toml" | head -n 1)
+base_version=$(printf '%s' "$source_version" | \
+    sed -E 's/(b|rc)[0-9]+$//')
+if [ "$short_version" != "$base_version" ] || \
+    [[ ! "$short_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || \
+    [[ ! "$build_version" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
+    echo "Invalid or mismatched numeric macOS bundle versions." >&2
+    exit 1
+fi
 codesign --verify --deep --strict "$app"
 hdiutil verify "$dmg" >/dev/null
 

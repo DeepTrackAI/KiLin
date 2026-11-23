@@ -8,11 +8,21 @@ launch, it downloads Python 3.12 and installs KíLín's dependencies.
 Model downloads are separate, user-initiated operations. The runtime
 and project data are not bundled into the disk image.
 
-**The current application is for development and trusted internal tests.**
-The build uses ad-hoc signing only, not Developer ID signing,
-and it is **not notarized**. No Apple Developer credentials are required.
-macOS Gatekeeper may prevent ordinary opening of these builds. We do not
-claim that they are suitable for frictionless public distribution.
+**The `0.1.0b1` Python package is prepared for public GitHub and PyPI
+release.** Native macOS and Windows applications remain experimental
+unsigned development artifacts, not ready-to-use signed public installers.
+The macOS build uses ad-hoc signing only, not Developer ID signing, and is
+**not notarized**. No Apple Developer credentials are required. Gatekeeper
+may prevent ordinary opening of these builds. Public distribution of the
+source package does not remove these platform limitations.
+
+The release sequence is `0.1.0b1` → `0.1.0rc1` → `0.1.0`, with Git tags
+`v0.1.0b1`, `v0.1.0rc1`, and `v0.1.0`. Installer specs must match the
+exact PyPI version. On macOS, `CFBundleShortVersionString` uses the numeric
+base (`0.1.0` for all three), while `CFBundleVersion` distinguishes beta,
+RC, and stable builds using numeric release stages: `0.1.1001`, `0.1.2001`,
+and `0.1.3000`, respectively. Later patch numbers occupy higher ranges.
+On Windows, update comparisons use the semantic order beta < RC < stable.
 
 To build from the published PyPI version or from a checkout wheel:
 
@@ -64,9 +74,11 @@ and use the system-provided option in System Settings, Privacy &
 Security, to allow that particular app. Never advise disabling
 Gatekeeper or removing quarantine indiscriminately.
 
-Before sharing an invitation release, confirm that its desktop passkey
-has been tested on a fresh user account and is communicated to invited
-testers through a separate channel.
+The public beta still includes the desktop's invitation-passkey prompt.
+Before distributing a native build, confirm its behavior on a fresh user
+account and communicate passkeys separately to the intended testers.
+The prompt is local to the client; it is not an access restriction for
+public Python source code or a security boundary.
 
 Before sharing with trusted testers:
 
@@ -160,7 +172,7 @@ sharing a build, also test on a real Windows PC: first install, update
 over an earlier version, an NVIDIA computer, a model download and a basic
 answer.
 
-## Deferred public distribution
+## Native signing and notarization (deferred)
 
 We are deliberately **not implementing notarization** or a credentialed
 Developer ID release process. Public distribution with the usual
@@ -168,6 +180,14 @@ Gatekeeper experience would require separate decisions and access to an
 Apple Developer Program account. No developer credentials or
 notarization commands are needed for the documented build and
 verification workflow.
+
+For the public source/PyPI prerelease, release maintainers must also check
+that GitHub's migrated `DeepTrackAI/KiLin` repository is public, the README
+images load at the `raw.githubusercontent.com` URLs, and the current mascot
+artwork has documented redistribution permission. GitHub/PyPI do not host
+arbitrary local image paths from the wheel. Use the same tagged source for
+GitHub and PyPI artifacts; follow the [release checklist](development.md#public-prerelease-sequence).
+
 
 ## Related
 

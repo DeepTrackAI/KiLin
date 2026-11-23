@@ -21,7 +21,9 @@ Some SVG compositions embed PNG imagery as data URIs so they remain portable
 without external image paths. When preparing a GUI release, use the copies in
 `kilin/gui/icons/`; do not add runtime references back to this directory.
 
-For the earlier Qilin illustration's author and licensing history, see
-[`kilin/gui/icons/README.md`](../../kilin/gui/icons/README.md). The historical
-attribution does not by itself establish the provenance or licence of the
-newer mosaic-style artwork.
+## Name and artwork permissions
+
+The KíLín name, wordmarks, mascot, and other current brand assets are
+covered by [separate terms](../../kilin/gui/icons/BRAND_LICENSE.md),
+not the Apache 2.0 software license. The official artwork may be
+redistributed with an unmodified KíLín release under those terms.

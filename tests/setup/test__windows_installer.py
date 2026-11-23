@@ -96,6 +96,31 @@ class TestInstallerScript(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIn(text, body)
 
+    def test_version_comparison_recognizes_beta_rc_and_stable(
+        self,
+    ) -> None:
+        """Protect the Inno Setup phase ordering and numeric components.
+
+        Native installer runs still need to exercise actual upgrade dialogs.
+
+        """
+
+        for contract in (
+            "function VersionSuffix(Part: String): String;",
+            "function PhaseRank(Suffix: String): Integer;",
+            "function PhaseNumber(Suffix: String): Integer;",
+            "for I := 1 to 3 do",
+            "Result := PartNumber(PartA) - PartNumber(PartB);",
+            "Result := PhaseRank(SuffixA) - PhaseRank(SuffixB);",
+            "Result := PhaseNumber(SuffixA) - PhaseNumber(SuffixB);",
+            "if Suffix = '' then Result := 3",
+            "Copy(Suffix, 1, 2) = 'rc' then Result := 2",
+            "Copy(Suffix, 1, 1) = 'b' then Result := 1",
+            "Copy(Suffix, 1, 1) = 'a' then Result := 0",
+        ):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, self.script)
+
     def test_failure_stops_setup_before_files_are_copied(self) -> None:
         start = self.script.index("function PrepareToInstall")
         body = self.script[start:self.script.index("end;\n\n", start)]

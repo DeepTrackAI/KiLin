@@ -37,7 +37,7 @@ _si_article_/          # Paper work, benchmarks and source corpora
 sandbox/               # Local development workspaces; export empty
 ```
 
-The repository includes 18 numbered tutorial notebooks. They introduce
+The repository includes 19 numbered tutorial notebooks. They introduce
 installation, model cache, generation, repository scanning, extraction,
 embeddings, semantic/lexical/code retrieval, indexes, routing, RAG sessions,
 trace logging, project types, custom tools, and an end-to-end research
@@ -259,7 +259,7 @@ serialization policy.
 
 KíLín currently supports **Python 3.12** as declared in `pyproject.toml`.
 The `uv.lock` file is scoped to the same interpreter range. CI is divided
-into four independent workflows under `.github/workflows/`:
+into five independent workflows under `.github/workflows/`:
 
 | Workflow | Validation | Required checks |
 | --- | --- | --- |
@@ -267,6 +267,7 @@ into four independent workflows under `.github/workflows/`:
 | `package.yml` | Wheel and source distribution, isolated wheel installation | Ubuntu / Python 3.12 |
 | `docs.yml` | Local links/anchors, SVG metadata, source-backed inventories and examples | Ubuntu / Python 3.12 |
 | `macos_app.yml` | Real Apple Silicon .app/.dmg build, signature, mounted-image inspection and installer regression tests | macOS / Python 3.12, ad-hoc signing |
+| `windows_app.yml` | Real Inno Setup build, silent install, runtime and shortcut checks, uninstall | Windows x64, unsigned installer smoke |
 
 Windows is a target platform, but support is not fully verified yet.
 Its Python 3.12 and Qt/PDF jobs run on every change and report their
@@ -276,7 +277,9 @@ and native Qt/PDF behavior) are checked or corrected. Windows then becomes
 a required platform.
 
 All workflows run on pull requests and pushes to `main` or `develop`; they
-can also be launched manually. The test matrix has `fail-fast: false`, so
+can also be launched manually. Tag pushes do not currently start a separate
+publishing or release-verification workflow. The test matrix has
+`fail-fast: false`, so
 one platform failure does not cancel the other configurations. A Node.js
 runtime is installed for the JavaScript checks in the base test suite.
 A newer push to a pull request cancels that pull request's runs still in
@@ -356,37 +359,57 @@ users install: Qt plus the platform's backend, chosen by environment
 markers. `kilin-gui` is a GUI script, so Windows opens it without a
 console.
 
-### Releasing
+### Public prerelease sequence
 
-1. Raise `version` in `pyproject.toml` (and `CITATION.cff`).
-2. Build and check the package: `uv build`, then install the wheel into a
-   fresh environment with `uv pip install "dist/kilin-<version>-py3-none-any.whl[app]"`
-   and open `kilin-gui`.
-3. Publish it to PyPI. PyPI has no upload page; `uv publish` sends the
-   named files and nothing else:
+The first public beta is `0.1.0b1`, then `0.1.0rc1`, then stable `0.1.0`.
+Use matching Git tags: `v0.1.0b1`, `v0.1.0rc1`, `v0.1.0`. If further
+beta or RC iterations are needed, increment their sequence numbers. Do
+not upload `0.1.0` to PyPI until it is the intended stable release.
+Public prereleases remain subject to the security and platform limits in
+[Release guidance](release.md); a public package is not a signed native app.
+
+1. On the **exact release commit**, update the package version in
+   `pyproject.toml`, synchronize the root entry in `uv.lock`, and match
+   `CITATION.cff`. Keep the `Repository` project URL and all public README
+   links on `https://github.com/DeepTrackAI/KiLin`.
+   Confirm the public repository exists and its raw logo URLs load:
+   `https://raw.githubusercontent.com/DeepTrackAI/KiLin/main/assets/brand/`.
+   Verify the artwork's redistribution rights before making it public.
+2. Run both complete test suites on Python 3.12, the formatting checks,
+   documentation checks, and the package/installation CI workflows. Build
+   the distributions with `uv build`; review their contents and metadata.
+   Install the wheel into a fresh Python 3.12 environment using
+   `uv pip install "dist/kilin-<version>-py3-none-any.whl[app]"`, and open
+   `kilin-gui`. Run `twine check dist/*` when Twine is available. This
+   checks rendering syntax, not whether external image URLs resolve.
+3. Merge the reviewed commit to `main`, verify the GitHub checks against
+   that commit, and create the matching `v<version>` tag. Create a GitHub
+   release marked **prerelease** for `b` and `rc` versions. Do not mark
+   the stable `0.1.0` tag as prerelease. Keep tags pointing at the tested
+   commit; this repository does not currently publish automatically on
+   a tag push.
+4. Publish the two **reviewed** files to the existing PyPI `kilin`
+   project with an account authorized to publish it:
 
    ```sh
    uv publish dist/kilin-<version>-py3-none-any.whl dist/kilin-<version>.tar.gz
    ```
 
-   It asks for an API token (or reads `UV_PUBLISH_TOKEN`). Create one on
-   pypi.org under Account settings → API tokens, scoped to the `kilin`
-   project, with an account that maintains the project. A version can be
-   uploaded only once, even after it is deleted, so a fix needs a new
-   version. To rehearse, upload to TestPyPI first with
-   `--publish-url https://test.pypi.org/legacy/` and a token from
-   test.pypi.org, a separate site and account.
-4. Build a development macOS app using the version from PyPI:
-   `bash setup/macos/build_app.sh`. It writes `dist/KíLín.app` and
-   `dist/KíLín.dmg`. `--wheel` embeds a checkout wheel. Both builds
-   are signed ad hoc only and are **not notarized**. See the
-   [macOS build guide](release.md) for native and manual validation.
-5. Build a development Windows installer on Windows with uv 0.8 or later
-   and Inno Setup 6:
+   Provide a project-scoped PyPI API token via the publishing tool's
+   documented secure input method; do not commit tokens. A released PyPI
+   version cannot be re-uploaded with different files, so publish any fix
+   under a new version. TestPyPI is an optional rehearsal, not a
+   substitute for checking the production release. Confirm the published
+   README images, links, citation, license and exact version on PyPI.
+5. On a native Apple Silicon Mac, optionally build an **unsigned beta
+   development artifact** with `bash setup/macos/build_app.sh` after the
+   exact version is available on PyPI, or `--wheel` with a checkout build.
+   Its `.app` and `.dmg` are ad-hoc signed and not notarized; follow the
+   [macOS build guide](release.md). On Windows, build the experimental
+   unsigned installer with
    `powershell -NoProfile -ExecutionPolicy Bypass -File setup\windows\build_installer.ps1`.
-   It writes `dist\KiLin-Setup-<version>.exe`; `-Wheel` embeds a
-   checkout wheel. The installer is **not code-signed**. See the
-   [Windows installer](release.md#windows-installer) section.
+   Both builders can embed local wheels for verification. Do not present
+   these artifacts as signed or independently security-validated binaries.
 
 The builder resolves `uv` symlinks (including Homebrew's), checks that
 its target is an Apple-silicon executable, and bundles the resolved binary.

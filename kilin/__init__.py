@@ -38,20 +38,23 @@ True
 
 """
 
-from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
 from importlib.metadata import version as _distribution_version
+from pathlib import Path as _Path
 
-try:
-    __version__ = _distribution_version("kilin")
-except _PackageNotFoundError:
-    # Uninstalled source checkouts use the same version from pyproject.toml.
-    from pathlib import Path as _Path
+# A source checkout has its own release version, even when another KíLín
+# version is installed in the environment. Wheels use installed metadata.
+_source_manifest = _Path(__file__).resolve().parents[1] / "pyproject.toml"
+if _source_manifest.is_file():
     import tomllib as _tomllib
 
-    with (_Path(__file__).resolve().parents[1] / "pyproject.toml").open(
-        "rb"
-    ) as _stream:
-        __version__ = _tomllib.load(_stream)["project"]["version"]
+    with _source_manifest.open("rb") as _stream:
+        _source_project = _tomllib.load(_stream)["project"]
+    if _source_project["name"] == "kilin":
+        __version__ = _source_project["version"]
+    else:
+        __version__ = _distribution_version("kilin")
+else:
+    __version__ = _distribution_version("kilin")
 
 from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession
 from .answer_timeline import AnswerTimeline, AnswerTimelineStep
