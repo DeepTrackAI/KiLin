@@ -182,7 +182,9 @@ class TestDocumentationAssets(unittest.TestCase):
         ]
         errors: list[str] = []
         for document in documents:
-            text = document.read_text(encoding="utf-8")
+            text = _without_fences(
+                document.read_text(encoding="utf-8")
+            )
             for target in (
                 *LINK_PATTERN.findall(text),
                 *HTML_PATTERN.findall(text),
@@ -197,36 +199,40 @@ class TestDocumentationAssets(unittest.TestCase):
                     errors.append(f"{name}: {target}")
         self.assertEqual(errors, [], "Invalid local Markdown targets")
 
-    def test_public_readme_images_and_links_use_repository_urls(
+    def test_public_readme_images_and_links_are_branch_relative(
         self,
     ) -> None:
-        """Keep the PyPI description independent of relative file paths.
+        """Use current-revision paths on GitHub, not hard-coded main.
 
         The public repository is not contacted during this test.
 
         """
 
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        prefix = "https://raw.githubusercontent.com/DeepTrackAI/KiLin/main/"
+        self.assertNotIn("/DeepTrackAI/KiLin/blob/main/", readme)
+        self.assertNotIn("/DeepTrackAI/KiLin/tree/main/", readme)
+        self.assertNotIn(
+            "raw.githubusercontent.com/DeepTrackAI/KiLin/main/",
+            readme,
+        )
         images = (
             "assets/brand/10-lockup-horizontal-light.svg",
             "assets/brand/11-lockup-horizontal-dark.svg",
         )
+        self.assertIn(f'src="{images[0]}"', readme)
+        self.assertIn(f'srcset="{images[1]}"', readme)
         for path in images:
             with self.subTest(path=path):
                 self.assertTrue((ROOT / path).is_file())
-                self.assertIn(prefix + path, readme)
+
         links = LINK_PATTERN.findall(_without_fences(readme))
         self.assertTrue(links)
-        source_prefix = "/DeepTrackAI/KiLin/blob/main/"
         for target in links:
             with self.subTest(target=target):
                 parsed = urlparse(target)
-                self.assertEqual(parsed.scheme, "https")
-                if (parsed.netloc == "github.com"
-                        and parsed.path.startswith(source_prefix)):
-                    relative = unquote(parsed.path[len(source_prefix):])
-                    self.assertTrue((ROOT / relative).is_file(), target)
+                if not parsed.scheme and parsed.path:
+                    relative = unquote(parsed.path)
+                    self.assertTrue((ROOT / relative).exists(), target)
         anchors = _heading_anchors(readme)
         for anchor in re.findall(r'<a href="#([^"]+)">', readme):
             self.assertIn(anchor, anchors)

@@ -111,7 +111,7 @@ class TestReleaseMetadata(unittest.TestCase):
         names = [author["name"] for author in project["authors"]]
         self.assertEqual(tuple(names), _EXPECTED_AUTHORS)
         self.assertEqual(project["name"], "kilin")
-        self.assertEqual(project["readme"], "README.md")
+        self.assertEqual(project["readme"], "README.pypi.md")
         self.assertEqual(project["version"], "0.1.0b1")
 
     def test_release_author_identities(self):
