@@ -11,6 +11,7 @@ Temporary profiles and overrides exercise persistence without loading models.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -99,13 +100,22 @@ class TestSourceCardPolicy(unittest.TestCase):
         }
         write_source_card_overrides(self.root, overrides)
         self.assertEqual(read_source_card_overrides(self.root), overrides)
+        saved = (self.root / "source_card_sources.json")
+        # Preserve the original mixed-case spelling in the JSON record.
+        # WindowsPath equality itself is case-insensitive.
+        self.assertIn("Papers/Study.PDF", saved.read_text(
+            encoding="utf-8"
+        ))
         policy = SourceCardPolicy(True, "scientific_paper", True)
+        third = Path(
+            "papers/Study2.PDF" if os.name == "nt"
+            else "papers/Study.PDF"
+        )
         selected = select_source_card_kinds((
-            Path("Papers/Study.PDF"), Path("papers/paper.pdf"),
-            Path("papers/Study.PDF"),
+            Path("Papers/Study.PDF"), Path("papers/paper.pdf"), third,
         ), policy, overrides)
         self.assertEqual(set(selected), {
-            Path("papers/paper.pdf"), Path("papers/Study.PDF"),
+            Path("papers/paper.pdf"), third,
         })
         self.assertEqual(read_source_card_overrides(
             self.root / "missing"

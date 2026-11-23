@@ -32,7 +32,7 @@ class TestInstallerScript(unittest.TestCase):
 
         raw = SCRIPT.read_bytes()
         self.assertTrue(raw.startswith(b"\xef\xbb\xbf"), "Inno needs a BOM")
-        self.script = raw.decode("utf-8-sig")
+        self.script = raw.decode("utf-8-sig").replace("\r\n", "\n")
 
     def test_installs_per_user_without_administrator_rights(self) -> None:
         for line in (

@@ -178,7 +178,7 @@ class TestReadingSwitch(unittest.TestCase):
 
     def test_as_code_keeps_the_file_as_written(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
-            Path(folder, "index.html").write_text(PAGE, encoding="utf-8")
+            Path(folder, "index.html").write_bytes(PAGE.encode("utf-8"))
             report = {"repository": folder, "selected_files": ["index.html"]}
             [page] = read_repository_files(report)
             [code] = read_repository_files(report, as_code=True)

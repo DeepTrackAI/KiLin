@@ -58,7 +58,7 @@ def run_node(
     Parameters
     ----------
     script: str
-        JavaScript executed through ``node -e``.
+        JavaScript evaluated from standard input in ``node -e``.
     args: Sequence[str]
         Optional arguments appended after the script, accessible in
         Node through ``process.argv[1:]``. Defaults to no arguments.
@@ -81,6 +81,9 @@ def run_node(
 
     Notes
     -----
+    The JavaScript is passed on stdin rather than the command line to
+    support long frontend harnesses on Windows. ``node -e`` retains the
+    existing ``process.argv`` indexing for optional script arguments.
     The helper does not skip tests when Node is absent. Tests retain their
     existing ``unittest.skipUnless`` gates and result assertions. Using
     ``check=False`` ensures the individual test sees the failing stderr.
@@ -91,7 +94,12 @@ def run_node(
     if executable is None:
         raise FileNotFoundError("Node.js is not available")
     return subprocess.run(
-        [executable, "-e", script, *args],
+        [
+            executable, "-e",
+            "eval(require('node:fs').readFileSync(0, 'utf8'))",
+            *args,
+        ],
+        input=script,
         capture_output=True,
         text=True,
         timeout=timeout,

@@ -50,6 +50,7 @@ class TestRetrievalRequest(unittest.TestCase):
         for path in (
             Path("/tmp/data.pdf"), Path("../secret"),
             Path("data/../other"), Path("C:\\secret.pdf"),
+            Path(r"\rooted\document.pdf"),
             Path("\\\\server\\share\\file.pdf"),
         ):
             with self.subTest(path=path):

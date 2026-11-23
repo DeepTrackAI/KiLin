@@ -151,6 +151,7 @@ def _relative_path(path: Path) -> bool:
         not path.is_absolute()
         and not windows.is_absolute()
         and not windows.drive
+        and not windows.root
         and bool(path.parts)
         and all(part not in ("", ".", "..") for part in path.parts)
         and all(part not in ("", ".", "..") for part in windows.parts)
