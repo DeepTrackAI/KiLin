@@ -83,8 +83,15 @@ and check the generated copy. The package workflow also verifies the
 installed wheel's long-description metadata against `README.pypi.md`.
 
 `README.pypi.md` **must exist in the checkout** before building a wheel or
-source distribution. Do not rely on an Action to commit it automatically,
-and do not generate it only when a PR happens to touch `README.md`. Both
+source distribution. The clean source exporter in
+`assets/clean_repository.ipynb` must include both `README.pypi.md` and
+`MANIFEST.in` as selected, Git-tracked root files. An unselected root
+file is omitted, while an untracked selected file rejects the export.
+After first adding these files, run
+`git add README.pypi.md MANIFEST.in` before exporting. Inspect the ZIP
+to verify their presence. Do not rely on GitHub Actions to commit the
+generated README, and do not generate it only when a PR touches
+`README.md`. Both
 local and CI builds must consume the same committed description. The
 release pipeline should check, not silently regenerate, the file.
 

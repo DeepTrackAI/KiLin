@@ -507,6 +507,12 @@ ZIP of only changed/new files in repository-relative paths, with explicit
 deletions when needed. A separate full source export is useful when requested
 for release or transfer; it is not needed to apply a focused revision.
 
+Clean source ZIP exports must also include the tracked root files
+`README.pypi.md` and `MANIFEST.in`: they are required to rebuild the
+PyPI distribution description. Keep their top-level selection enabled in
+`assets/clean_repository.ipynb`; see the
+[README publication contract](readme_publication.md).
+
 The root `LICENSE` holds the Apache License 2.0 text declared by
 `pyproject.toml`. It must be committed to Git and present in source ZIPs,
 source distributions, and installed wheels. The source-export notebook

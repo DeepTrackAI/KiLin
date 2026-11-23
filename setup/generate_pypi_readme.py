@@ -140,6 +140,20 @@ def _rewrite_segment(text: str, *, root: Path, tag: str) -> str:
     """
 
     def markdown(match: re.Match[str]) -> str:
+        """Convert one Markdown link or image to its tagged URL.
+
+        Parameters
+        ----------
+        match : re.Match[str]
+            Matched Markdown reference, including its destination.
+
+        Returns
+        -------
+        str
+            The reference with its validated destination rewritten.
+
+        """
+
         url = match.group("url")
         angled = url.startswith("<") and url.endswith(">")
         unwrapped = url[1:-1] if angled else url
@@ -154,6 +168,20 @@ def _rewrite_segment(text: str, *, root: Path, tag: str) -> str:
         return match.group("start") + absolute + match.group("end")
 
     def html(match: re.Match[str]) -> str:
+        """Convert one HTML reference attribute to its tagged URL.
+
+        Parameters
+        ----------
+        match : re.Match[str]
+            Matched HTML attribute name and destination value.
+
+        Returns
+        -------
+        str
+            The attribute with its local destination rewritten.
+
+        """
+
         attribute = match.group("name")
         value = match.group("url")
         if attribute == "srcset" and value.startswith("data:"):
