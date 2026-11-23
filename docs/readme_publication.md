@@ -66,8 +66,11 @@ resolution against the currently selected GitHub default branch.
 
 ## When and how to regenerate
 
-From the repository root, after changing `README.md` **or** the version in
-`pyproject.toml`, run:
+On a developer machine, running `python -m tests` automatically
+regenerates `README.pypi.md` before unittest discovery. This is
+the supported way to refresh it during a normal local test run.
+The script also remains available independently: after changing
+`README.md` **or** the version in `pyproject.toml`, run:
 
 ```sh
 python -m setup.generate_pypi_readme
@@ -76,7 +79,12 @@ python -m unittest tests.setup.test__pypi_readme -v
 ```
 
 Commit the resulting `README.pypi.md` together with the source/version
-change. The `--check` command performs a byte-for-byte comparison without
+change. Direct `python -m pytest` and `python -m unittest` runs
+never regenerate it; they only detect stale output. GitHub Actions
+sets `CI=true`, so its `python -m tests` run also skips regeneration.
+Other CI runners should set a nonempty `CI` value other than
+`false` or `0`. A generator error stops local test discovery.
+The `--check` command performs a byte-for-byte comparison without
 writing; it is run in CI on **every PR** and therefore also catches changes
 that update only the version. Documentation tests verify README-local links
 and check the generated copy. The package workflow also verifies the

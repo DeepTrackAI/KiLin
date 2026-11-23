@@ -153,6 +153,11 @@ python -m tests
 ```
 
 The independent `tests/__main__.py` uses Python `unittest` discovery.
+On a developer machine, `python -m tests` regenerates
+`README.pypi.md` before discovery; `python -m pytest` does not.
+In CI (`CI=true`), both runners leave generated files untouched
+and the README synchronization test detects stale content. Review
+and commit any locally regenerated README with its source changes.
 Keep new tests discoverable by **both** runners. Its naming convention is
 `test_<module>.py` for a module, `test_<module>__<aspect>.py` for a focused
 aspect, and `test__<topic>.py` for a cross-module concern. Tests under
