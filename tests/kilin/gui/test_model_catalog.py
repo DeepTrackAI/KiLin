@@ -11,6 +11,7 @@ check renders small chat templates written to a temporary cache.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,6 +26,10 @@ from kilin.gui.model_catalog import (
     thinking_switches,
 )
 from kilin.project import default_project_profile
+
+# Rendering chat templates needs jinja2, which comes with the model
+# packages; the core installation that CI tests does not include it.
+_HAS_JINJA2 = importlib.util.find_spec("jinja2") is not None
 
 
 class TestModelCatalog(unittest.TestCase):
@@ -97,6 +102,7 @@ _NO_SWITCH = _SWITCH.split("{% if enable_thinking")[0] + "{% endif %}"
 class TestThinkingModels(unittest.TestCase):
     """Say per model whether its own template reacts to enable_thinking."""
 
+    @unittest.skipUnless(_HAS_JINJA2, "jinja2 is not installed.")
     def test_switch_is_checked_and_unknown_models_are_left_out(self) -> None:
         with TemporaryDirectory() as folder:
             entries = []
@@ -145,6 +151,7 @@ class TestThinkingModels(unittest.TestCase):
                 thinking_switches(entries), thinking_switches(entries)
             )
 
+    @unittest.skipUnless(_HAS_JINJA2, "jinja2 is not installed.")
     def test_prompt_difference_does_not_verify_model_reasoning(self) -> None:
         """A template-only prompt difference is not a model load test."""
 
