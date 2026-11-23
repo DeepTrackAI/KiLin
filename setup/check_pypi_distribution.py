@@ -75,6 +75,9 @@ def verify_distributions(root: Path, dist: Path) -> None:
         raise AssertionError("pyproject must use generated PyPI README")
     expected = (root / "README.pypi.md").read_text(encoding="utf-8")
     original = (root / "README.md").read_bytes()
+    # Compare bytes as written: reading text would turn Windows CRLF
+    # into LF and no longer match the sdist copy.
+    generated = (root / "README.pypi.md").read_bytes()
     wheel = _one(sorted(dist.glob(f"kilin-{version}-*.whl")), "wheel")
     sdist = _one(sorted(dist.glob(f"kilin-{version}.tar.gz")), "sdist")
 
@@ -103,7 +106,7 @@ def verify_distributions(root: Path, dist: Path) -> None:
         members = [item for item in archive if item.isfile()]
         for name, content in (
             ("README.md", original),
-            ("README.pypi.md", expected.encode("utf-8")),
+            ("README.pypi.md", generated),
         ):
             matches = [
                 item for item in members
