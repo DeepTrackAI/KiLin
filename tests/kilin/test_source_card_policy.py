@@ -11,6 +11,7 @@ Temporary profiles and overrides exercise persistence without loading models.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -108,9 +109,13 @@ class TestSourceCardPolicy(unittest.TestCase):
             Path("Papers/Study.PDF"), Path("papers/paper.pdf"),
             Path("papers/Study.PDF"),
         ), policy, overrides)
-        self.assertEqual(set(selected), {
-            Path("papers/paper.pdf"), Path("papers/Study.PDF"),
-        })
+        expected = {Path("papers/paper.pdf"), Path("papers/Study.PDF")}
+        # Windows paths ignore case: "Papers/Study.PDF" and
+        # "papers/Study.PDF" name one file, so its disabled override
+        # applies to both.
+        if os.path.normcase("A") == os.path.normcase("a"):
+            expected = {Path("papers/paper.pdf")}
+        self.assertEqual(set(selected), expected)
         self.assertEqual(read_source_card_overrides(
             self.root / "missing"
         ), {})
