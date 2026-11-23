@@ -56,6 +56,13 @@ class TestAtomicTextWrites(unittest.TestCase):
         )
         self.assertEqual(self._temporary_files(), [])
 
+    def test_preserves_exact_newline_bytes(self) -> None:
+        """Write supplied LF and CRLF bytes without platform conversion."""
+
+        content = "one\ntwo\r\nthree\n"
+        atomic_write_text(self.path, content)
+        self.assertEqual(self.path.read_bytes(), content.encode("utf-8"))
+
     def test_preexisting_tmp_symlink_is_not_followed(self) -> None:
         """Leave a predictably named symlink and its target untouched."""
 
@@ -105,6 +112,13 @@ class TestAtomicTextWrites(unittest.TestCase):
         with self.assertRaises(OSError):
             atomic_write_text(path, "text")
         self.assertFalse(path.parent.exists())
+
+    def test_create_preserves_exact_newline_bytes(self) -> None:
+        """Publish the caller's UTF-8 bytes without CRLF conversion."""
+
+        content = "first\r\nsecond\n"
+        atomic_create_text(self.path, content)
+        self.assertEqual(self.path.read_bytes(), content.encode("utf-8"))
 
     def test_create_preserves_an_existing_destination(self) -> None:
         """Publish complete UTF-8 text once without replacing its owner."""

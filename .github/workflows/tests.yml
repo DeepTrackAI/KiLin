@@ -46,7 +46,9 @@ jobs:
         run: uv sync --locked --no-dev --python 3.12
       - name: Install pytest
         id: test-deps
-        run: uv pip install --python .venv "pytest>=8,<11"
+        run: >-
+          uv pip install --python .venv "pytest>=8,<11"
+          "jinja2==3.1.6" "tzdata==2026.4"
       - name: Run pytest
         run: uv run --no-sync python -m pytest -q
       - name: Run independent unittest discovery
@@ -80,6 +82,7 @@ jobs:
         run: >-
           python -m pip install --ignore-requires-python
           --only-binary=:all: -e . "pytest>=8,<11"
+          "jinja2==3.1.6" "tzdata==2026.4"
       - name: Run pytest
         id: pytest
         if: ${{ steps.install.outcome == 'success' }}
@@ -128,7 +131,9 @@ jobs:
       - name: Install locked GUI dependencies
         run: uv sync --locked --no-dev --extra gui --python 3.12
       - name: Install pytest
-        run: uv pip install --python .venv "pytest>=8,<11"
+        run: >-
+          uv pip install --python .venv "pytest>=8,<11"
+          "jinja2==3.1.6" "tzdata==2026.4"
       - name: Test Qt PDF adapter in a dedicated process
         run: >-
           uv run --no-sync python -m pytest -q
