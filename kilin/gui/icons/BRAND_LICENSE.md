@@ -8,7 +8,7 @@ mascot, logos, icons, and decorative brand artwork in `assets/brand/` and
 `kilin/gui/icons/`. The artwork was created for the KíLín project.
 
 **These brand assets are not licensed under Apache License 2.0.** The
-repository's [Apache 2.0 license](../../../LICENSE) applies to the
+repository's [Apache 2.0 license](https://github.com/DeepTrackAI/KiLin/blob/main/LICENSE) applies to the
 software; it does not grant a general right to use the KíLín identity
 for another project, product, or service. This distinction does not
 change the rights granted for the software itself.

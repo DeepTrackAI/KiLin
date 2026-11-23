@@ -96,6 +96,11 @@ class TestSidebarLogoFrontend(unittest.TestCase):
             self.assertNotIn("## Attribution history", document)
         terms = (icons / "BRAND_LICENSE.md").read_text(encoding="utf-8")
         self.assertIn("not licensed under Apache License 2.0", terms)
+        self.assertIn(
+            "https://github.com/DeepTrackAI/KiLin/blob/main/LICENSE",
+            terms,
+        )
+        self.assertNotIn("](../../../LICENSE)", terms)
         self.assertIn("unmodified KíLín release", terms)
         self.assertIn("modified fork", terms)
         project = (_ROOT / "pyproject.toml").read_text(encoding="utf-8")
