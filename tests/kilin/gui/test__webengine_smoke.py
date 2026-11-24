@@ -2,7 +2,8 @@
 
 Run with ``KILIN_RUN_NATIVE_GUI_TESTS=1`` and PySide6 WebEngine installed.
 The child owns its QApplication, so this test cannot interfere with the
-native PDF tests running in the parent process.
+native PDF tests running in the parent process. Check the conversation
+layout at several widths, as well as page events and native source drops.
 
 """
 
@@ -22,11 +23,72 @@ from tempfile import TemporaryDirectory
 import unittest
 
 
+# Use the production renderers and layout rather than a synthetic stylesheet.
+_CONVERSATION_WIDTH_CHECK = r"""
+(() => {
+  const longName = "ProteinFoldingDynamics".repeat(9) + ".pdf";
+  const width = (element) => {
+    const panel = conversationScroll.getBoundingClientRect();
+    const box = element.getBoundingClientRect();
+    return {
+      client: element.clientWidth,
+      scroll: element.scrollWidth,
+      overflow: getComputedStyle(element).overflowX,
+      inside: box.left >= panel.left - 1 && box.right <= panel.right + 1,
+    };
+  };
+  const result = {};
+  showConversations(true);
+  showWorkspace(true);
+  projectPresentation = null;
+  sourceWelcome = ["Explore your sources"];
+  sourceQuestions = [
+    {intent: "test", question: `Explain ${longName}`},
+  ];
+  byId("conversation-name").classList.add("hidden");
+  renderConversationEmpty();
+  result.suggestion = width(conversationScroll);
+  result.suggestionButton = width(conversation.querySelector("button"));
+  sourceWelcome = [longName];
+  sourceQuestions = [];
+  renderConversationEmpty();
+  result.welcome = width(conversationScroll);
+  result.welcomeHeading = width(conversation.querySelector("h2"));
+  conversation.replaceChildren();
+  byId("conversation-name").classList.remove("hidden");
+  byId("conversation-name").textContent = longName;
+  result.title = width(conversationScroll);
+  result.titleHeading = width(byId("conversation-name"));
+  byId("conversation-name").textContent = "Test";
+  const code = "x".repeat(240);
+  const headers = Array(12).fill("Column header").join(" | ");
+  const dividers = Array(12).fill("---").join(" | ");
+  const cells = Array(12).fill("Value").join(" | ");
+  const formula = Array(100).fill("x^2").join("+");
+  const answer = ["```python", code, "```", "", `| ${headers} |`,
+    `| ${dividers} |`, `| ${cells} |`, "", `$$ ${formula} $$`].join("\n");
+  addTurn({question: longName, answer, evidence: [], parameters: {}});
+  result.question = width(conversationScroll);
+  result.questionBubble = width(
+    conversation.querySelector(".user-message"));
+  for (const [name, selector] of [["code", "pre"],
+    ["table", ".answer-table"], ["math", ".answer-math.display"]]) {
+    const element = conversation.querySelector(selector);
+    result[name] = width(element);
+    element.scrollLeft = 40;
+    result[name].moves = element.scrollLeft > 0;
+  }
+  result.verticalOverflow = getComputedStyle(conversationScroll).overflowY;
+  return JSON.stringify(result);
+})()
+"""
+
+
 class TestNativeGUIPage(unittest.TestCase):
     """Run an optional end-to-end check outside the unittest process."""
 
     def test_webengine_loads_page_and_accepts_a_source_drop(self) -> None:
-        """Check page events and native drops without touching real data."""
+        """Check page events, native drops, and conversation layout."""
 
         if os.environ.get("KILIN_RUN_NATIVE_GUI_TESTS") != "1":
             self.skipTest("Enable the optional native Qt smoke test")
@@ -213,9 +275,60 @@ def _native_smoke(directory: Path) -> None:
             for command in commands
         ):
             raise AssertionError(f"Missing source command: {commands!r}")
+
+        # Check the complete chat layout at ordinary and narrow widths.
+        # Each scenario uses a fresh rendered conversation.
+        for window_width in (1180, 940, 760):
+            view.resize(window_width, 820)
+            pause(150)
+            measured = javascript(_CONVERSATION_WIDTH_CHECK)
+            if not isinstance(measured, str):
+                raise AssertionError("Conversation layout did not render")
+            _assert_conversation_width(json.loads(measured), window_width)
     finally:
         view.close()
         app.quit()
+
+
+def _assert_conversation_width(metrics: dict, window_width: int) -> None:
+    """Require contained chat text and independently scrolling blocks.
+
+    Parameters
+    ----------
+    metrics: dict
+        Measurements from the rendered conversation and its child elements.
+    window_width: int
+        Requested window width, used in failure diagnostics.
+
+    """
+
+    for name in (
+        "suggestion", "suggestionButton", "welcome", "welcomeHeading",
+        "title", "titleHeading", "question", "questionBubble",
+    ):
+        box = metrics[name]
+        if (
+            box["client"] <= 0
+            or box["scroll"] > box["client"] + 1
+            or not box["inside"]
+        ):
+            raise AssertionError(
+                f"{window_width}px window: {name} overflows: {box!r}"
+            )
+    for name in ("suggestion", "welcome", "title", "question"):
+        if metrics[name]["overflow"] != "hidden":
+            raise AssertionError(f"Horizontal chat scrolling: {name}")
+    for name in ("code", "table", "math"):
+        box = metrics[name]
+        if (
+            not box["inside"] or box["overflow"] != "auto"
+            or box["scroll"] <= box["client"] or not box["moves"]
+        ):
+            raise AssertionError(
+                f"{window_width}px window: {name} cannot scroll: {box!r}"
+            )
+    if metrics["verticalOverflow"] != "auto":
+        raise AssertionError("Vertical conversation scrolling was lost")
 
 
 if __name__ == "__main__":
