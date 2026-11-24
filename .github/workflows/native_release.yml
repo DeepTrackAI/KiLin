@@ -1,0 +1,137 @@
+name: Publish native installers
+
+# Only a pushed version tag creates a release; branch and PR checks remain
+# in the reusable platform workflows. Tag builds are never path-filtered.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kilin-native-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Check version tag and release description
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Match tag to the version in pyproject.toml
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          python - <<'PYTHON'
+          import os
+          from pathlib import Path
+          import re
+          import tomllib
+
+          with Path("pyproject.toml").open("rb") as stream:
+              version = tomllib.load(stream)["project"]["version"]
+          if not isinstance(version, str) or not re.fullmatch(
+              r"[0-9]+\.[0-9]+\.[0-9]+(?:b[0-9]+|rc[0-9]+)?",
+              version,
+          ):
+              raise SystemExit(f"Unsupported release version: {version!r}")
+          if os.environ["RELEASE_TAG"] != f"v{version}":
+              raise SystemExit("Git tag does not match pyproject.toml")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f"version={version}", file=output)
+              print(
+                  "prerelease="
+                  + str(bool(re.search(r"(?:b|rc)[0-9]+$", version))).lower(),
+                  file=output,
+              )
+          PYTHON
+      - name: Verify tag-pinned PyPI description
+        run: python -m setup.generate_pypi_readme --check
+
+  macos:
+    name: Build and inspect macOS DMG
+    needs: validate
+    uses: ./.github/workflows/macos_app.yml
+    permissions:
+      contents: read
+
+  windows:
+    name: Build and test Windows installer
+    needs: validate
+    uses: ./.github/workflows/windows_app.yml
+    permissions:
+      contents: read
+
+  publish:
+    name: Attach validated installers to GitHub Release
+    needs: [validate, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download validated macOS disk image
+        uses: actions/download-artifact@v4
+        with:
+          name: kilin-macos-adhoc-development
+          path: release-assets/macos
+      - name: Download validated Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: kilin-windows-unsigned-development
+          path: release-assets/windows
+      - name: Prepare versioned assets and checksums
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          macos="release-assets/macos/KíLín.dmg"
+          windows="release-assets/windows/KiLin-Setup-${RELEASE_VERSION}.exe"
+          test -f "$macos" || { echo "macOS DMG missing" >&2; exit 1; }
+          test -f "$windows" || { echo "Windows EXE missing" >&2; exit 1; }
+          mv "$macos" "release-assets/KiLin-${RELEASE_VERSION}-macos-arm64.dmg"
+          mv "$windows" "release-assets/KiLin-Setup-${RELEASE_VERSION}.exe"
+          cd release-assets
+          sha256sum \
+            "KiLin-${RELEASE_VERSION}-macos-arm64.dmg" \
+            "KiLin-Setup-${RELEASE_VERSION}.exe" > SHA256SUMS.txt
+      - name: Create release or attach assets to an existing release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          IS_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          assets=(
+            "release-assets/KiLin-${RELEASE_VERSION}-macos-arm64.dmg"
+            "release-assets/KiLin-Setup-${RELEASE_VERSION}.exe"
+            "release-assets/SHA256SUMS.txt"
+          )
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            # Do not overwrite published assets: a rerun must be reviewed.
+            gh release upload "$RELEASE_TAG" "${assets[@]}"
+          else
+            flags=(--verify-tag --generate-notes --title "KíLín $RELEASE_TAG")
+            if [[ "$IS_PRERELEASE" == "true" ]]; then
+              flags+=(--prerelease --latest=false)
+            fi
+            notes="Experimental installers: macOS is not notarized; "
+            notes+="Windows is unsigned. See [installer guidance]("
+            notes+="https://github.com/${GH_REPO}/blob/${RELEASE_TAG}/"
+            notes+="docs/release.md) and verify SHA256SUMS.txt."
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              "${flags[@]}" --notes "$notes"
+          fi

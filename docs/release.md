@@ -8,13 +8,14 @@ launch, it downloads Python 3.12 and installs KíLín's dependencies.
 Model downloads are separate, user-initiated operations. The runtime
 and project data are not bundled into the disk image.
 
-**The `0.1.0b1` Python package is prepared for public GitHub and PyPI
-release.** Native macOS and Windows applications remain experimental
-unsigned development artifacts, not ready-to-use signed public installers.
-The macOS build uses ad-hoc signing only, not Developer ID signing, and is
-**not notarized**. No Apple Developer credentials are required. Gatekeeper
-may prevent ordinary opening of these builds. Public distribution of the
-source package does not remove these platform limitations.
+The Python package is distributed separately through PyPI. Each `v*`
+release tag also starts `.github/workflows/native_release.yml`, which
+builds the corresponding macOS DMG and Windows installer from that exact
+tag and attaches both to its GitHub Release after native CI checks pass.
+These **experimental** installers are not signed public-production builds:
+macOS uses ad-hoc signing rather than Developer ID signing and is **not
+notarized**; Windows is unsigned. Gatekeeper or SmartScreen may block
+ordinary installation. No signing credentials are used by this workflow.
 
 The release sequence is `0.1.0b1` → `0.1.0rc1` → `0.1.0`, with Git tags
 `v0.1.0b1`, `v0.1.0rc1`, and `v0.1.0`. Installer specs must match the
@@ -57,9 +58,9 @@ real GUI, or establish Gatekeeper acceptance.
 The `.github/workflows/macos_app.yml` workflow performs this native
 build and inspection on an Apple Silicon runner, plus the deterministic
 launcher, updater, backend-repair and builder tests. It uses no Apple
-Developer credentials and does not notarize or publish the artifacts.
-Automatic runs are path-filtered to relevant build, setup, GUI and
-packaging files; manual execution remains available. Because skipped
+Developer credentials and does not notarize or publish on its own.
+Branch/PR runs remain path-filtered; manual execution remains available.
+Tag releases reuse these checks without path filtering. Because skipped
 path-filtered jobs may remain pending as required checks, do not make
 this workflow an unconditional branch-protection requirement.
 A manually downloaded CI image is a **development artifact**, not a
@@ -167,10 +168,36 @@ separate decision like Apple notarization.
 The `.github/workflows/windows_app.yml` workflow builds the installer with
 a checkout wheel on a Windows runner, installs it silently, checks the
 runtime, the shortcut and the repair variables, and uninstalls it. Every
-run uploads the unsigned installer as a development artifact. Before
-sharing a build, also test on a real Windows PC: first install, update
-over an earlier version, an NVIDIA computer, a model download and a basic
-answer.
+run uploads the unsigned installer as an Actions artifact. Release-tag
+runs additionally use this validated artifact in the GitHub Release.
+Before relying on a build, also test on a real Windows PC: first install,
+update over an earlier version, an NVIDIA computer, a model download and
+a basic answer.
+
+## Automatic native release assets
+
+Push an annotated tag matching the version in `pyproject.toml`, such as
+`v0.1.0b1`, after validating the tagged commit. The tag workflow checks
+the generated PyPI README and calls both reusable platform workflows.
+It packages `KiLin-<version>-macos-arm64.dmg`,
+`KiLin-Setup-<version>.exe`, and `SHA256SUMS.txt` for that same tag.
+Beta (`b`) and release-candidate (`rc`) tags create GitHub prereleases;
+stable tags create ordinary releases. The publisher creates the GitHub
+Release only after **both** platform jobs succeed, or attaches to a
+pre-existing release without replacing any asset. Existing assets must
+be dealt with explicitly; reruns do not silently replace binaries.
+
+The publishing job alone receives `contents: write` permission. Native
+build/test jobs run read-only and upload temporary Actions artifacts.
+No PyPI publication, Apple Developer signing or Windows code signing is
+performed. If either native workflow fails, no new GitHub Release is
+created. Push tags using a maintainer credential rather than from another
+workflow using `GITHUB_TOKEN`, as GitHub does not trigger new workflows
+from most such token-authenticated events. If the release already exists
+as a draft, attaching assets does not automatically publish that draft.
+Published immutable releases cannot accept further assets; create the
+tag before publishing a release manually. See the
+[public prerelease procedure](development.md#public-prerelease-sequence).
 
 ## Native signing and notarization (deferred)
 

@@ -405,8 +405,10 @@ generated PyPI description and all tag-pinned documentation URLs.
    and tag it there. Create a GitHub Release marked **prerelease** for
    beta and RC versions, not for the stable version. Do not mark
    the stable `0.1.0` tag as prerelease. Keep tags pointing at the tested
-   commit; this repository does not currently publish automatically on
-   a tag push.
+   commit. A `v*` tag push triggers automatic native builds and creates
+   the GitHub Release after both platform checks pass; do not publish an
+   immutable release before its installers have been attached. See
+   [Automatic native release assets](release.md#automatic-native-release-assets).
 4. Check that the tag points to the exact source commit used for the
    built wheel and sdist, then publish both **reviewed** files to PyPI.
    Upload only after the GitHub release tag exists. Use the `kilin`
@@ -422,15 +424,14 @@ generated PyPI description and all tag-pinned documentation URLs.
    under a new version. TestPyPI is an optional rehearsal, not a
    substitute for checking the production release. Confirm the published
    README images, links, citation, license and exact version on PyPI.
-5. On a native Apple Silicon Mac, optionally build an **unsigned beta
-   development artifact** with `bash setup/macos/build_app.sh` after the
-   exact version is available on PyPI, or `--wheel` with a checkout build.
-   Its `.app` and `.dmg` are ad-hoc signed and not notarized; follow the
-   [macOS build guide](release.md). On Windows, build the experimental
-   unsigned installer with
-   `powershell -NoProfile -ExecutionPolicy Bypass -File setup\windows\build_installer.ps1`.
-   Both builders can embed local wheels for verification. Do not present
-   these artifacts as signed or independently security-validated binaries.
+5. Check that the tag-triggered native release workflow attached a
+   versioned macOS DMG, Windows EXE, and SHA-256 checksums. The builders
+   use wheels from the tagged checkout, independently of PyPI publication.
+   Both installers remain experimental, without Developer ID notarization
+   or Windows code signing; public release assets are not substitutes for
+   manual installation acceptance on real systems. For a local comparison,
+   build using `bash setup/macos/build_app.sh --wheel` or
+   `powershell -NoProfile -ExecutionPolicy Bypass -File setup\windows\build_installer.ps1 -Wheel`.
 
 The builder resolves `uv` symlinks (including Homebrew's), checks that
 its target is an Apple-silicon executable, and bundles the resolved binary.
