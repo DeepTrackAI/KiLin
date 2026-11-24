@@ -12,7 +12,7 @@
 <p align="center"><strong>Your AI. Your Knowledge. Your Control.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/DeepTrackAI/KiLin/releases">
+  <a href="https://github.com/DeepTrackAI/KiLin/releases/tag/v0.1.0b1">
     <img src="https://img.shields.io/badge/release-0.1.0b1%20beta-orange"
          alt="0.1.0b1 beta release"></a>
   <img src="https://img.shields.io/badge/Python-3.12-blue"
@@ -44,22 +44,20 @@ grounded brainstorming, creative brainstorming, and researcher-directed
 reviewing. Source-grounded responses reference project files for independent
 inspection.
 
-**Beta release:** This is the `0.1.0b1`, the first public prerelease.
-The planned sequence is `0.1.0b1` → `0.1.0rc1` → `0.1.0`. Features, public
-interfaces, and saved formats may change before `0.1.0`.
+**Version `0.1.0b1` (beta):** This is the first public prerelease.
+Backward compatibility of public interfaces and saved project
+formats is not guaranteed before the stable release.
 
 ## Installation
 
-The current package officially supports **Python 3.12**. The CI matrix
-also runs experimental compatibility tests for Python **3.13 and 3.14** on
-Linux, macOS, and Windows. Those jobs bypass the package's 3.12 requirement
-and do not yet establish official installation support for newer versions.
-The desktop installers use Python 3.12. Model execution is local, but
-installation and explicitly requested downloads require network access.
+**KíLín `0.1.0b1` requires Python 3.12.** Supported platforms are
+Apple Silicon macOS and Linux; Windows support is experimental. Language
+model inference runs locally. Package and model downloads require network
+access unless previously cached.
 
 ### Python package
 
-On macOS, Linux, or experimental Windows, use a Python 3.12 environment:
+In a Python 3.12 environment, install the GUI and its model backend:
 
 ```sh
 python -m pip install "kilin[app]==0.1.0b1"
@@ -71,27 +69,15 @@ appropriate to the platform (MLX on supported Apple Silicon Macs, PyTorch
 elsewhere). For the core without the GUI, use `kilin==0.1.0b1`; to select a
 backend explicitly, see the
 [model-management guide](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/docs/model_management.md).
-The beta version is installable from PyPI.
 
-### macOS desktop application (Apple Silicon, macOS 14+)
+### Standalone desktop installers
 
-The experimental `KíLín.dmg`, when provided as a
-[GitHub release asset](https://github.com/DeepTrackAI/KiLin/releases),
-contains a launcher that installs Python 3.12 and dependencies on first use.
-Current builds are signed ad hoc, **not** with an Apple Developer ID, and
-are **not notarized**. macOS may block them. Only use an artifact whose
-origin you have verified; do not disable Gatekeeper or remove quarantine as
-a general installation procedure. See the
-[macOS release guide](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/docs/release.md).
-
-### Windows desktop installer (64-bit Windows 10 or 11)
-
-The experimental `KiLin-Setup-<version>.exe`, when available, installs to
-the current user's account without administrator privileges. It downloads
-Python 3.12 and dependencies (including a suitable PyTorch build). The
-installer is **unsigned**, so Windows SmartScreen may warn. Follow the
-[Windows installer guide](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/docs/release.md#windows-installer)
-and do not run an unverified executable.
+KíLín `0.1.0b1` is distributed as a Python package, including the GUI.
+Standalone macOS DMG and Windows EXE installers are **not public
+release artifacts** for this beta. The repository contains native
+builders for development and testing; their outputs are not
+Developer ID signed or notarized on macOS, and are unsigned on Windows.
+See the [native build guide](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/docs/release.md) for details.
 
 ## Getting started
 
@@ -99,13 +85,11 @@ After installation, open `kilin-gui`, select models and a project workspace,
 create a project of the appropriate type, and add source files. Ask a
 question, inspect the retrieved evidence, and save useful conversations.
 
-The desktop beta includes a **local invitation-passkey prompt** on first
-launch for each user account. After successful activation, the GUI remembers
-that user. Contact the project maintainers for a beta passkey. This is a
-client-side access prompt, **not a security boundary or access restriction
-on the open-source Python API**. See the
-[GUI guide](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/kilin/gui/README.md)
-for further details.
+The GUI requires a **beta invitation passkey** on first launch for each
+user account. Contact the project maintainers to obtain one. This is a
+local client-side check, not a security boundary; the open-source
+Python API does not require a passkey. See the
+[GUI guide](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/kilin/gui/README.md) for details.
 
 To run KíLín from a source checkout, on macOS or Linux:
 
@@ -183,9 +167,8 @@ Contributions and issue reports can be filed at
 
 If KíLín contributes to your research, please cite the **specific version**
 used. The [CITATION.cff](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/CITATION.cff)
-file provides GitHub-compatible software citation metadata for Io̍k-uí
-Tiunn, Joana B. Pereira, Carlo Manzo, and Giovanni Volpe. A DOI will be
-included only if one is assigned to an archived release.
+file provides version-specific software citation metadata for Io̍k-uí
+Tiunn, Joana B. Pereira, Carlo Manzo, and Giovanni Volpe.
 
 ## License and attribution
 
