@@ -531,7 +531,8 @@ def gold_evidence_indices(
     for spec in gold_citations:
         gold_path, gold_cell, gold_start, gold_end = _parse_gold_citation(spec)
         for item in evidence:
-            item_path = str(item.path)
+            # Gold citations use forward slashes on every system.
+            item_path = Path(item.path).as_posix()
             if not (
                 gold_path == item_path
                 or gold_path.endswith(item_path)
