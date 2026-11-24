@@ -70,14 +70,21 @@ elsewhere). For the core without the GUI, use `kilin==0.1.0b1`; to select a
 backend explicitly, see the
 [model-management guide](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/docs/model_management.md).
 
-### Standalone desktop installers
+### Experimental desktop installers
 
-KíLín `0.1.0b1` is distributed as a Python package, including the GUI.
-Standalone macOS DMG and Windows EXE installers are **not public
-release artifacts** for this beta. The repository contains native
-builders for development and testing; their outputs are not
-Developer ID signed or notarized on macOS, and are unsigned on Windows.
-See the [native build guide](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/docs/release.md) for details.
+The [v0.1.0b1 GitHub release](https://github.com/DeepTrackAI/KiLin/releases/tag/v0.1.0b1)
+includes two experimental desktop installers built from that version's
+source: `KiLin-0.1.0b1-macos-arm64.dmg` for Apple Silicon Macs (macOS 14+)
+and `KiLin-Setup-0.1.0b1.exe` for 64-bit Windows 10 or 11.
+
+The macOS launcher downloads Python 3.12 and dependencies on first launch;
+the Windows installer downloads them during setup. Model weights are
+obtained separately when requested. **Neither installer is a signed,
+notarized production distribution:** the macOS app is ad-hoc signed and
+not notarized, while the Windows EXE is unsigned. Gatekeeper or Windows
+SmartScreen may display security warnings or block installation. Verify
+the downloaded files against the release checksums and read the
+[native installer guidance](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/docs/release.md) before using them.
 
 ## Getting started
 
