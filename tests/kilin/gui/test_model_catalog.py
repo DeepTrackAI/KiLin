@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import tomllib
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -29,6 +30,16 @@ from kilin.project import default_project_profile
 
 class TestModelCatalog(unittest.TestCase):
     """Suggested choices must agree with KíLín's project defaults."""
+
+    def test_thinking_probe_has_declared_gui_dependencies(self) -> None:
+        """Keep template rendering available in both desktop extras."""
+
+        manifest = Path(__file__).resolve().parents[3] / "pyproject.toml"
+        with manifest.open("rb") as stream:
+            extras = tomllib.load(stream)["project"]["optional-dependencies"]
+        for name in ("gui", "app"):
+            with self.subTest(extra=name):
+                self.assertIn("jinja2==3.1.6", extras[name])
 
     @patch("kilin.gui.model_catalog.version")
     def test_backend_packages_are_checked_separately(

@@ -8,11 +8,22 @@ launch, it downloads Python 3.12 and installs KíLín's dependencies.
 Model downloads are separate, user-initiated operations. The runtime
 and project data are not bundled into the disk image.
 
-**The current application is for development and trusted internal tests.**
-The build uses ad-hoc signing only, not Developer ID signing,
-and it is **not notarized**. No Apple Developer credentials are required.
-macOS Gatekeeper may prevent ordinary opening of these builds. We do not
-claim that they are suitable for frictionless public distribution.
+The Python package is distributed separately through PyPI. Each `v*`
+release tag also starts `.github/workflows/native_release.yml`, which
+builds the corresponding macOS DMG and Windows installer from that exact
+tag and attaches both to its GitHub Release after native CI checks pass.
+These **experimental** installers are not signed public-production builds:
+macOS uses ad-hoc signing rather than Developer ID signing and is **not
+notarized**; Windows is unsigned. Gatekeeper or SmartScreen may block
+ordinary installation. No signing credentials are used by this workflow.
+
+The release sequence is `0.1.0b1` → `0.1.0rc1` → `0.1.0`, with Git tags
+`v0.1.0b1`, `v0.1.0rc1`, and `v0.1.0`. Installer specs must match the
+exact PyPI version. On macOS, `CFBundleShortVersionString` uses the numeric
+base (`0.1.0` for all three), while `CFBundleVersion` distinguishes beta,
+RC, and stable builds using numeric release stages: `0.1.1001`, `0.1.2001`,
+and `0.1.3000`, respectively. Later patch numbers occupy higher ranges.
+On Windows, update comparisons use the semantic order beta < RC < stable.
 
 To build from the published PyPI version or from a checkout wheel:
 
@@ -47,9 +58,9 @@ real GUI, or establish Gatekeeper acceptance.
 The `.github/workflows/macos_app.yml` workflow performs this native
 build and inspection on an Apple Silicon runner, plus the deterministic
 launcher, updater, backend-repair and builder tests. It uses no Apple
-Developer credentials and does not notarize or publish the artifacts.
-Automatic runs are path-filtered to relevant build, setup, GUI and
-packaging files; manual execution remains available. Because skipped
+Developer credentials and does not notarize or publish on its own.
+Branch/PR runs remain path-filtered; manual execution remains available.
+Tag releases reuse these checks without path filtering. Because skipped
 path-filtered jobs may remain pending as required checks, do not make
 this workflow an unconditional branch-protection requirement.
 A manually downloaded CI image is a **development artifact**, not a
@@ -59,14 +70,18 @@ validated public release.
 
 Test a locally built DMG on a real Apple Silicon Mac, preferably from a
 fresh user account. macOS may block the app because it is not Developer
-ID signed or notarized. If the source is trusted, inspect the warning
-and use the system-provided option in System Settings, Privacy &
-Security, to allow that particular app. Never advise disabling
-Gatekeeper or removing quarantine indiscriminately.
+ID signed or notarized. If the source is trusted, open the app once,
+close the warning, then click **Open Anyway** for KíLín in **System
+Settings → Privacy & Security** and confirm; this allows only that app.
+Never advise disabling Gatekeeper or removing quarantine
+indiscriminately. The Windows equivalent, **More info → Run anyway**, is
+described under [Windows installer](#windows-installer).
 
-Before sharing an invitation release, confirm that its desktop passkey
-has been tested on a fresh user account and is communicated to invited
-testers through a separate channel.
+The public beta still includes the desktop's invitation-passkey prompt.
+Before distributing a native build, confirm its behavior on a fresh user
+account and communicate passkeys separately to the intended testers.
+The prompt is local to the client; it is not an access restriction for
+public Python source code or a security boundary.
 
 Before sharing with trusted testers:
 
@@ -155,12 +170,38 @@ separate decision like Apple notarization.
 The `.github/workflows/windows_app.yml` workflow builds the installer with
 a checkout wheel on a Windows runner, installs it silently, checks the
 runtime, the shortcut and the repair variables, and uninstalls it. Every
-run uploads the unsigned installer as a development artifact. Before
-sharing a build, also test on a real Windows PC: first install, update
-over an earlier version, an NVIDIA computer, a model download and a basic
-answer.
+run uploads the unsigned installer as an Actions artifact. Release-tag
+runs additionally use this validated artifact in the GitHub Release.
+Before relying on a build, also test on a real Windows PC: first install,
+update over an earlier version, an NVIDIA computer, a model download and
+a basic answer.
 
-## Deferred public distribution
+## Automatic native release assets
+
+Push an annotated tag matching the version in `pyproject.toml`, such as
+`v0.1.0b1`, after validating the tagged commit. The tag workflow checks
+the generated PyPI README and calls both reusable platform workflows.
+It packages `KiLin-<version>-macos-arm64.dmg`,
+`KiLin-Setup-<version>.exe`, and `SHA256SUMS.txt` for that same tag.
+Beta (`b`) and release-candidate (`rc`) tags create GitHub prereleases;
+stable tags create ordinary releases. The publisher creates the GitHub
+Release only after **both** platform jobs succeed, or attaches to a
+pre-existing release without replacing any asset. Existing assets must
+be dealt with explicitly; reruns do not silently replace binaries.
+
+The publishing job alone receives `contents: write` permission. Native
+build/test jobs run read-only and upload temporary Actions artifacts.
+No PyPI publication, Apple Developer signing or Windows code signing is
+performed. If either native workflow fails, no new GitHub Release is
+created. Push tags using a maintainer credential rather than from another
+workflow using `GITHUB_TOKEN`, as GitHub does not trigger new workflows
+from most such token-authenticated events. If the release already exists
+as a draft, attaching assets does not automatically publish that draft.
+Published immutable releases cannot accept further assets; create the
+tag before publishing a release manually. See the
+[public prerelease procedure](development.md#public-prerelease-sequence).
+
+## Native signing and notarization (deferred)
 
 We are deliberately **not implementing notarization** or a credentialed
 Developer ID release process. Public distribution with the usual
@@ -169,7 +210,17 @@ Apple Developer Program account. No developer credentials or
 notarization commands are needed for the documented build and
 verification workflow.
 
+Before publishing a source/PyPI release, validate the generated
+`README.pypi.md` against `README.md` and `pyproject.toml`. The repository
+README uses relative paths; the PyPI version must link to the same
+immutable release tag, including raw logo images. Validate the exact
+tagged source and artwork rights before upload. Follow the
+[README publication contract](readme_publication.md) and the
+[release checklist](development.md#public-prerelease-sequence).
+
+
 ## Related
 
-[Development](development.md), [GUI architecture](gui_architecture.md),
+[Development](development.md), [README publication](readme_publication.md),
+[GUI architecture](gui_architecture.md),
 [Configuration](configuration.md), [Security](security.md).

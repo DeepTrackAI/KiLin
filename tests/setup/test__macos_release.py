@@ -10,6 +10,7 @@ pull-request automation does not depend on signing credentials.
 # pylint: disable=C0116:missing-function-docstring
 # pylint: disable=C0103:invalid-name
 
+import os
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -26,6 +27,7 @@ class TestMacOSRelease(unittest.TestCase):
 
     """
 
+    @unittest.skipIf(os.name == "nt", "macOS shell test requires POSIX")
     def test_native_checker_requires_existing_artifacts(self) -> None:
         """Fail before invoking macOS tools when no .app/.dmg exists.
 
@@ -48,6 +50,7 @@ class TestMacOSRelease(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Missing macOS distribution", result.stderr)
 
+    @unittest.skipIf(os.name == "nt", "macOS shell test requires POSIX")
     def test_native_checker_rejects_unknown_options(self) -> None:
         """Reject unsupported public-release validation modes.
 

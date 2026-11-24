@@ -491,7 +491,7 @@ class TestRAGSourcePreparation(unittest.TestCase):
         self.assertEqual(len(embedding.calls), 1)
         self.assertEqual(len(embedding.calls[0]), 2)
         self.assertEqual({
-            str(item.path): item.text for item in chunks
+            item.path.as_posix(): item.text for item in chunks
         }["external/analysis.py"], "def evaluate():\n    return 20\n")
         self.assertIn(
             "return 10", next(

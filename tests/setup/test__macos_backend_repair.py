@@ -29,6 +29,7 @@ _LAUNCHER = (
 )
 
 
+@unittest.skipIf(os.name == "nt", "macOS launcher tests require POSIX")
 class TestMacOSBackendRepair(unittest.TestCase):
     """Pass the versioned install source and bundled uv to the GUI."""
 

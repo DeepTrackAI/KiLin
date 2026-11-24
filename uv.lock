@@ -1008,7 +1008,7 @@ wheels = [
 
 [[package]]
 name = "kilin"
-version = "0.1.0"
+version = "0.1.0b1"
 source = { editable = "." }
 dependencies = [
     { name = "huggingface-hub" },
@@ -1021,6 +1021,7 @@ dependencies = [
 
 [package.optional-dependencies]
 app = [
+    { name = "jinja2" },
     { name = "mlx-embeddings", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
     { name = "pyside6" },
@@ -1030,8 +1031,10 @@ app = [
 bench = [
     { name = "datasets" },
     { name = "pytrec-eval" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
 gui = [
+    { name = "jinja2" },
     { name = "pyside6" },
 ]
 mlx = [
@@ -1055,6 +1058,8 @@ dev = [
 requires-dist = [
     { name = "datasets", marker = "extra == 'bench'", specifier = "==5.0.1" },
     { name = "huggingface-hub", specifier = "==1.29.0" },
+    { name = "jinja2", marker = "extra == 'app'", specifier = "==3.1.6" },
+    { name = "jinja2", marker = "extra == 'gui'", specifier = "==3.1.6" },
     { name = "mlx-embeddings", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'app'", specifier = "==0.0.5" },
     { name = "mlx-embeddings", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = "==0.0.5" },
     { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'app'", specifier = "==0.31.3" },
@@ -1067,6 +1072,7 @@ requires-dist = [
     { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.8,<7" },
     { name = "python-docx", specifier = "==1.2.0" },
     { name = "pytrec-eval", marker = "extra == 'bench'", specifier = "==0.5" },
+    { name = "tzdata", marker = "sys_platform == 'win32' and extra == 'bench'", specifier = "==2026.4" },
     { name = "torch", marker = "(platform_machine != 'arm64' and extra == 'app') or (sys_platform != 'darwin' and extra == 'app')", specifier = "==2.14.0" },
     { name = "torch", marker = "extra == 'torch'", specifier = "==2.14.0" },
     { name = "transformers", marker = "(platform_machine != 'arm64' and extra == 'app') or (sys_platform != 'darwin' and extra == 'app')", specifier = "==5.16.1" },

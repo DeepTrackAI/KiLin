@@ -444,6 +444,7 @@ button:disabled { opacity: .62; cursor: default; }
 
 .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .chat-heading { justify-content: space-between; align-items: flex-start; padding: 24px 0 12px; }
+.chat-heading > div { min-width: 0; overflow-wrap: anywhere; }
 .chat-heading h1 { margin: 3px 0; font-size: 26px; }
 /* In a chat, Settings belongs to the project row and progress shows by the
    composer, so the top bar keeps only the chat. */
@@ -452,14 +453,15 @@ button:disabled { opacity: .62; cursor: default; }
 .chat-heading h1[contenteditable="true"]:focus, .conversation-name[contenteditable="true"]:focus { box-shadow: 0 0 0 3px rgb(82 111 99 / 13%); }
 .chat-heading .hint { margin: 0; }
 .conversation-name { margin: 0 0 6px; color: var(--control); font-size: 14px; font-weight: 600; }
-.conversation-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+/* Only the individual wide answer blocks scroll horizontally. */
+.conversation-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; }
 .conversation { padding: 10px 0 22px; }
-.conversation-empty { min-height: max(360px, calc(100vh - 310px)); display: grid; place-content: center; gap: 24px; padding-bottom: 40px; text-align: center; }
-.conversation-empty h2 { max-width: 620px; margin: 0; justify-self: center; color: var(--text); font-size: clamp(26px, 4vw, 42px); font-weight: 450; letter-spacing: -.03em; }
+.conversation-empty { min-height: max(360px, calc(100vh - 310px)); display: grid; grid-template-columns: minmax(0, 1fr); place-content: center; gap: 24px; padding-bottom: 40px; text-align: center; }
+.conversation-empty h2 { max-width: min(620px, 100%); margin: 0; justify-self: center; overflow-wrap: anywhere; color: var(--text); font-size: clamp(26px, 4vw, 42px); font-weight: 450; letter-spacing: -.03em; }
 .prompt-suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
-.prompt-suggestions button { min-height: 34px; border: 1px solid var(--line); color: var(--muted); background: var(--surface-soft); font-size: 12px; font-weight: 500; }
+.prompt-suggestions button { min-width: 0; max-width: 100%; min-height: 34px; overflow-wrap: anywhere; border: 1px solid var(--line); color: var(--muted); background: var(--surface-soft); font-size: 12px; font-weight: 500; }
 .turn { margin: 0 0 32px; }
-.user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 12px 16px; border-radius: 15px; color: var(--user-bubble-text); background: var(--user-bubble); white-space: pre-wrap; }
+.user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 12px 16px; border-radius: 15px; color: var(--user-bubble-text); background: var(--user-bubble); white-space: pre-wrap; overflow-wrap: anywhere; }
 .answer-message { margin: 20px 0 12px; line-height: 1.65; white-space: pre-wrap; cursor: text; }
 .answer-phase { color: var(--control); cursor: default; }
 .answer-phase-label { color: var(--control); }

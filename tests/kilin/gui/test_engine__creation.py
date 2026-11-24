@@ -63,6 +63,9 @@ class TestEngineCreation(unittest.TestCase):
                 path.read_bytes() if path.is_file() else None,
             )
             for path in [root, *root.rglob("*")]
+            # A Windows process may hold these advisory lock files with
+            # exclusive access. The test protects persisted user data.
+            if not (path.is_file() and path.suffix == ".lock")
         }
 
     def test_explicit_conflict_leaves_session_and_trace_bytes_unchanged(self):

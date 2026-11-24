@@ -28,8 +28,12 @@ jobs:
         with:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@v6
+      - name: Check generated PyPI README is current
+        run: python -m setup.generate_pypi_readme --check
       - name: Build wheel and source distribution
         run: uv build
+      - name: Verify PyPI metadata in wheel and source archive
+        run: python -m setup.check_pypi_distribution
       - name: Install wheel in a separate environment
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/kilin-wheel-env"

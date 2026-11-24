@@ -69,7 +69,7 @@ class TestSourceChanges(unittest.TestCase):
 
         """
 
-        path.write_text(content, encoding="utf-8")
+        path.write_bytes(content.encode("utf-8"))
         os.utime(path, ns=(second * 10**9, second * 10**9))
         return path
 

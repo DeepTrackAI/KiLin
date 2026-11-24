@@ -1,14 +1,14 @@
 [project]
 name = "kilin"
-version = "0.1.0"
+version = "0.1.0b1"
 authors = [
     {name = "Io̍k-uí Tiunn"},
     {name = "Joana B. Pereira"},
     {name = "Carlo Manzo"},
     {name = "Giovanni Volpe"},
 ]
-description = "Local, provider-independent question-answering application"
-readme = "README.md"
+description = "Private, extensible local AI assistant for research and knowledge work"
+readme = "README.pypi.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
@@ -43,12 +43,14 @@ torch = [
 ]
 gui = [
     "PySide6>=6.8,<7",
+    "jinja2==3.1.6",
 ]
 # Everything the desktop app needs on this computer: Qt plus the backend
 # for the platform, MLX on Apple-silicon Macs and PyTorch elsewhere. This
 # is what `pip install "kilin[app]"` and the macOS app install.
 app = [
     "PySide6>=6.8,<7",
+    "jinja2==3.1.6",
     "mlx-embeddings==0.0.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "mlx-lm==0.31.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "torch==2.14.0; sys_platform != 'darwin' or platform_machine != 'arm64'",
@@ -58,11 +60,12 @@ app = [
 bench = [
     "datasets==5.0.1",
     "pytrec_eval==0.5",
+    "tzdata==2026.4; sys_platform == 'win32'",
 ]
 
 
 [project.urls]
-Repository = "https://github.com/giovannivolpe/KiLin"
+Repository = "https://github.com/DeepTrackAI/KiLin"
 
 [project.scripts]
 kilin = "kilin.cli:main"
@@ -123,6 +126,7 @@ include = ["kilin*"]
     "icons/*.png",
     "icons/*.svg",
     "icons/README.md",
+    "icons/BRAND_LICENSE.md",
 ]
 
 # Development tools are installed by `uv sync` but are not runtime dependencies.

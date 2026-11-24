@@ -42,6 +42,35 @@ if [ -z "$version" ]; then
     exit 1
 fi
 
+# Apple bundle version keys must contain only numeric components. The
+# Python release identifier remains unchanged in the bundled install spec.
+# Reserve 1000-1999 for betas, 2000-2999 for release candidates, and
+# 3000 for stable. Patch releases occupy successive 10000-wide ranges.
+if [[ ! "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(b([0-9]+)|rc([0-9]+))?$ ]]; then
+    echo "Unsupported KíLín release version: $version" >&2
+    exit 1
+fi
+major=${BASH_REMATCH[1]}
+minor=${BASH_REMATCH[2]}
+patch=${BASH_REMATCH[3]}
+beta_number=${BASH_REMATCH[5]:-}
+rc_number=${BASH_REMATCH[6]:-}
+release_ordinal=3000
+if [ -n "$beta_number" ] || [ -n "$rc_number" ]; then
+    number=${beta_number:-$rc_number}
+    if [ "${#number}" -gt 3 ] || [ "$((10#$number))" -ge 1000 ]; then
+        echo "Invalid KíLín version (prerelease number >= 1000): $version" >&2
+        exit 1
+    fi
+    if [ -n "$beta_number" ]; then
+        release_ordinal=$((1000 + 10#$number))
+    else
+        release_ordinal=$((2000 + 10#$number))
+    fi
+fi
+bundle_short="$((10#$major)).$((10#$minor)).$((10#$patch))"
+bundle_build="$((10#$major)).$((10#$minor)).$((10#$patch * 10000 + release_ordinal))"
+
 dist="$project_dir/dist"
 final_app="$dist/KíLín.app"
 final_dmg="$dist/KíLín.dmg"
@@ -138,8 +167,8 @@ cat >"$app/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key><string>KíLín</string>
     <key>CFBundleDisplayName</key><string>KíLín</string>
     <key>CFBundleIdentifier</key><string>$bundle_id</string>
-    <key>CFBundleVersion</key><string>$version</string>
-    <key>CFBundleShortVersionString</key><string>$version</string>
+    <key>CFBundleVersion</key><string>$bundle_build</string>
+    <key>CFBundleShortVersionString</key><string>$bundle_short</string>
     <key>CFBundleExecutable</key><string>KiLin</string>
     <key>CFBundleIconFile</key><string>KiLin</string>
     <key>CFBundlePackageType</key><string>APPL</string>

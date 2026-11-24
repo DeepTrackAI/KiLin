@@ -98,11 +98,16 @@ class TestGenericSourceCards(unittest.TestCase):
                                  (_chunk(),))
 
     def test_invalid_paths_are_rejected(self):
-        for value in (
+        invalid = [
             Path("."), Path("../outside.txt"), Path("a/../outside.txt"),
             Path("/absolute.txt"), Path("C:/outside.txt"),
-            Path("a\\bad.txt"),
-        ):
+        ]
+        # Windows reads a backslash as a folder separator, so there
+        # this is the valid path a/bad.txt and cannot be tested.
+        backslash = Path(r"a\bad.txt")
+        if len(backslash.parts) == 1:
+            invalid.append(backslash)
+        for value in invalid:
             with self.subTest(path=value):
                 with self.assertRaisesRegex(ValueError, "relative"):
                     validate_source_card(

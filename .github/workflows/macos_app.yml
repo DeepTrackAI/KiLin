@@ -22,12 +22,13 @@ on:
       - "uv.lock"
       - "MANIFEST.in"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: kilin-macos-app-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -54,8 +55,8 @@ jobs:
         run: bash setup/macos/build_app.sh --wheel
       - name: Inspect actual application, signing and disk image
         run: bash tests/setup/check_macos_app.sh
-      - name: Upload ad-hoc signed development disk image
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Upload validated ad-hoc signed disk image
+        if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
           name: kilin-macos-adhoc-development

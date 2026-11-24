@@ -227,16 +227,16 @@ class TestGUIPreferences(unittest.TestCase):
 
         check = preferences.validate_workspace_folder
         self.assertEqual(check(""), "")
-        self.assertEqual(check("  /Users/me/Projects "), "/Users/me/Projects")
+        folder = str(self.root / "Projects")
+        self.assertEqual(check(f"  {folder} "), folder)
         with self.assertRaisesRegex(ValueError, "absolute"):
             check("Projects")
         with self.assertRaises(TypeError):
             check(None)
         self.assertEqual(preferences.app_defaults()["workspace_folder"], "")
-        preferences.write_defaults({"workspace_folder": "/Users/me/Projects"})
+        preferences.write_defaults({"workspace_folder": folder})
         self.assertEqual(
-            preferences.app_defaults()["workspace_folder"],
-            "/Users/me/Projects",
+            preferences.app_defaults()["workspace_folder"], folder
         )
         # Use default removes the saved choice from the file.
         preferences.write_defaults({"workspace_folder": ""})

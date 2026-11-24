@@ -177,7 +177,9 @@ class TestRun(_Project):
 
     def test_report(self) -> None:
         result, context = self._run()
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertEqual(result.summary["report"],
                          "outputs/lab_overview_project_report.md")
         self.assertTrue(report.startswith(
@@ -267,7 +269,9 @@ What the documents report.
                 result, _ = self._run(
                     model=model, repair_attempts=0
                 )
-                saved = (self.root / result.summary["report"]).read_text()
+                saved = (
+                    self.root / result.summary["report"]
+                ).read_text(encoding="utf-8")
                 self.assertIs(result.summary["valid"], complete)
                 self.assertEqual(
                     result.summary["status"],
@@ -318,7 +322,9 @@ Do: name the model.
                 result, _ = self._run(
                     model=model, repair_attempts=0,
                 )
-                saved = (self.root / result.summary["report"]).read_text()
+                saved = (
+                    self.root / result.summary["report"]
+                ).read_text(encoding="utf-8")
                 self.assertIs(result.summary["valid"], complete)
                 self.assertEqual(
                     result.summary["status"],
@@ -408,7 +414,9 @@ Compare the documents, with citations.
                     raise AssertionError(prompt)
 
                 result, _ = self._run(model=model, repair_attempts=0)
-                saved = (self.root / result.summary["report"]).read_text()
+                saved = (
+                    self.root / result.summary["report"]
+                ).read_text(encoding="utf-8")
                 self.assertIs(result.summary["valid"], complete)
                 self.assertEqual(
                     result.summary["status"],
@@ -436,7 +444,9 @@ Compare the documents, with citations.
             "kilin.tools.project_summary._configuration.GROUP_TOKENS", 1
         ):
             result, context = self._run(model=model)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertEqual(result.summary["failed"], [2])
         self.assertFalse(result.summary["valid"])
         self.assertEqual(result.summary["status"], "partial")
@@ -455,7 +465,9 @@ Compare the documents, with citations.
                 return "Networks are studied [1, 3], and plants [2]."
             return _model(system, prompt, tokens)
         result, context = self._run(model=model)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertIn("## Themes\n\nNetworks are studied [1, 3], and "
                       "plants [2].", report)
         fix = next(c.args[1] for c in context.ask_model.call_args_list
@@ -470,7 +482,9 @@ Compare the documents, with citations.
                 return "Document 1 studies networks [n1] and plants [2]."
             return _model(system, prompt, tokens)
         result, _ = self._run(model=stubborn)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         # "Document 1" is written as a citation; the bad bracket removed.
         self.assertIn("## Themes\n\n[1] studies networks and plants [2].",
                       report)
@@ -499,7 +513,9 @@ Compare the documents, with citations.
                    if "has a problem" in c.args[1])
         self.assertIn("“and transformers classify cells” cites [2] "
                       "without a recognizable anchor", fix)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertIn("ResNet classifiers use private data [3].", report)
 
     def test_headline_and_coverage(self) -> None:
@@ -523,7 +539,9 @@ Compare the documents, with citations.
         fix = next(c.args[1] for c in context.ask_model.call_args_list
                    if "has a problem" in c.args[1])
         self.assertIn("leaves out [2], [3]", fix)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertIn("and methods reviewed [2].", report)
         # Still too long after asking: cut at a word, without a final
         # "and the".
@@ -554,7 +572,9 @@ Compare the documents, with citations.
         self.assertIn("[2] b.md.", themes)
         fix = next(p for p in prompts if "has a problem" in p)
         self.assertIn("leaves out [2]", fix)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertTrue(report.startswith("# Deep learning for nuclei\n"))
         self.assertIn("and methods reviewed [2].", report)
 
@@ -585,7 +605,9 @@ Compare the documents, with citations.
             return _model(system, prompt, tokens)
 
         result, _ = self._run(model=model)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertFalse(result.summary["valid"])
         self.assertEqual(result.summary["status"], "partial")
         self.assertNotIn("FraudData", report)
@@ -609,7 +631,9 @@ Compare the documents, with citations.
             return _model(system, prompt, tokens)
 
         result, _ = self._run(model=model)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertFalse(result.summary["valid"])
         self.assertNotIn("FraudNet", report)
         self.assertIn("entry's wording is not in the original source", report)
@@ -621,7 +645,9 @@ Compare the documents, with citations.
             return _model(system, prompt, tokens)
 
         result, _ = self._run(model=model)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertFalse(result.summary["valid"])
         self.assertIn("Value 999 cited as [1]", report)
         self.assertIn("**Check**", report)
@@ -638,7 +664,9 @@ Compare the documents, with citations.
             return _model(system, prompt, tokens)
 
         result, _ = self._run(model=model)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertFalse(result.summary["valid"])
         self.assertIn("without a recognizable anchor", report)
 
@@ -658,7 +686,9 @@ Compare the documents, with citations.
 
     def test_document_limit_disclosed_in_saved_report(self) -> None:
         result, context = self._run(max_documents=1)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertFalse(result.summary["valid"])
         self.assertEqual(result.summary["status"], "partial")
         self.assertEqual(result.summary["left_out"], 2)
@@ -680,7 +710,9 @@ Compare the documents, with citations.
             for i in range(13)
         )
         result, _ = self._run(max_documents=1)
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertEqual(result.summary["left_out"], 15)
         self.assertEqual(len(result.summary["coverage"]["omitted"]), 15)
         self.assertIn("and 5 more (all paths in result metadata)", report)

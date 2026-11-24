@@ -77,6 +77,7 @@ def atomic_write_text(path: Path, content: str) -> None:
     stream = NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
+        newline="\n",
         dir=path.parent,
         prefix=f".{path.name}.",
         suffix=".tmp",
@@ -118,7 +119,7 @@ def atomic_create_text(path: Path, content: str) -> None:
     """
 
     stream = NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent,
+        mode="w", encoding="utf-8", newline="\n", dir=path.parent,
         prefix=f".{path.name}.", suffix=".tmp", delete=False,
     )
     temporary = Path(stream.name)

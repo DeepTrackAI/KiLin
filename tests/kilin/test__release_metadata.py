@@ -1,9 +1,9 @@
 """Verify the version, authors, licence, and citation metadata.
 
-The tests compare the source manifest, installed distribution metadata,
-and the structured CFF citation. The version has one owner in
-``pyproject.toml``. Release author identities are independently asserted
-so an unintended coordinated metadata edit cannot silently remove one.
+The tests compare the source manifest, public version, lockfile, and
+structured CFF citation. Wheel installation tests separately verify the
+installed distribution metadata. This keeps source tests independent of
+an unrelated or stale KíLín installation in the current environment.
 
 """
 
@@ -11,7 +11,6 @@ so an unintended coordinated metadata edit cannot silently remove one.
 # pylint: disable=C0116:missing-function-docstring
 # pylint: disable=C0103:invalid-name
 
-from importlib import metadata
 from pathlib import Path
 import subprocess
 import sys
@@ -36,12 +35,14 @@ class TestReleaseMetadata(unittest.TestCase):
     """
 
     def test_distribution_version(self):
-        """Export the version declared by the installed distribution.
+        """Expose the checked-out version, not unrelated site metadata.
 
         """
         import kilin
 
-        self.assertEqual(kilin.__version__, metadata.version("kilin"))
+        with (_ROOT / "pyproject.toml").open("rb") as stream:
+            project = tomllib.load(stream)["project"]
+        self.assertEqual(kilin.__version__, project["version"])
         self.assertIn("__version__", kilin.__all__)
 
     def test_uninstalled_checkout_version(self):
@@ -71,19 +72,47 @@ class TestReleaseMetadata(unittest.TestCase):
             expected = tomllib.load(stream)["project"]["version"]
         self.assertEqual(result.stdout.strip(), expected)
 
+    def test_stale_distribution_version(self):
+        """Prefer source metadata over an obsolete installed KíLín.
+
+        """
+        code = (
+            "from importlib import metadata\n"
+            "original = metadata.version\n"
+            "def stale(name):\n"
+            "    if name == 'kilin':\n"
+            "        return '0.1.0'\n"
+            "    return original(name)\n"
+            "metadata.version = stale\n"
+            "import kilin\n"
+            "print(kilin.__version__)\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        with (_ROOT / "pyproject.toml").open("rb") as stream:
+            expected = tomllib.load(stream)["project"]["version"]
+        self.assertEqual(result.stdout.strip(), expected)
+
     def test_project_metadata(self):
-        """Expose the author order in installed package metadata.
+        """Validate source metadata without assuming a matching install.
+
+        Installed-wheel author/version checks are performed separately by
+        ``tests/setup/check_installed_wheel.py``.
 
         """
         with (_ROOT / "pyproject.toml").open("rb") as stream:
             project = tomllib.load(stream)["project"]
         names = [author["name"] for author in project["authors"]]
-        self.assertTrue(names)
-        self.assertEqual(project["version"], metadata.version("kilin"))
+        self.assertEqual(tuple(names), _EXPECTED_AUTHORS)
         self.assertEqual(project["name"], "kilin")
-        self.assertEqual(project["readme"], "README.md")
-        installed = metadata.metadata("kilin")
-        self.assertEqual(installed["Author"], ", ".join(names))
+        self.assertEqual(project["readme"], "README.pypi.md")
+        self.assertEqual(project["version"], "0.1.0b1")
 
     def test_release_author_identities(self):
         """Reject unintended changes to the credited release authors.
@@ -97,6 +126,27 @@ class TestReleaseMetadata(unittest.TestCase):
         self.assertEqual(
             tuple(author["name"] for author in project["authors"]),
             _EXPECTED_AUTHORS,
+        )
+
+    def test_prerelease_and_lockfile_versions(self):
+        """Keep the first beta and editable uv package in agreement.
+
+        """
+
+        with (_ROOT / "pyproject.toml").open("rb") as stream:
+            project = tomllib.load(stream)["project"]
+        self.assertEqual(project["version"], "0.1.0b1")
+        with (_ROOT / "uv.lock").open("rb") as stream:
+            lock = tomllib.load(stream)
+        local = [
+            package for package in lock["package"]
+            if package["name"] == "kilin"
+        ]
+        self.assertEqual(len(local), 1)
+        self.assertEqual(local[0]["version"], project["version"])
+        self.assertEqual(
+            project["urls"]["Repository"],
+            "https://github.com/DeepTrackAI/KiLin",
         )
 
     def test_citation_metadata(self):
@@ -144,5 +194,5 @@ class TestReleaseMetadata(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn(
-            "https://github.com/giovannivolpe/KiLin/blob/main/LICENSE", page
+            "https://github.com/DeepTrackAI/KiLin/blob/main/LICENSE", page
         )

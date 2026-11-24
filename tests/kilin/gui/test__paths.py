@@ -12,6 +12,9 @@ user locations without requiring Qt, GPU dependencies, or real user writes.
 from __future__ import annotations
 
 import json
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -23,6 +26,14 @@ from kilin.gui import engine as gui_engine
 
 class TestGUIPaths(unittest.TestCase):
     """Resolve GUI-owned paths without writing to package directories."""
+
+    def assert_command(self, command: str, args: list[str]) -> None:
+        """Compare native Windows quoting or POSIX command arguments."""
+
+        if sys.platform == "win32":
+            self.assertEqual(command, subprocess.list2cmdline(args))
+        else:
+            self.assertEqual(shlex.split(command), args)
 
     def setUp(self) -> None:
         """Provide source and installation roots without user state."""
@@ -213,8 +224,8 @@ class TestGUIPaths(unittest.TestCase):
             for backend in ("mlx", "torch"):
                 with self.subTest(backend=backend):
                     command = _paths.gui_install_command(backend)
-                    self.assertEqual(
-                        _paths.shlex.split(command),
+                    self.assert_command(
+                        command,
                         [str(python), "-m", "pip", "install",
                          f"kilin[gui,{backend}]"],
                     )
@@ -246,8 +257,8 @@ class TestGUIPaths(unittest.TestCase):
             ):
                 for backend in ("mlx", "torch"):
                     command = _paths.gui_install_command(backend)
-                    self.assertEqual(
-                        _paths.shlex.split(command),
+                    self.assert_command(
+                        command,
                         [str(uv), "pip", "install", "--python",
                          str(python), spec.replace(
                              "[app]", f"[app,{backend}]"
@@ -265,8 +276,8 @@ class TestGUIPaths(unittest.TestCase):
             patch.object(_paths, "find_spec", return_value=None),
             patch.object(_paths.shutil, "which", return_value=str(uv)),
         ):
-            self.assertEqual(
-                _paths.shlex.split(_paths.gui_install_command("torch")),
+            self.assert_command(
+                _paths.gui_install_command("torch"),
                 [str(uv), "pip", "install", "--python", str(python),
                  "kilin[gui,torch]"],
             )

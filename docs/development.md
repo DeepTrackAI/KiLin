@@ -37,7 +37,7 @@ _si_article_/          # Paper work, benchmarks and source corpora
 sandbox/               # Local development workspaces; export empty
 ```
 
-The repository includes 18 numbered tutorial notebooks. They introduce
+The repository includes 19 numbered tutorial notebooks. They introduce
 installation, model cache, generation, repository scanning, extraction,
 embeddings, semantic/lexical/code retrieval, indexes, routing, RAG sessions,
 trace logging, project types, custom tools, and an end-to-end research
@@ -100,6 +100,9 @@ settings and usage; tutorials for executable examples. Link to the owner of
 a mutable setting or contract rather than duplicating values in every page.
 Editable SVGs are indexed in [Architecture diagrams](diagrams.md) and
 maintained alongside the technical documents that explain them.
+Maintain only the root `README.md` by hand; the version-pinned PyPI
+copy and its update rules are owned by
+[README publication](readme_publication.md).
 
 `tests/setup/test__documentation_assets.py` runs using only the standard
 library, without importing the application or loading models. It checks
@@ -150,6 +153,11 @@ python -m tests
 ```
 
 The independent `tests/__main__.py` uses Python `unittest` discovery.
+On a developer machine, `python -m tests` regenerates
+`README.pypi.md` before discovery; `python -m pytest` does not.
+In CI (`CI=true`), both runners leave generated files untouched
+and the README synchronization test detects stale content. Review
+and commit any locally regenerated README with its source changes.
 Keep new tests discoverable by **both** runners. Its naming convention is
 `test_<module>.py` for a module, `test_<module>__<aspect>.py` for a focused
 aspect, and `test__<topic>.py` for a cross-module concern. Tests under
@@ -259,14 +267,15 @@ serialization policy.
 
 KíLín currently supports **Python 3.12** as declared in `pyproject.toml`.
 The `uv.lock` file is scoped to the same interpreter range. CI is divided
-into four independent workflows under `.github/workflows/`:
+into five independent workflows under `.github/workflows/`:
 
 | Workflow | Validation | Required checks |
 | --- | --- | --- |
 | `tests.yml` | Core tests, newer Python probes, isolated Qt/PDF tests | Python 3.12 on Ubuntu and macOS; Qt/PDF on the same systems (Windows runs but does not block yet) |
-| `package.yml` | Wheel and source distribution, isolated wheel installation | Ubuntu / Python 3.12 |
-| `docs.yml` | Local links/anchors, SVG metadata, source-backed inventories and examples | Ubuntu / Python 3.12 |
+| `package.yml` | Wheel/sdist, installed package and PyPI description verification | Ubuntu / Python 3.12 |
+| `docs.yml` | Documentation contracts and generated PyPI README freshness | Ubuntu / Python 3.12 |
 | `macos_app.yml` | Real Apple Silicon .app/.dmg build, signature, mounted-image inspection and installer regression tests | macOS / Python 3.12, ad-hoc signing |
+| `windows_app.yml` | Real Inno Setup build, silent install, runtime and shortcut checks, uninstall | Windows x64, unsigned installer smoke |
 
 Windows is a target platform, but support is not fully verified yet.
 Its Python 3.12 and Qt/PDF jobs run on every change and report their
@@ -276,7 +285,9 @@ and native Qt/PDF behavior) are checked or corrected. Windows then becomes
 a required platform.
 
 All workflows run on pull requests and pushes to `main` or `develop`; they
-can also be launched manually. The test matrix has `fail-fast: false`, so
+can also be launched manually. Tag pushes do not currently start a separate
+publishing or release-verification workflow. The test matrix has
+`fail-fast: false`, so
 one platform failure does not cancel the other configurations. A Node.js
 runtime is installed for the JavaScript checks in the base test suite.
 A newer push to a pull request cancels that pull request's runs still in
@@ -356,37 +367,71 @@ users install: Qt plus the platform's backend, chosen by environment
 markers. `kilin-gui` is a GUI script, so Windows opens it without a
 console.
 
-### Releasing
+### Public prerelease sequence
 
-1. Raise `version` in `pyproject.toml` (and `CITATION.cff`).
-2. Build and check the package: `uv build`, then install the wheel into a
-   fresh environment with `uv pip install "dist/kilin-<version>-py3-none-any.whl[app]"`
-   and open `kilin-gui`.
-3. Publish it to PyPI. PyPI has no upload page; `uv publish` sends the
-   named files and nothing else:
+The first public beta is `0.1.0b1`, then `0.1.0rc1`, then stable `0.1.0`.
+Use matching Git tags: `v0.1.0b1`, `v0.1.0rc1`, `v0.1.0`. If further
+beta or RC iterations are needed, increment their sequence numbers. Do
+not upload `0.1.0` to PyPI until it is the intended stable release.
+Public prereleases remain subject to the security and platform limits in
+[Release guidance](release.md); a public package is not a signed native app.
+The [README publication contract](readme_publication.md) governs the
+generated PyPI description and all tag-pinned documentation URLs.
+
+1. Prepare beta and RC versions on `develop`; prepare stable versions
+   on `main` after merging the accepted release candidate. Update
+   `pyproject.toml`, `uv.lock` and `CITATION.cff` consistently. Keep
+   repository-owned links relative in `README.md`; regenerate and
+   commit `README.pypi.md` with:
+
+   ```sh
+   python -m setup.generate_pypi_readme
+   python -m setup.generate_pypi_readme --check
+   ```
+
+   The generated description points to `v<version>`, not to `main` or
+   `develop`. Review its tag-pinned images and links, and confirm the
+   current artwork's redistribution rights before publication.
+2. Run both complete test suites on Python 3.12, the formatting checks,
+   documentation checks, and the package/installation CI workflows.
+   Check that the generated README matches before building. Build
+   the distributions with `uv build`; review their contents and metadata.
+   Install the wheel into a fresh Python 3.12 environment using
+   `uv pip install "dist/kilin-<version>-py3-none-any.whl[app]"`, and open
+   `kilin-gui`. Run `twine check dist/*` when Twine is available. This
+   checks rendering syntax, not whether external image URLs resolve.
+3. For `b` and `rc` releases, tag the validated commit on `develop`.
+   For a stable release, merge to `main`, validate the merge commit
+   and tag it there. Create a GitHub Release marked **prerelease** for
+   beta and RC versions, not for the stable version. Do not mark
+   the stable `0.1.0` tag as prerelease. Keep tags pointing at the tested
+   commit. A `v*` tag push triggers automatic native builds and creates
+   the GitHub Release after both platform checks pass; do not publish an
+   immutable release before its installers have been attached. See
+   [Automatic native release assets](release.md#automatic-native-release-assets).
+4. Check that the tag points to the exact source commit used for the
+   built wheel and sdist, then publish both **reviewed** files to PyPI.
+   Upload only after the GitHub release tag exists. Use the `kilin`
+   project and an account authorized to publish it:
 
    ```sh
    uv publish dist/kilin-<version>-py3-none-any.whl dist/kilin-<version>.tar.gz
    ```
 
-   It asks for an API token (or reads `UV_PUBLISH_TOKEN`). Create one on
-   pypi.org under Account settings → API tokens, scoped to the `kilin`
-   project, with an account that maintains the project. A version can be
-   uploaded only once, even after it is deleted, so a fix needs a new
-   version. To rehearse, upload to TestPyPI first with
-   `--publish-url https://test.pypi.org/legacy/` and a token from
-   test.pypi.org, a separate site and account.
-4. Build a development macOS app using the version from PyPI:
-   `bash setup/macos/build_app.sh`. It writes `dist/KíLín.app` and
-   `dist/KíLín.dmg`. `--wheel` embeds a checkout wheel. Both builds
-   are signed ad hoc only and are **not notarized**. See the
-   [macOS build guide](release.md) for native and manual validation.
-5. Build a development Windows installer on Windows with uv 0.8 or later
-   and Inno Setup 6:
-   `powershell -NoProfile -ExecutionPolicy Bypass -File setup\windows\build_installer.ps1`.
-   It writes `dist\KiLin-Setup-<version>.exe`; `-Wheel` embeds a
-   checkout wheel. The installer is **not code-signed**. See the
-   [Windows installer](release.md#windows-installer) section.
+   Provide a project-scoped PyPI API token via the publishing tool's
+   documented secure input method; do not commit tokens. A released PyPI
+   version cannot be re-uploaded with different files, so publish any fix
+   under a new version. TestPyPI is an optional rehearsal, not a
+   substitute for checking the production release. Confirm the published
+   README images, links, citation, license and exact version on PyPI.
+5. Check that the tag-triggered native release workflow attached a
+   versioned macOS DMG, Windows EXE, and SHA-256 checksums. The builders
+   use wheels from the tagged checkout, independently of PyPI publication.
+   Both installers remain experimental, without Developer ID notarization
+   or Windows code signing; public release assets are not substitutes for
+   manual installation acceptance on real systems. For a local comparison,
+   build using `bash setup/macos/build_app.sh --wheel` or
+   `powershell -NoProfile -ExecutionPolicy Bypass -File setup\windows\build_installer.ps1 -Wheel`.
 
 The builder resolves `uv` symlinks (including Homebrew's), checks that
 its target is an Apple-silicon executable, and bundles the resolved binary.
@@ -467,6 +512,12 @@ archive/commit, not an earlier working directory. Provide a Git patch and a
 ZIP of only changed/new files in repository-relative paths, with explicit
 deletions when needed. A separate full source export is useful when requested
 for release or transfer; it is not needed to apply a focused revision.
+
+Clean source ZIP exports must also include the tracked root files
+`README.pypi.md` and `MANIFEST.in`: they are required to rebuild the
+PyPI distribution description. Keep their top-level selection enabled in
+`assets/clean_repository.ipynb`; see the
+[README publication contract](readme_publication.md).
 
 The root `LICENSE` holds the Apache License 2.0 text declared by
 `pyproject.toml`. It must be committed to Git and present in source ZIPs,
