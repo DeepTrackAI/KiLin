@@ -86,6 +86,19 @@ SmartScreen may display security warnings or block installation. Verify
 the downloaded files against the release checksums and read the
 [native installer guidance](https://github.com/DeepTrackAI/KiLin/blob/v0.1.0b1/docs/release.md) before using them.
 
+Because these installers are not signed, macOS and Windows show a
+security warning the first time you open KíLín. To open it anyway:
+
+- **macOS:** open KíLín once and close the warning. Then open **System
+  Settings → Privacy & Security**, scroll to **Security**, click **Open
+  Anyway** next to the message about KíLín, and confirm. macOS remembers
+  the choice for this app.
+- **Windows:** when SmartScreen shows "Windows protected your PC", click
+  **More info**, then **Run anyway**.
+
+Do this only for an installer from the official KíLín repository on
+GitHub or from the KíLín team.
+
 ## Getting started
 
 After installation, open `kilin-gui`, select models and a project workspace,

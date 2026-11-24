@@ -70,10 +70,12 @@ validated public release.
 
 Test a locally built DMG on a real Apple Silicon Mac, preferably from a
 fresh user account. macOS may block the app because it is not Developer
-ID signed or notarized. If the source is trusted, inspect the warning
-and use the system-provided option in System Settings, Privacy &
-Security, to allow that particular app. Never advise disabling
-Gatekeeper or removing quarantine indiscriminately.
+ID signed or notarized. If the source is trusted, open the app once,
+close the warning, then click **Open Anyway** for KíLín in **System
+Settings → Privacy & Security** and confirm; this allows only that app.
+Never advise disabling Gatekeeper or removing quarantine
+indiscriminately. The Windows equivalent, **More info → Run anyway**, is
+described under [Windows installer](#windows-installer).
 
 The public beta still includes the desktop's invitation-passkey prompt.
 Before distributing a native build, confirm its behavior on a fresh user
