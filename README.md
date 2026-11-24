@@ -35,21 +35,16 @@
 and general knowledge work. It combines locally run language models,
 project-specific sources, retrieval-augmented generation (RAG), configurable
 tools, and persistent conversations. Users control their models, projects,
-and data instead of depending on a remote AI service for every answer.
+and data without depending on a remote AI service for every answer.
 
 KíLín provides six built-in project types for code, literature, writing,
 grounded brainstorming, creative brainstorming, and researcher-directed
 reviewing. Source-grounded responses reference project files for independent
-inspection. Optional conversation memory can reuse eligible earlier
-interactions without presenting them as independent scientific evidence.
-Scientific interpretation and the final evaluation of reports remain with
-the researcher.
+inspection.
 
-**Beta release:** This is the preparation for `0.1.0b1`, the first public
-prerelease. The planned sequence is `0.1.0b1` → `0.1.0rc1` → `0.1.0`.
-Features, public interfaces, and saved formats may change before `0.1.0`.
-A release appearing in this README is not a claim that its distribution
-artifacts have already been published.
+**Beta release:** This is the `0.1.0b1`, the first public prerelease.
+The planned sequence is `0.1.0b1` → `0.1.0rc1` → `0.1.0`. Features, public
+interfaces, and saved formats may change before `0.1.0`.
 
 ## Installation
 
@@ -74,7 +69,7 @@ appropriate to the platform (MLX on supported Apple Silicon Macs, PyTorch
 elsewhere). For the core without the GUI, use `kilin==0.1.0b1`; to select a
 backend explicitly, see the
 [model-management guide](docs/model_management.md).
-The beta version is installable from PyPI once its artifacts are published.
+The beta version is installable from PyPI.
 
 ### macOS desktop application (Apple Silicon, macOS 14+)
 
