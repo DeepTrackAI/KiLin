@@ -55,7 +55,7 @@ class TestEngineResume(unittest.TestCase):
         activation = patch.object(self.engine, "_activate_project")
         self.activate = activation.start()
         self.addCleanup(activation.stop)
-        tracing = patch.object(self.engine, "_start_project_trace")
+        tracing = patch.object(self.engine, "_start_conversation_trace")
         self.start_trace = tracing.start()
         self.addCleanup(tracing.stop)
 

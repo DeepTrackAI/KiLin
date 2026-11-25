@@ -88,7 +88,7 @@ class TestEngineResumeRecovery(unittest.TestCase):
             self.engine, "_open_conversation_store",
             return_value=conversation,
         ), patch.object(
-            self.engine, "_start_project_trace"
+            self.engine, "_start_conversation_trace"
         ), patch.object(
             self.engine, "_activate_project"
         ) as activate, patch.object(
@@ -126,7 +126,7 @@ class TestEngineResumeRecovery(unittest.TestCase):
             self.engine, "_open_conversation_store",
             return_value=SimpleNamespace(conversation_id="chat"),
         ), patch.object(
-            self.engine, "_start_project_trace"
+            self.engine, "_start_conversation_trace"
         ), patch.object(
             self.engine, "_activate_project", side_effect=fail
         ):

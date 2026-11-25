@@ -44,15 +44,15 @@ class TestGUIConversationOwnership(unittest.TestCase):
         self.target = self.store.create()
         self.engine.conversation_store = self.store
         self.engine.active_conversation = self.previous
-        self.engine._start_project_trace(self.root, self.previous)
-        self.previous_trace = self.engine.project_trace
+        self.engine._start_conversation_trace(self.root, self.previous)
+        self.previous_trace = self.engine.conversation_trace
         self.session = MagicMock()
         self.session.project = SimpleNamespace(
             root=self.root, profile=SimpleNamespace(retrieval_count=5)
         )
         self.session.switch_conversation.return_value = []
         self.engine.session = self.session
-        self.addCleanup(self.engine._close_project_trace)
+        self.addCleanup(self.engine._close_traces)
 
     def test_locked_target_preserves_previous_live_trace(self) -> None:
         """Leave the active session untouched if the target is occupied."""
@@ -63,7 +63,7 @@ class TestGUIConversationOwnership(unittest.TestCase):
             with self.assertRaises(ConversationLockedError):
                 self.engine._switch_conversation(self.target)
             self.assertIs(
-                self.engine.project_trace, self.previous_trace
+                self.engine.conversation_trace, self.previous_trace
             )
             self.assertIs(
                 self.engine.active_conversation, self.previous
@@ -87,7 +87,7 @@ class TestGUIConversationOwnership(unittest.TestCase):
         self.assertIs(
             self.engine.active_conversation, self.previous
         )
-        self.assertIs(self.engine.project_trace, self.previous_trace)
+        self.assertIs(self.engine.conversation_trace, self.previous_trace)
 
     def test_failed_new_chat_restores_previous_store_selection(
         self,
@@ -119,8 +119,10 @@ class TestGUIConversationOwnership(unittest.TestCase):
         self.assertIs(
             self.engine.active_conversation, self.target
         )
-        self.assertIsInstance(self.engine.project_trace, TraceLogger)
-        self.assertTrue(self.engine.project_trace._file_lock.holds(new_path))
+        self.assertIsInstance(self.engine.conversation_trace, TraceLogger)
+        self.assertTrue(
+            self.engine.conversation_trace._file_lock.holds(new_path)
+        )
         self.assertFalse(self.previous_trace._file_lock.holds(old_path))
         with ConversationFileLock(old_path) as owner:
             self.assertTrue(owner.holds(old_path))
@@ -134,7 +136,7 @@ class TestGUIConversationOwnership(unittest.TestCase):
             self.previous.conversation_id,
             ownership=self.previous_trace._file_lock,
         )
-        self.engine._detach_project_trace()
+        self.engine._detach_conversation_trace()
         self.assertEqual(archived.read_bytes(), old_bytes)
         self.assertFalse(self.previous_trace._file_lock.holds(old_path))
         with ConversationFileLock(old_path):

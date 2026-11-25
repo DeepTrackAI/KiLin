@@ -2990,19 +2990,31 @@ class RAGSession:
         turns/checkpoint identity, and resets the chat history to its system
         instruction. An enabled trace then discards conversation-specific
         retained state before recording the reset in a fresh active file.
-        Loaded models, indexes, and non-conversation trace context are reused.
+        Project-numbered events remain only in the archived trace; standalone
+        traces retain their earlier non-conversation context. Loaded models
+        and indexes are reused.
 
         """
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
         archived_checkpoint_id = getattr(self, "_checkpoint_id", None)
+        trace = getattr(self, "trace", NullTraceLogger())
+        if (
+            isinstance(trace, TraceLogger)
+            and trace.sequence_scope == "project"
+        ):
+            trace.flush()
         archived_path = self._archive_conversation()
         self.chat_session.reset()
         self.turns = []
         self._checkpoint_id = None
-        trace = getattr(self, "trace", NullTraceLogger())
-        trace.reset_conversation_state()
+        if isinstance(trace, TraceLogger):
+            trace.reset_conversation_state(
+                archived=archived_path is not None
+            )
+        else:
+            trace.reset_conversation_state()
         trace.emit(
             "conversation.reset",
             component="rag",

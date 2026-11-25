@@ -316,10 +316,11 @@ class ChatEngine:
     active_conversation: ConversationInfo | None
         Metadata for the active conversation.
     project_trace: TraceSink
-        Active diagnostic sink, or a null sink when tracing is disabled.
+        Shared project-level diagnostic sink, or a null sink.
+    conversation_trace: TraceSink
+        Active conversation diagnostic and checkpoint sink, or a null sink.
     active_trace: TraceSink
-        Property exposing the current project trace to redirected backend
-        output.
+        Property exposing the active conversation trace to backend output.
 
     Methods
     -------
@@ -487,6 +488,7 @@ class ChatEngine:
         self._answer_stop = Event()
         self._answering = False
         self.project_trace: TraceSink = NullTraceLogger()
+        self.conversation_trace: TraceSink = NullTraceLogger()
         self.session: RAGSession | None = None
         self.conversation_store: ConversationStore | None = None
         self.active_conversation: ConversationInfo | None = None
@@ -502,98 +504,122 @@ class ChatEngine:
 
         """
 
-        return self.project_trace
+        return self.conversation_trace
 
-    def _start_project_trace(
+    def _start_conversation_trace(
         self,
         project_directory: Path,
         conversation: ConversationInfo | None = None,
     ) -> None:
-        """Open the single trace file owned by one conversation.
+        """Open a conversation trace and its shared project trace.
 
         Parameters
         ----------
         project_directory: pathlib.Path
-            Resolved managed-project directory associated with the conversation
-            trace.
+            Managed project owning both trace files.
         conversation: ConversationInfo | None, optional
-            Registered conversation metadata for the state to activate or
-            trace. Defaults to ``None``.
-
-        Raises
-        ------
-        RuntimeError
-            If tracing is enabled without a conversation and opened store.
-        ValueError
-            If the stored conversation trace is invalid.
+            Registered conversation metadata for the state to activate.
+            Defaults to None.
 
         Notes
         -----
-        With tracing disabled, this selects a null sink. Otherwise it opens a
-        logger using full diagnostic recording at the conversation state path
-        and emits trace_ready.
-        The path comes from the store, keeping GUI trace and resume state
-        aligned.
+        The conversation file has an exclusive session lease. The shared
+        project file survives conversation switches and takes only short
+        write leases. Both use the same project sequence.
 
         """
 
         if not self.trace_enabled:
-            self.project_trace = NullTraceLogger()
+            self.conversation_trace = NullTraceLogger()
             return
         if conversation is None or self.conversation_store is None:
             raise RuntimeError("Conversation store is not open.")
         trace_path = self.conversation_store.state_path(conversation)
-        scope = "conversation"
-        self.project_trace = TraceLogger(
+        project_path = project_directory / "logs" / "traces" / "project.json"
+        old_conversation = self.conversation_trace
+        old_project = self.project_trace
+        conversation_trace = TraceLogger(
             TraceConfig(
                 enabled=True,
                 output_path=trace_path,
                 failure_policy=FAILURE_POLICY_WARN,
             ),
             default_directory=trace_path.parent,
+            project_directory=project_directory,
         )
-        self.project_trace.emit(
-            f"{scope}.trace.started",
-            component="gui_engine",
-            data={
-                "scope": scope,
-                "entrypoint": "gui",
-                "project_directory": str(project_directory),
-                "conversation": (
-                    asdict(conversation) if conversation is not None else None
-                ),
-            },
-        )
-        self._send(
-            "trace_ready",
-            trace_path=str(self.project_trace.readable_path),
-            scope=scope,
-            conversation_id=(
-                conversation.conversation_id
-                if conversation is not None
-                else None
-            ),
-        )
+        project_trace = old_project
+        try:
+            if not project_trace.enabled:
+                project_trace = TraceLogger(
+                    TraceConfig(
+                        enabled=True,
+                        output_path=project_path,
+                        failure_policy=FAILURE_POLICY_WARN,
+                    ),
+                    default_directory=project_path.parent,
+                    project_directory=project_directory,
+                    scope="project",
+                )
+            elif Path(project_trace.output_path).resolve() != (
+                project_path.resolve()
+            ):
+                raise RuntimeError("The project trace belongs elsewhere.")
+            self.conversation_trace = conversation_trace
+            self.project_trace = project_trace
+            conversation_trace.emit(
+                "conversation.trace.started",
+                component="gui_engine",
+                data={
+                    "scope": "conversation",
+                    "entrypoint": "gui",
+                    "project_directory": str(project_directory),
+                    "conversation": asdict(conversation),
+                },
+            )
+            self._send(
+                "trace_ready",
+                trace_path=str(conversation_trace.readable_path),
+                scope="conversation",
+                conversation_id=conversation.conversation_id,
+            )
+        except BaseException:
+            self.conversation_trace = old_conversation
+            self.project_trace = old_project
+            try:
+                conversation_trace.close(emit_event=False)
+            finally:
+                if project_trace is not old_project:
+                    project_trace.close()
+            raise
 
-    def _close_project_trace(self) -> None:
-        """Finish the current project trace without closing the GUI trace."""
+    def _close_conversation_trace(self) -> None:
+        """Close the current conversation trace and release its lease."""
 
-        if self.project_trace.enabled:
-            self.project_trace.close()
-        self.project_trace = NullTraceLogger()
+        trace = self.conversation_trace
+        self.conversation_trace = NullTraceLogger()
+        trace.close()
 
-    def _detach_project_trace(self) -> None:
-        """Close an archived trace and release its file lock without writing.
+    def _close_traces(self) -> None:
+        """Close both owned sinks, even if conversation cleanup fails."""
 
-        GUI conversation deletion archives a trace whose accepted events and
-        resume state have already been written. Closing without a final event
-        avoids rewriting the moved JSON and releases the exclusive file lock.
+        try:
+            self._close_conversation_trace()
+        finally:
+            trace = self.project_trace
+            self.project_trace = NullTraceLogger()
+            trace.close()
+
+    def _detach_conversation_trace(self) -> None:
+        """Release the already archived conversation trace without writing.
+
+        Its numbered events remain in the archive. The project trace stays
+        open for the replacement conversation.
 
         """
 
-        if isinstance(self.project_trace, TraceLogger):
-            self.project_trace.close(emit_event=False)
-        self.project_trace = NullTraceLogger()
+        if isinstance(self.conversation_trace, TraceLogger):
+            self.conversation_trace.close(emit_event=False)
+        self.conversation_trace = NullTraceLogger()
 
     def _store_ownership(
         self, conversation_id: str
@@ -625,8 +651,8 @@ class ChatEngine:
             or conversation_id != self.active_conversation.conversation_id
         ):
             return None
-        if isinstance(self.project_trace, TraceLogger):
-            return self.project_trace._file_lock
+        if isinstance(self.conversation_trace, TraceLogger):
+            return self.conversation_trace._file_lock
         if self.session is not None:
             return self.session._active_conversation_lock()
         return None
@@ -1225,7 +1251,7 @@ class ChatEngine:
             conversation = self._open_conversation_store(
                 project, conversation_id
             )
-            self._start_project_trace(project.root, conversation)
+            self._start_conversation_trace(project.root, conversation)
             self._activate_project(project, conversation)
             self._report_source_changes(project)
         except Exception as error:
@@ -1240,7 +1266,7 @@ class ChatEngine:
             if previous_released:
                 self.close()
             elif self.session is None:
-                self._close_project_trace()
+                self._close_traces()
 
     def _report_source_changes(self, project: QAProject) -> None:
         """Tell the frontend which originals changed since their import.
@@ -2030,7 +2056,7 @@ class ChatEngine:
             self.close()
             switched = True
             conversation = self._open_conversation_store(project)
-            self._start_project_trace(project.root, conversation)
+            self._start_conversation_trace(project.root, conversation)
             if created_levels:
                 self.active_trace.emit(
                     "gui.models.effort_levels.saved",
@@ -2056,7 +2082,7 @@ class ChatEngine:
             else:
                 self._send("error", message=message, trace_path=None)
             if self.session is None:
-                self._close_project_trace()
+                self._close_traces()
 
     def _open_conversation_store(
         self,
@@ -2129,7 +2155,7 @@ class ChatEngine:
                 "progress", **asdict(progress)
             )
         }
-        options["trace"] = self.project_trace
+        options["trace"] = self.conversation_trace
         if self.conversation_store is None:
             raise RuntimeError("Conversation store is not open.")
         # The project keeps every setting from now on, so it resumes as it
@@ -3342,13 +3368,13 @@ class ChatEngine:
 
         """
 
-        self._close_project_trace()
+        self._close_traces()
         store = ConversationStore(project.root)
         store.ensure()
         conversation = store.select(conversation_id)
         self.conversation_store = store
         self.active_conversation = conversation
-        self._start_project_trace(project.root, conversation)
+        self._start_conversation_trace(project.root, conversation)
         self._activate_project(project, conversation)
 
     def _name_active_conversation(
@@ -4064,12 +4090,16 @@ class ChatEngine:
                 "conversation_delete_started",
                 conversation_id=conversation_id,
             )
+            if deleting_active and isinstance(
+                self.conversation_trace, TraceLogger
+            ):
+                self.conversation_trace.flush()
             replacement, archived_path = self.conversation_store.archive(
                 conversation_id,
                 ownership=self._store_ownership(conversation_id),
             )
             if deleting_active:
-                self._detach_project_trace()
+                self._detach_conversation_trace()
                 self._switch_conversation(
                     replacement, close_current_trace=False
                 )
@@ -4133,7 +4163,7 @@ class ChatEngine:
         except Exception as error:
             if source is not None and self.session is None:
                 try:
-                    self._close_project_trace()
+                    self._close_traces()
                     if moved:
                         destination.rename(source)
                     self._reopen_project_conversation(
@@ -4419,24 +4449,27 @@ class ChatEngine:
 
         if self.session is None or self.conversation_store is None:
             raise RuntimeError("Open a project first.")
-        previous_trace = self.project_trace
+        previous_trace = self.conversation_trace
         try:
             # Acquiring the target first leaves the active writer untouched
             # if the conversation is locked by another KíLín process.
-            self._start_project_trace(
+            self._start_conversation_trace(
                 self.session.project.root, conversation
             )
             turns = self.session.switch_conversation(
                 self.conversation_store.state_path(conversation),
-                trace=self.project_trace,
+                trace=self.conversation_trace,
             )
         except BaseException:
-            if self.project_trace is not previous_trace:
-                if isinstance(self.project_trace, TraceLogger):
-                    self.project_trace.close(emit_event=False)
-                self.project_trace = previous_trace
+            if self.conversation_trace is not previous_trace:
+                if isinstance(self.conversation_trace, TraceLogger):
+                    self.conversation_trace.close(emit_event=False)
+                self.conversation_trace = previous_trace
             raise
-        if close_current_trace and previous_trace is not self.project_trace:
+        if (
+            close_current_trace
+            and previous_trace is not self.conversation_trace
+        ):
             previous_trace.close()
         self.active_conversation = conversation
         self._use_project_answer_settings()
@@ -4543,7 +4576,7 @@ class ChatEngine:
         if self.session is not None:
             self.session.close()
             self.session = None
-        self._close_project_trace()
+        self._close_traces()
         self.conversation_store = None
         self.active_conversation = None
 

@@ -142,6 +142,12 @@ from uuid import uuid4
 import warnings
 
 from kilin.atomic_writes import atomic_write_text
+from kilin._trace_project import (
+    TRACE_FORMAT_VERSION,
+    ProjectTraceSequence,
+    project_trace_directory,
+    write_project_trace,
+)
 from kilin.conversation_ownership import ConversationFileLock
 from kilin.conversation_format import (
     CONVERSATION_RESUME_STATE_KEY,
@@ -388,6 +394,8 @@ class TraceLogger:
         config: TraceConfig,
         *,
         default_directory: str | Path,
+        project_directory: str | Path | None = None,
+        scope: Literal["conversation", "project"] = "conversation",
     ) -> None:
         """Create one trace file and record its first event.
 
@@ -399,6 +407,11 @@ class TraceLogger:
         default_directory: str | pathlib.Path
             Fallback output directory when the configuration does not name an
             exact JSON file.
+        project_directory: str | pathlib.Path | None, optional
+            Explicit project root; otherwise infer it from the trace path.
+        scope: {"conversation", "project"}, optional
+            Conversation checkpoint or shared project diagnostic trace.
+            Defaults to "conversation".
 
         Raises
         ------
@@ -413,15 +426,19 @@ class TraceLogger:
         The first event is written during construction. Exact JSON paths can be
         reused; output is not guaranteed to be a new file. Saved sessions
         provide a fixed numbering baseline before that first event is emitted.
-        Exclusive ownership is acquired before reading saved state or writing
-        the first event and released on construction failure. Resumable state
-        is copied separately so updates cannot modify the saved snapshot.
+        Conversation traces retain exclusive ownership for their lifetime.
+        Project traces instead take short write leases for each publication.
+        Resumable state is copied separately so updates cannot modify the
+        saved snapshot.
 
         """
 
         if not config.enabled:
             raise ValueError("TraceLogger requires an enabled TraceConfig.")
 
+        if scope not in ("conversation", "project"):
+            raise ValueError("trace scope must be conversation or project.")
+        self.scope = scope
         self.config = config
         self.trace_id = self.new_id("trace")
         self._started_at = perf_counter()
@@ -432,6 +449,7 @@ class TraceLogger:
         self._events: list[dict[str, object]] = []
         self._conversation: dict[str, object] = {}
         self._previous_sessions: dict[str, object] = {}
+        self._previous_incomplete = False
         self._last_readable_write = 0.0
         self._active_span_id: ContextVar[str | None] = ContextVar(
             f"kilin_active_span_{id(self)}",
@@ -442,6 +460,28 @@ class TraceLogger:
             Path(default_directory),
             self.trace_id,
         )
+        directory = project_trace_directory(
+            self.output_path, project_directory
+        )
+        if scope == "project":
+            if (
+                directory is None
+                or self.output_path.resolve() != directory / "project.json"
+            ):
+                raise ValueError(
+                    "Project trace must use logs/traces/project.json."
+                )
+        elif (
+            directory is not None
+            and self.output_path.resolve() == directory / "project.json"
+        ):
+            raise ValueError("Project trace requires project scope.")
+        self._project_sequence = (
+            ProjectTraceSequence(directory) if directory is not None else None
+        )
+        self.sequence_scope = (
+            "project" if self._project_sequence is not None else "logger"
+        )
         self.output_path.parent.mkdir(
             parents=True,
             exist_ok=True,
@@ -449,9 +489,10 @@ class TraceLogger:
         )
         self.readable_path = self.output_path
         self._file_lock = ConversationFileLock(self.output_path)
-        self._file_lock.acquire()
+        if scope == "conversation":
+            self._file_lock.acquire()
         try:
-            if self.output_path.is_file():
+            if scope == "conversation" and self.output_path.is_file():
                 try:
                     existing = json.loads(
                         self.output_path.read_text(encoding="utf-8")
@@ -460,6 +501,18 @@ class TraceLogger:
                     # Never replace invalid records with empty state.
                     self._conversation = conversation_state(existing)
                     self._previous_sessions = existing["sessions"]
+                    self._previous_incomplete = bool(
+                        existing.get("trace_incomplete", False)
+                        or (
+                            self.sequence_scope == "project"
+                            and "event_count" in existing
+                            and (
+                                existing.get("sequence_scope") != "project"
+                                or existing.get("trace_format_version")
+                                != TRACE_FORMAT_VERSION
+                            )
+                        )
+                    )
                 except (
                     OSError, json.JSONDecodeError, TypeError, KeyError
                 ) as error:
@@ -481,13 +534,15 @@ class TraceLogger:
                 previous_conversation.get("operations"),
                 r"([0-9]+)_.+",
             )
-            _restrict_permissions(self.output_path, 0o600)
+            if scope == "conversation":
+                _restrict_permissions(self.output_path, 0o600)
             self.emit(
                 "trace.started",
                 component="trace",
                 data={
                     # Historical fixed marker, not a configurable setting.
                     "mode": "forensic",
+                    "scope": self.scope,
                     "output_path": str(self.output_path),
                     "include_embedding_vectors": (
                         config.include_embedding_vectors
@@ -638,7 +693,14 @@ class TraceLogger:
                 return
             if span_id is None:
                 span_id = self._active_span_id.get()
-            self._sequence += 1
+            try:
+                if self._project_sequence is None:
+                    self._sequence += 1
+                else:
+                    self._sequence = self._project_sequence.next()
+            except OSError as error:
+                self._handle_io_failure(error)
+                return
             event: dict[str, object] = {
                 "sequence": self._sequence,
                 "timestamp_utc": _utc_timestamp(),
@@ -972,6 +1034,10 @@ class TraceLogger:
 
         """
 
+        if self.scope != "conversation":
+            raise ValueError(
+                "Project traces cannot store conversation state."
+            )
         changes = {
             str(key): _json_value(value) for key, value in data.items()
         }
@@ -986,8 +1052,14 @@ class TraceLogger:
                 self._conversation = previous
                 raise
 
-    def reset_conversation_state(self) -> None:
+    def reset_conversation_state(self, *, archived: bool = False) -> None:
         """Clear retained state for an archived conversation.
+
+        Parameters
+        ----------
+        archived: bool, optional
+            Whether the complete current trace was moved to an archive.
+            Defaults to False.
 
         Raises
         ------
@@ -1011,15 +1083,41 @@ class TraceLogger:
         with self._lock:
             if self._closed:
                 raise RuntimeError("This trace logger is closed.")
+            if self.scope != "conversation":
+                raise ValueError(
+                    "Project traces cannot reset conversations."
+                )
             self._conversation = {}
-            self._previous_sessions.pop(CONVERSATION_SESSION_KEY, None)
-            self._events = [
-                event
-                for event in self._events
-                if not _is_conversation_event(event)
-            ]
+            if archived and self._project_sequence is not None:
+                # The archive already owns these numbered events.
+                self._previous_sessions = {}
+                self._events = []
+                self._previous_incomplete = False
+            else:
+                self._previous_sessions.pop(CONVERSATION_SESSION_KEY, None)
+                self._events = [
+                    event
+                    for event in self._events
+                    if not _is_conversation_event(event)
+                ]
             self._turn_offset = 0
             self._conversation_operation_offset = 0
+
+    def flush(self) -> None:
+        """Publish pending diagnostics before moving the trace file.
+
+        Optional diagnostic failures follow the configured policy.
+
+        """
+
+        with self._lock:
+            if self._closed or self._failed:
+                return
+            try:
+                self._write_readable_trace()
+                self._last_readable_write = perf_counter()
+            except OSError as error:
+                self._handle_io_failure(error)
 
     def close(self, *, emit_event: bool = True) -> None:
         """Finish the logger and release exclusive conversation ownership.
@@ -1114,6 +1212,22 @@ class TraceLogger:
             turn_offset=self._turn_offset,
             conversation_operation_offset=self._conversation_operation_offset,
         )
+        metadata = {
+            "trace_format_version": TRACE_FORMAT_VERSION,
+            "trace_scope": self.scope,
+            "sequence_scope": self.sequence_scope,
+            "trace_incomplete": self._previous_incomplete or self._failed,
+            "trace_id": self.trace_id,
+            "updated_at_utc": _utc_timestamp(),
+            "event_count": len(self._events),
+            "execution_event_count": len(execution_trace),
+            "progress_checkpoint_count": len(progress_checkpoints),
+        }
+        if self.scope == "project":
+            write_project_trace(
+                self.readable_path, self.trace_id, current_sessions, metadata
+            )
+            return
         sessions = deepcopy(self._previous_sessions)
         for key, value in current_sessions.items():
             if (
@@ -1163,14 +1277,7 @@ class TraceLogger:
                 ),
             )
         )
-        payload = {
-            "trace_id": self.trace_id,
-            "updated_at_utc": _utc_timestamp(),
-            "event_count": len(self._events),
-            "execution_event_count": len(execution_trace),
-            "progress_checkpoint_count": len(progress_checkpoints),
-            "sessions": sessions,
-        }
+        payload = {**metadata, "sessions": sessions}
         content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
         atomic_write_text(self.readable_path, content)
 
@@ -1291,6 +1398,13 @@ class TraceLogger:
         """
 
         self._failed = True
+        if self._project_sequence is not None:
+            try:
+                self._project_sequence.mark_incomplete()
+            except OSError:
+                # Preserve the original failure and never repair a corrupt
+                # or inaccessible counter silently.
+                pass
         if self.config.failure_policy == FAILURE_POLICY_RAISE:
             raise RuntimeError(
                 f"Could not write KíLín trace: {error}"
@@ -1797,11 +1911,7 @@ def _progress_checkpoint(event: Mapping[str, object]) -> dict[str, object]:
 
     data = event.get("data")
     details = dict(data) if isinstance(data, Mapping) else {}
-    return {
-        "sequence": event.get("sequence"),
-        "timestamp_utc": event.get("timestamp_utc"),
-        **details,
-    }
+    return {**details, **_event_metadata(event)}
 
 
 _SESSION_TITLES = {
@@ -2099,11 +2209,11 @@ def _append_readable_operation(
     event_type = str(event.get("event_type", "event"))
     span_id = event.get("span_id")
     lifecycle = event_type.rsplit(".", 1)[-1]
-    if isinstance(span_id, str) and lifecycle in {
-        "started",
-        "completed",
-        "failed",
-    }:
+    if (
+        isinstance(span_id, str)
+        and "started_elapsed_ms" in event
+        and lifecycle in {"started", "completed", "failed"}
+    ):
         base = event_type.rsplit(".", 1)[0]
         node = span_nodes.get(span_id)
         if lifecycle == "started" and node is None:
@@ -2111,15 +2221,20 @@ def _append_readable_operation(
             key = _unique_operation_key(operations, base, offset=offset)
             operations[key] = node
             span_nodes[span_id] = node
-        if lifecycle == "started" and node is not None:
-            summary = node.get("event")
-            if isinstance(summary, dict):
-                summary["status"] = "running"
+            summary = node["event"]
+            summary["started_status"] = summary["status"]
+            summary["status"] = "running"
             return
         summary = node.get("event") if isinstance(node, dict) else None
-        if node is not None and isinstance(summary, dict):
+        if (
+            lifecycle != "started"
+            and isinstance(summary, dict)
+            and summary.get("event_type") == f"{base}.started"
+            and "completion" not in node
+        ):
             summary["finished_at_utc"] = event.get("timestamp_utc")
             summary["status"] = lifecycle
+            node["completion"] = _event_metadata(event)
             if "duration_ms" in event:
                 timing = node.setdefault("timing", {})
                 if isinstance(timing, dict):
@@ -2133,8 +2248,31 @@ def _append_readable_operation(
     operations[key] = _compact_event(event)
 
 
+def _event_metadata(event: Mapping[str, object]) -> dict[str, object]:
+    """Retain the ordering, identity, and correlation fields of an event.
+
+    Parameters
+    ----------
+    event: mapping of str to object
+        Structured trace event.
+
+    Returns
+    -------
+    dict[str, object]
+        Metadata sufficient to identify and order the original event.
+
+    """
+
+    fields = (
+        "sequence", "timestamp_utc", "elapsed_ms", "trace_id", "event_id",
+        "event_type", "component", "status", "turn_id", "span_id",
+        "parent_span_id", "started_elapsed_ms", "duration_ms",
+    )
+    return {field: event[field] for field in fields if field in event}
+
+
 def _compact_event(event: Mapping[str, object]) -> dict[str, object]:
-    """Remove repeated transport metadata from a readable event.
+    """Retain event metadata within the readable hierarchy.
 
     Parameters
     ----------
@@ -2149,18 +2287,7 @@ def _compact_event(event: Mapping[str, object]) -> dict[str, object]:
 
     """
 
-    compact: dict[str, object] = {
-        "event": {
-            "status": event.get("status"),
-            "sequence": event.get("sequence"),
-            "timestamp_utc": event.get("timestamp_utc"),
-        },
-    }
-    summary = compact["event"]
-    if isinstance(summary, dict):
-        for field in ("span_id", "parent_span_id"):
-            if field in event:
-                summary[field] = event[field]
+    compact: dict[str, object] = {"event": _event_metadata(event)}
     timing: dict[str, object] = {}
     if "duration_ms" in event:
         timing["operation_duration_ms"] = event["duration_ms"]
