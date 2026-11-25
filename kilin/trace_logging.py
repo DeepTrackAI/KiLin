@@ -13,9 +13,10 @@ and other sensitive information.
 Artifacts returned by this implementation are inline JSON records rather than
 separately stored artifact files.
 
-Event writes are serialized within one logger. A stable companion-file lock
-excludes simultaneous writers in the current or another process; this is not
-a multi-file transaction or protection against nonparticipating programs.
+Event writes are serialized within one logger. Conversation traces retain
+an exclusive companion-file lock. Project traces and the shared numbering
+counter take short write leases instead. These locks are not a multi-file
+transaction or protection against nonparticipating programs.
 I/O failure handling applies to event writes according to the configuration.
 Direct conversation-state updates propagate write failures and restore their
 previous in-memory state, preventing later events from committing an aborted
@@ -27,7 +28,8 @@ number, including gaps in the existing numbering. Numbering is fixed for the
 lifetime of each logger, so rewriting its accumulated events does not append
 duplicate records. Turn identifiers group events within a logger run; reusing
 an identifier in a later run creates a separate readable turn rather than
-modifying a saved one. Event sequence numbers remain local to each run.
+modifying a saved one. Event sequence numbers are shared across managed
+project traces and remain local to a run for standalone loggers.
 
 Key Features
 ------------
@@ -81,7 +83,7 @@ Module Structure
 
 - ``TraceLogger``
 
-    Collect ordered events and write a grouped conversation-trace JSON file.
+    Collect ordered events and write grouped conversation or project traces.
 
 - ``TraceSink``
 
@@ -301,12 +303,12 @@ class TraceConfig:
 
 
 class TraceLogger:
-    """Collect ordered events and write a grouped conversation-trace JSON file.
+    """Collect ordered events and write grouped diagnostic traces.
 
     Construction resolves the output path, creates its parent directory,
     optionally loads prior grouped state, and emits the initial event. Event
-    mutation is guarded by this instance's lock; different instances or
-    processes are excluded by an exclusive conversation-file lock.
+    mutation is guarded by this instance's lock. Conversation writers retain
+    exclusive ownership; shared project writers take short write leases.
 
     Parameters
     ----------
@@ -316,6 +318,11 @@ class TraceLogger:
     default_directory: str | pathlib.Path
         Fallback output directory when the configuration does not name an exact
         JSON file.
+    project_directory: str | pathlib.Path | None, optional
+        Workspace root, or None to infer it from the trace path.
+    scope: {"conversation", "project"}, optional
+        Conversation checkpoint or shared project diagnostics. Defaults to
+        "conversation".
 
     Attributes
     ----------
@@ -328,6 +335,10 @@ class TraceLogger:
         Alias of output_path; there is no separate readable-output file.
     trace_id: str
         Random correlation identifier for the current logger instance.
+    scope: str
+        Conversation or project trace role.
+    sequence_scope: str
+        Project-wide or standalone logger sequence namespace.
     enabled: bool
         True for this concrete sink; it does not reflect the private
         closed/failed flags.
@@ -358,6 +369,8 @@ class TraceLogger:
         Merge resumable conversation state into this same JSON document.
     reset_conversation_state()
         Clear retained conversation state and readable conversation records.
+    flush()
+        Publish pending diagnostic events without rewriting a clean trace.
     close(*, emit_event=True)
         Finish the logger and release exclusive file ownership.
 
@@ -375,12 +388,12 @@ class TraceLogger:
     Enabled tracing captures available detailed diagnostics, potentially
     including sensitive data. Artifacts are inline dictionaries.
     There is no append-only log or multi-file transaction. Opening a second
-    writer for the same canonical path raises ConversationLockedError.
+    conversation writer for the same path raises ConversationLockedError.
     Saved readable turns and conversation operations are retained;
     new records use numbers above the highest saved keys. Turn identifiers and
-    span identifiers group events only within one logger run. Event sequence
-    numbers and top-level event counts also describe the current run, not the
-    full lifetime of the conversation file.
+    span identifiers group events only within one logger run. Managed
+    workspaces share persistent event numbering across runs. Standalone
+    loggers use local numbering. Top-level counts describe the current run.
 
     """
 
@@ -451,6 +464,7 @@ class TraceLogger:
         self._previous_sessions: dict[str, object] = {}
         self._previous_incomplete = False
         self._last_readable_write = 0.0
+        self._pending_events = False
         self._active_span_id: ContextVar[str | None] = ContextVar(
             f"kilin_active_span_{id(self)}",
             default=None,
@@ -1071,7 +1085,9 @@ class TraceLogger:
         Removes resumable conversation state, saved readable turns and
         conversation-level operations, and conversation events accumulated by
         the current logger run. Non-conversation sessions and events remain so
-        a reset can continue using the same loaded models and project context.
+        a standalone reset can continue using the same loaded models and
+        project context. For project-numbered archives, all previously
+        recorded events remain in the archive rather than being duplicated.
 
         This method changes only in-memory logger state. It does not write,
         archive, delete, or recreate the output file. A subsequent event or
@@ -1092,6 +1108,7 @@ class TraceLogger:
                 # The archive already owns these numbered events.
                 self._previous_sessions = {}
                 self._events = []
+                self._pending_events = False
                 self._previous_incomplete = False
             else:
                 self._previous_sessions.pop(CONVERSATION_SESSION_KEY, None)
@@ -1106,12 +1123,13 @@ class TraceLogger:
     def flush(self) -> None:
         """Publish pending diagnostics before moving the trace file.
 
-        Optional diagnostic failures follow the configured policy.
+        Already published traces are left byte-for-byte unchanged. Optional
+        diagnostic failures follow the configured policy.
 
         """
 
         with self._lock:
-            if self._closed or self._failed:
+            if self._closed or self._failed or not self._pending_events:
                 return
             try:
                 self._write_readable_trace()
@@ -1167,6 +1185,7 @@ class TraceLogger:
 
         try:
             self._events.append(event)
+            self._pending_events = True
             now = perf_counter()
             event_type = str(event["event_type"])
             if (
@@ -1194,8 +1213,8 @@ class TraceLogger:
 
         A uniquely created temporary JSON file replaces the target while
         the exclusive companion-file lock is held. This is not an
-        immutable snapshot history or multi-file transaction. Other KíLín
-        writers cannot open this path until this logger releases ownership.
+        immutable snapshot history or multi-file transaction. Conversation
+        writers retain ownership; project writers publish under short leases.
 
         """
 
@@ -1227,6 +1246,7 @@ class TraceLogger:
             write_project_trace(
                 self.readable_path, self.trace_id, current_sessions, metadata
             )
+            self._pending_events = False
             return
         sessions = deepcopy(self._previous_sessions)
         for key, value in current_sessions.items():
@@ -1280,6 +1300,7 @@ class TraceLogger:
         payload = {**metadata, "sessions": sessions}
         content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
         atomic_write_text(self.readable_path, content)
+        self._pending_events = False
 
     def _readable_event(
         self,

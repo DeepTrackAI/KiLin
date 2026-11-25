@@ -29,6 +29,16 @@ Module Structure
 
   Update the shared project trace under short-lived ownership.
 
+Examples
+--------
+>>> from pathlib import Path
+>>> from tempfile import TemporaryDirectory
+>>> from kilin._trace_project import ProjectTraceSequence
+>>> with TemporaryDirectory() as directory:
+...     counter = ProjectTraceSequence(Path(directory))
+...     assert counter.next() == 1
+...     assert counter.next() == 2
+
 """
 
 from __future__ import annotations
@@ -216,7 +226,14 @@ class ProjectTraceSequence:
     """
 
     def __init__(self, directory: Path) -> None:
-        """Remember the shared metadata path without writing it."""
+        """Remember the shared metadata path without writing it.
+
+        Parameters
+        ----------
+        directory: pathlib.Path
+            Managed trace directory of a single workspace.
+
+        """
 
         self.path = directory / _SEQUENCE_NAME
 

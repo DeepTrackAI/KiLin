@@ -73,6 +73,10 @@ fixed historical metadata value, not a configuration option. Existing JSON
 files with a `"standard"` or `"forensic"` marker remain readable. Previously
 stored events are preserved when reopening, without retroactive filtering.
 
+Managed workspaces use shared event numbering across conversation and project
+traces. See [Trace architecture](trace_architecture.md) for the files,
+sequence scope, shared ownership, and recording-completeness limitations.
+
 Tracing only captures information that the execution components expose:
 external backends and custom tools may not offer every diagnostic detail.
 Token IDs are included when available; embeddings are included only when

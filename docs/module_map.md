@@ -213,6 +213,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/writing_check/_scope.py`](../kilin/tools/writing_check/_scope.py) | Choose the part of a document a question asks to check. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/writing_check/tool.py`](../kilin/tools/writing_check/tool.py) | Tool ``writing_check``: check the grammar and style of a document. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tool_settings.py`](../kilin/tool_settings.py) | List and change the tool settings of one KíLín project. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
+| [`kilin/_trace_project.py`](../kilin/_trace_project.py) | Coordinate project-wide event numbering and shared trace publication. | [Trace architecture](trace_architecture.md) | [Project trace tests](../tests/kilin/test__trace_project.py) |
 | [`kilin/trace_logging.py`](../kilin/trace_logging.py) | Record structured execution events and resumable conversation state. | [Trace recording](trace_recording.md) | [Core tests](../tests/kilin/) |
 | [`kilin/workspace.py`](../kilin/workspace.py) | Copy selected local sources into a managed multi-source workspace. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
 | [`kilin/workspace_resources.py`](../kilin/workspace_resources.py) | Represent packaged resources installed into a KíLín project workspace. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
@@ -234,9 +235,10 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Source pipeline | 23 |
 | Tool extension contracts | 27 |
 | Tool packages | 2 |
+| Trace architecture | 1 |
 | Trace recording | 1 |
 
-**Total production Python modules: 194.**
+**Total production Python modules: 195.**
 
 ## Non-Python resources and UI assets
 

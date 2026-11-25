@@ -495,12 +495,12 @@ class ChatEngine:
 
     @property
     def active_trace(self) -> TraceSink:
-        """Return the active project trace or a harmless no-op trace.
+        """Return the active conversation trace or a harmless no-op trace.
 
         Returns
         -------
         TraceSink
-            The active project trace or a harmless no-op trace.
+            The active conversation trace or a harmless no-op trace.
 
         """
 

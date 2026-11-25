@@ -50,10 +50,16 @@ new numbers. Optional trace-write failures retain the existing warning/raise
 policy; the incomplete flag is persisted on a best-effort basis. The replay
 validator must independently check for gaps and missing data.
 
-## Scope of PR0A
+## Recording coverage
 
 The GUI maintains a project trace alongside the active conversation trace.
 Conversation switching and archival retain their existing ownership rules.
-Project-operation routing and complete recording of workspace operations are
-introduced separately in PR0B; conversation operations are covered by PR0C.
-This PR alone does not make a workspace replayable.
+Before archival, pending diagnostics are published; a trace that already
+contains all recorded events is left byte-for-byte unchanged.
+
+The trace architecture establishes the event identity and ownership contract.
+It does not itself redirect existing project operations or guarantee that
+every user operation is recorded. Complete workspace replay also requires
+explicit recording of project and conversation operations and independent
+validation of the recording. See [Trace recording](trace_recording.md) for
+the diagnostic activation and failure policy.
