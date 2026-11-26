@@ -948,6 +948,97 @@ class TestRAGConversationPersistence(unittest.TestCase):
              "max_new_tokens": 128},
         )
 
+    def test_switch_rejects_trace_mode_changes_before_side_effects(
+        self,
+    ) -> None:
+        """Keep the active state, lease and sinks on either mode mismatch."""
+
+        from kilin.conversation_ownership import ConversationFileLock
+
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                session = _session(self.root / str(enabled))
+                previous = session.conversation_path
+                current_trace = MagicMock(enabled=enabled)
+                project_trace = MagicMock(enabled=enabled)
+                session.trace = current_trace
+                session.project_trace = project_trace
+                session._owns_trace = True
+                session.chat_session.trace = current_trace
+                session.embedding_session.trace = current_trace
+                session._router_session = MagicMock(trace=current_trace)
+                turns = [_turn("Keep this conversation")]
+                session.turns = turns
+                session._checkpoint_id = "previous-checkpoint"
+                target = (
+                    session.project.logs / "new/conversation_next.json"
+                ).resolve()
+                requested = MagicMock(
+                    enabled=not enabled, output_path=target
+                )
+                with ConversationFileLock(previous) as owner, patch.object(
+                    session, "_load_conversation", return_value=([], [], None)
+                ) as load:
+                    session._conversation_ownership = owner
+                    with self.assertRaisesRegex(
+                        ValueError, "Project and conversation tracing"
+                    ):
+                        session.switch_conversation(target, trace=requested)
+                    self.assertTrue(owner.holds(previous))
+                    self.assertIs(session._conversation_ownership, owner)
+                self.assertFalse(target.parent.exists())
+                load.assert_not_called()
+                self.assertIs(session.trace, current_trace)
+                self.assertIs(session.project_trace, project_trace)
+                self.assertTrue(session._owns_trace)
+                self.assertEqual(session.conversation_path, previous)
+                self.assertIs(session.turns, turns)
+                self.assertEqual(session._checkpoint_id, "previous-checkpoint")
+                self.assertIs(session.chat_session.trace, current_trace)
+                self.assertIs(session.embedding_session.trace, current_trace)
+                self.assertIs(session._router_session.trace, current_trace)
+                session.chat_session.reset.assert_not_called()
+                current_trace.close.assert_not_called()
+                project_trace.close.assert_not_called()
+                requested.close.assert_not_called()
+
+    def test_switch_preserves_shared_sink_and_borrowed_trace_ownership(
+        self,
+    ) -> None:
+        """Retain borrowed sinks across matching-mode switches and close."""
+
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                session = _session(self.root / str(enabled))
+                previous = MagicMock(enabled=enabled)
+                project_trace = MagicMock(enabled=enabled)
+                session.trace = previous
+                session.project_trace = project_trace
+                session._owns_project_trace = False
+                target = (
+                    session.project.logs / "traces/conversation_next.json"
+                ).resolve()
+                requested = MagicMock(enabled=enabled, output_path=target)
+                session._router_session = MagicMock(trace=previous)
+                with patch.object(
+                    session, "_load_conversation", return_value=([], [], None)
+                ):
+                    restored = session.switch_conversation(
+                        target, trace=requested
+                    )
+                try:
+                    self.assertEqual(restored, [])
+                    self.assertIs(session.project_trace, project_trace)
+                    self.assertIs(session.trace, requested)
+                    self.assertIs(session._router_session.trace, requested)
+                    self.assertFalse(session._owns_trace)
+                    self.assertFalse(session._owns_project_trace)
+                finally:
+                    session.close()
+                previous.close.assert_not_called()
+                requested.close.assert_not_called()
+                project_trace.close.assert_not_called()
+
     def test_switch_rejects_closed_session_and_mismatched_trace(self) -> None:
         """Reject switching after close or with an unrelated trace."""
         session = self.session

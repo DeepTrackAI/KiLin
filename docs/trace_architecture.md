@@ -50,6 +50,13 @@ new numbers. Optional trace-write failures retain the existing warning/raise
 policy; the incomplete flag is persisted on a best-effort basis. The replay
 validator must independently check for gaps and missing data.
 
+Missing-counter discovery includes managed JSON traces with custom names and
+case variants such as `conversation.json` or `custom.JSON`, including archived
+files. Initialization stops if a history directory or JSON candidate is
+unreadable or linked, because the recorder cannot establish that older
+numbered events are absent. Ordinary counter allocation does not rescan the
+trace history.
+
 ## Recording coverage
 
 The GUI maintains a project trace alongside the active conversation trace.
@@ -61,9 +68,12 @@ contains all recorded events is left byte-for-byte unchanged.
 
 Project creation starts its trace only after the destination has been safely
 reserved. The creation trace is owned by workspace preparation and is closed
-before the GUI activates the project. Rollback removes trace files created by
-an unsuccessful preparation attempt together with other new workspace files.
-A creation conflict does not write to the occupied destination.
+before the profile is published. Its completion and closing writes remain
+inside the creation rollback boundary: a strict diagnostic failure removes
+the new trace and other files owned by that attempt. Warning policy preserves
+successful creation and marks recording incomplete where possible. A creation
+conflict does not write to the occupied destination. Caller-owned sinks retain
+their caller's lifetime and receive completion after profile publication.
 
 A successful creation or subsequent import emits `workspace.prepare.started`,
 `workspace.source.copied` for each processed source, and
@@ -115,7 +125,14 @@ model, tool, behavior and card settings changes are traced in the project.
 `gui.project.closed` records the selected conversation when the GUI releases
 the project. A standalone RAG session similarly records its initialization and
 closure in its project sink; switching its conversation does not change that
-sink's lifetime.
+sink's lifetime. The replacement conversation sink must have the same tracing
+activation as the project sink. A mismatch is rejected before any session or
+ownership change. Changing activation requires closing the session and
+opening another with the desired configuration.
+
+If RAG initialization fails, constructed model sessions and owned trace sinks
+are closed, including when final readiness notification fails. Cleanup errors
+are attached to the original exception rather than replacing it.
 
 ### Conversation operations
 
@@ -143,6 +160,11 @@ original request is not confused with a branch's inherited turn. Settings
 changes performed while answering are part of that question operation, not
 additional user commands. Direct RAG calls retain their own core turn input
 and checkpoint diagnostics, but are not GUI command recordings.
+
+The GUI request span also covers delivery of the saved answer to the frontend.
+A delivery failure can therefore fail that outer span after a successful core
+turn and checkpoint. Validation must inspect the persisted checkpoint and
+core outcome independently of the GUI request's terminal status.
 
 Routing and tool choices record a proposal and decision (or failure) with a
 common interaction ID and turn correlation. Decisions retain whether a

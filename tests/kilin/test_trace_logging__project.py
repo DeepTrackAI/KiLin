@@ -9,6 +9,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
+import warnings
 
 from kilin import trace_logging
 from kilin.trace_logging import (
@@ -193,6 +194,71 @@ class TestProjectTraceLogger(unittest.TestCase):
         logger.close()
         numbers = self._numbers(archive) + self._numbers(name)
         self.assertEqual(sorted(numbers), list(range(1, len(numbers) + 1)))
+
+    def test_missing_counter_cannot_restart_custom_trace(self):
+        """Both error policies preserve surviving events and lost counters."""
+
+        cases = (
+            ("conversation.json", "conversation.json"),
+            ("custom.json", "new.json"),
+            ("conversation_old.JSON", "conversation_new.json"),
+            ("archived/custom.JSON", "conversation_new.json"),
+        )
+        for number, (original, target) in enumerate(cases):
+            with self.subTest(original=original, target=target):
+                root = self.root / str(number)
+                root.mkdir()
+                (root / "profile.ini").touch()
+                directory = root / "logs" / "traces"
+                path = directory / original
+                logger = TraceLogger(
+                    TraceConfig(enabled=True, output_path=path),
+                    default_directory=directory,
+                    project_directory=root,
+                )
+                logger.emit("test.before", component="tests")
+                logger.close()
+                before = path.read_bytes()
+                self.assertEqual(
+                    sorted(_event_numbers(json.loads(before)["sessions"])),
+                    [1, 2, 3],
+                )
+                counter = directory / ".sequence.json"
+                counter.unlink()
+                output = directory / target
+                for policy in ("raise", "warn"):
+                    with self.subTest(policy=policy):
+                        config = TraceConfig(
+                            enabled=True, output_path=output,
+                            failure_policy=policy,
+                        )
+                        if policy == "raise":
+                            with self.assertRaisesRegex(
+                                RuntimeError, "counter is missing"
+                            ):
+                                unexpected = TraceLogger(
+                                    config, default_directory=directory,
+                                    project_directory=root,
+                                )
+                                unexpected.close()
+                        else:
+                            with warnings.catch_warnings(record=True) as seen:
+                                warnings.simplefilter("always", RuntimeWarning)
+                                failed = TraceLogger(
+                                    config, default_directory=directory,
+                                    project_directory=root,
+                                )
+                                failed.emit("test.after", component="tests")
+                                failed.close()
+                            self.assertTrue(any(
+                                issubclass(item.category, RuntimeWarning)
+                                and "counter is missing" in str(item.message)
+                                for item in seen
+                            ))
+                        self.assertFalse(counter.exists())
+                        self.assertEqual(path.read_bytes(), before)
+                        if original != target:
+                            self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

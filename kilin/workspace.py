@@ -387,6 +387,8 @@ def prepare_sources_workspace(
         If paths, settings, project type, or selections are invalid.
     OSError
         If exclusive creation, copying, or profile publication fails.
+    RuntimeError
+        If an owned trace fails under the strict diagnostic policy.
 
     Notes
     -----
@@ -394,6 +396,9 @@ def prepare_sources_workspace(
     or permits overwriting a destination. Use open_project for read-only
     opening and add_project_sources for intentional cumulative imports.
     profile.ini is published last; failures roll back this attempt's entries.
+    Owned completion diagnostics and trace closure precede publication so
+    strict diagnostic failures also roll back. Caller-owned diagnostics
+    complete after publication, and this function never closes their sink.
     Copying provides organization, not an execution sandbox.
 
     """
@@ -647,7 +652,7 @@ def _prepare_sources_workspace(
         else NullTraceLogger()
     )
     owned_trace = None
-    committed = False
+    owned_creation = False
     if isinstance(trace, TraceConfig) and trace.output_path is not None:
         raise ValueError("Workspace creation allocates its own trace path.")
     if type_id not in PROJECT_TYPE_IDS:
@@ -729,6 +734,31 @@ def _prepare_sources_workspace(
             workspace, type_id, settings=settings, allocate=allocate,
         )
     )
+
+    def complete(prepared: QAProject) -> None:
+        """Record successful source preparation for the resolved project.
+
+        Parameters
+        ----------
+        prepared: QAProject
+            Provisional owned creation or validated existing project.
+
+        """
+
+        active_trace.emit(
+            "workspace.prepare.completed",
+            component="workspace",
+            data={
+                "batch_id": batch_id,
+                "operation": "import" if existing is not None else "create",
+                "project_directory": str(prepared.root),
+                "source_directory": str(prepared.source),
+                "sources_manifest": str(manifest_path),
+                "source_count": len(records),
+            },
+            duration_ms=(perf_counter() - started_at) * 1000,
+        )
+
     try:
         with preparation as (project, journal):
             workspace = project.root
@@ -752,6 +782,9 @@ def _prepare_sources_workspace(
                         journal.note(ConversationFileLock(path).lock_path)
                 owned_trace = _project_trace_logger(trace, workspace)
                 active_trace = owned_trace
+                owned_creation = (
+                    existing is None and isinstance(owned_trace, TraceLogger)
+                )
             batch_id = active_trace.new_id("source_batch")
             active_trace.emit(
                 "workspace.prepare.started",
@@ -842,27 +875,30 @@ def _prepare_sources_workspace(
                         "preserved_files": preserved,
                     },
                 )
-        committed = True
+            if owned_creation:
+                # Finalize the owned diagnostics while all their files are
+                # still journaled. A strict failure must prevent publication.
+                complete(project)
+                owned_trace.close()
         prepared = open_project(workspace)
-        active_trace.emit(
-            "workspace.prepare.completed",
-            component="workspace",
-            data={
-                "batch_id": batch_id,
-                "operation": "import" if existing is not None else "create",
-                "project_directory": str(prepared.root),
-                "source_directory": str(prepared.source),
-                "sources_manifest": str(manifest_path),
-                "source_count": len(records),
-            },
-            duration_ms=(perf_counter() - started_at) * 1000,
-        )
+        if not owned_creation:
+            # Borrowed sinks cannot be rolled back with a new workspace;
+            # report completion only after the profile is published.
+            complete(prepared)
+            if isinstance(owned_trace, TraceLogger):
+                owned_trace.close()
         return prepared
-    finally:
+    except BaseException as error:
         if isinstance(owned_trace, TraceLogger):
-            # Failed creation rolls back the trace with the workspace. Do
-            # not recreate the rolled-back directory by closing the logger.
-            owned_trace.close(emit_event=committed)
+            # Rollback may already have removed every trace file. Release
+            # resources without writing, preserving the initiating failure.
+            try:
+                owned_trace.close(emit_event=False)
+            except BaseException as cleanup_error:
+                error.add_note(
+                    f"Project trace cleanup also failed: {cleanup_error!r}"
+                )
+        raise
 
 
 def _unique_name(source: Path, used: set[str], root: Path) -> str:

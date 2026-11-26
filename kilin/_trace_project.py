@@ -38,7 +38,7 @@ Examples
 >>> from tempfile import TemporaryDirectory
 >>> from kilin._trace_project import ProjectTraceSequence
 >>> with TemporaryDirectory() as directory:
-...     counter = ProjectTraceSequence(Path(directory))
+...     counter = ProjectTraceSequence(Path(directory) / "logs" / "traces")
 ...     assert counter.next() == 1
 ...     assert counter.next() == 2
 
@@ -208,6 +208,24 @@ def _read_object(path: Path) -> dict[str, object]:
     return value
 
 
+def _raise_scan_error(error: OSError) -> None:
+    """Abort history discovery when a directory cannot be inspected.
+
+    Parameters
+    ----------
+    error: OSError
+        Directory traversal failure reported by ``Path.walk``.
+
+    Raises
+    ------
+    OSError
+        The original failure; inaccessible history is not absent history.
+
+    """
+
+    raise error
+
+
 class ProjectTraceSequence:
     """Allocate a shared event number for a workspace trace.
 
@@ -257,22 +275,54 @@ class ProjectTraceSequence:
         OSError
             If the counter is malformed or missing for a versioned project.
 
+        Notes
+        -----
+        Missing-counter discovery recognizes project-numbered records under
+        any supported JSON filename. Canonical trace names remain strict;
+        malformed unrelated JSON is ignored. Unreadable or linked candidates
+        and history directories cannot establish that history is absent, so
+        they block initialization. Existing counters require no history scan.
+
         """
 
         if not self.path.exists():
             # Never recycle numbers if the counter disappeared. Older,
             # unversioned diagnostic traces do not certify a sequence.
             logs = self.path.parent.parent
-            for candidate in logs.rglob("*.json"):
-                if candidate.name != "project.json" and not (
-                    candidate.name.startswith("conversation_")
-                ):
-                    continue
-                if candidate.is_symlink():
-                    raise OSError(f"Linked trace file: {candidate}")
-                payload = _read_object(candidate)
-                if payload.get("sequence_scope") == "project":
-                    raise OSError("Project trace sequence counter is missing.")
+            if logs.is_symlink():
+                raise OSError(f"Linked trace directory: {logs}")
+            for folder, directories, files in logs.walk(
+                on_error=_raise_scan_error, follow_symlinks=False
+            ):
+                for name in directories + files:
+                    candidate = folder / name
+                    linked = candidate.is_symlink()
+                    if linked and candidate.is_dir():
+                        raise OSError(f"Linked trace directory: {candidate}")
+                    if candidate.suffix.lower() != ".json":
+                        continue
+                    if linked:
+                        raise OSError(f"Linked trace file: {candidate}")
+                    if candidate.name == "project.json" or (
+                        candidate.name.startswith("conversation_")
+                    ):
+                        payload = _read_object(candidate)
+                    else:
+                        if not candidate.is_file():
+                            continue
+                        try:
+                            payload = json.loads(
+                                candidate.read_text(encoding="utf-8")
+                            )
+                        except (ValueError, UnicodeError):
+                            # Unrelated logs need not be trace objects.
+                            continue
+                        if not isinstance(payload, dict):
+                            continue
+                    if payload.get("sequence_scope") == "project":
+                        raise OSError(
+                            "Project trace sequence counter is missing."
+                        )
             return {
                 "format_version": TRACE_FORMAT_VERSION,
                 "last_sequence": 0,

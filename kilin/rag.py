@@ -25,6 +25,9 @@ persistence. The session has side effects: initialization may create files,
 rebuild indexes, generate missing source cards with a separate model, and
 download missing model files according to the profile. ``trace=None``
 enables full tracing here, unlike the low-level chat and embedding classes.
+The shared project trace retains its activation and ownership through
+conversation switches. Failed initialization closes loaded models even when
+the final readiness diagnostics or progress callback raise.
 
 History and expanded evidence are not summarized automatically. Source-first
 intents enforce hard passage and estimated evidence-token budgets after
@@ -1133,7 +1136,8 @@ class RAGSession:
         Notes
         -----
         Attempts to close partially constructed model sessions after a
-        preparation exception. Trace construction occurs before model loading.
+        preparation exception, including failed readiness notifications.
+        Trace construction occurs before model loading.
         Heavy dependencies and model downloads are governed by the selected
         profile.
 
@@ -1208,9 +1212,10 @@ class RAGSession:
 
         Notes
         -----
-        ``__init__`` is responsible for releasing the acquired conversation
-        ownership and an owned logger if any preparation step raises, even
-        before model construction begins.
+        Model cleanup includes final readiness diagnostics and callbacks.
+        ``__init__`` releases acquired conversation ownership and owned
+        loggers if any preparation step raises, including steps before
+        model construction begins.
 
         """
 
@@ -1377,6 +1382,39 @@ class RAGSession:
                         if key in previous
                     }
                 )
+            self.embedding_session = embedding_session
+            self.chat_session = chat_session
+            self.chunks = chunks
+            self.source_cards = source_cards
+            self.source_card_vectors = source_card_vectors
+            self.indexes = indexes
+            self.index_status = status
+            self.source_changes = source_changes
+            self.turns = turns
+            self.router_model = resolved_router_model
+            self._router_session: ChatSession | None = None
+            # Keep the pool with its passages and router model. A GUI read
+            # of saved words does not cache an empty fallback as a generated
+            # pool.
+            self._suggestion_pool: (
+                tuple[list[Chunk], str | None, SuggestionWords] | None
+            ) = None
+            self._closed = False
+            self._project_diagnostics().emit(
+                "session.ready",
+                component="rag",
+                data={
+                    "index_status": self.index_status,
+                    "chunk_count": len(self.chunks),
+                    "turn_count": len(self.turns),
+                },
+                duration_ms=(perf_counter() - session_started_at) * 1000,
+            )
+            self._emit_progress(
+                "ready",
+                100.0,
+                f"KíLín ready. Index {self.index_status}.",
+            )
         except BaseException as error:
             try:
                 self._project_diagnostics().exception(
@@ -1401,39 +1439,6 @@ class RAGSession:
             # __init__ releases the owned trace and conversation lock on
             # every construction failure, including this one.
             raise
-
-        self.embedding_session = embedding_session
-        self.chat_session = chat_session
-        self.chunks = chunks
-        self.source_cards = source_cards
-        self.source_card_vectors = source_card_vectors
-        self.indexes = indexes
-        self.index_status = status
-        self.source_changes = source_changes
-        self.turns = turns
-        self.router_model = resolved_router_model
-        self._router_session: ChatSession | None = None
-        # Keep the pool with its passages and router model. A GUI read of
-        # saved words does not cache an empty fallback as a generated pool.
-        self._suggestion_pool: (
-            tuple[list[Chunk], str | None, SuggestionWords] | None
-        ) = None
-        self._closed = False
-        self._project_diagnostics().emit(
-            "session.ready",
-            component="rag",
-            data={
-                "index_status": self.index_status,
-                "chunk_count": len(self.chunks),
-                "turn_count": len(self.turns),
-            },
-            duration_ms=(perf_counter() - session_started_at) * 1000,
-        )
-        self._emit_progress(
-            "ready",
-            100.0,
-            f"KíLín ready. Index {self.index_status}.",
-        )
 
     def _project_diagnostics(self: RAGSession) -> TraceSink:
         """Return the shared project sink for preparation diagnostics.
@@ -2970,6 +2975,7 @@ class RAGSession:
         trace: TraceSink
             Caller-owned trace sink associated with the target conversation.
             When enabled, its output path must be the target conversation path.
+            Its enabled state must match the session's shared project sink.
 
         Returns
         -------
@@ -2981,8 +2987,8 @@ class RAGSession:
         RuntimeError
             If the session has already been closed.
         ValueError
-            If the path, saved state, restored history, or saved generation
-            settings are invalid.
+            If tracing activation differs, or the path, saved state, restored
+            history, or saved generation settings are invalid.
         OSError
             If saved state or trace writes cannot be accessed.
 
@@ -2993,11 +2999,20 @@ class RAGSession:
         A failed acquisition or JSON read leaves the active session unchanged.
         Later model/history reconfiguration is not fully transactional.
         Generation settings come from the last saved turn or profile defaults.
+        Switching preserves the shared project sink and its ownership.
+        A tracing mismatch is rejected before resolving the target path
+        or changing conversation state or file ownership.
 
         """
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
+        project_trace = getattr(self, "project_trace", None)
+        if (
+            project_trace is not None
+            and project_trace.enabled != trace.enabled
+        ):
+            raise ValueError("Project and conversation tracing must agree.")
         target_path = self._resolve_conversation_path(conversation_path)
         _check_conversation_trace(trace, target_path)
         old_ownership = getattr(self, "_conversation_ownership", None)

@@ -35,6 +35,11 @@ events. This **does not disable conversation persistence**. The session still
 holds exclusive ownership of its conversation path and saves checkpoints
 there; see [conversation-file ownership](conversation_ownership.md).
 
+Tracing activation is fixed for a RAG session. `switch_conversation()` requires
+the new conversation sink to agree with the shared project sink's `enabled`
+value and rejects a mismatch before changing the active session. Close and
+reopen the RAG session to change tracing activation.
+
 `TraceConfig.include_embedding_vectors=True` is an independent opt-in for
 full numerical embedding vectors, which can be large. `failure_policy` stays
 independent and controls optional event-write errors (`"warn"` or `"raise"`);
@@ -49,8 +54,13 @@ requests this ordinary tracing behavior. Core callers can request it with
 `prepare_sources_workspace(..., trace=kilin.TraceConfig(enabled=True))`.
 The configuration must not specify a path because automatic allocation may
 choose a different destination. The preparation owns and closes this sink.
+Its final completion and closing writes occur before profile publication, so
+strict failures at either point still roll back the new workspace. Warning
+policy allows successful creation while marking the recording incomplete.
 Caller-owned sinks are also supported; omitting the argument preserves
-untraced low-level preparation. For a later import or synchronization, pass
+untraced low-level preparation. A caller-owned sink remains open and receives
+completion after publication; an exception from that diagnostic write cannot
+undo the published workspace. For a later import or synchronization, pass
 the opened project sink to `add_project_sources(..., trace=trace)` or
 `sync_project_sources(..., trace=trace)` respectively.
 
@@ -170,8 +180,11 @@ as they are emitted,
 but unwritten events cannot be recovered. Do not infer a successful answer
 from the mere presence of a traced turn operation.
 
-An answer that **fails** with an error records the failure in the trace and
-adds no turn; the GUI shows the error and puts the question back. An answer
+An answer that **fails before its checkpoint** records the failure in the trace
+and adds no turn; the GUI shows the error and puts the question back. A final
+GUI notification can fail after the turn is saved: the outer
+`gui.question.request` span may then fail while the checkpoint and successful
+core turn remain authoritative. An answer
 the model could not finish (for example, it reached its token limit) is
 different: the trace records `generation.incomplete`, and the turn **is**
 saved, with an answer explaining that no reliable result was produced and
