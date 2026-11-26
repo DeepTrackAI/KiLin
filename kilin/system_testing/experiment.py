@@ -1,4 +1,4 @@
-"""Represent one immutable reference workspace for system testing.
+"""Inspect, reproduce and compare a recorded system-testing workspace.
 
 Key Features
 ------------
@@ -6,6 +6,7 @@ Key Features
 - Validate on demand and reconstruct supported chronological commands.
 - Never modify, repair, or migrate the reference workspace.
 - Reproduce its validated operations in a separate new workspace.
+- Independently compare the original and reproduced recordings.
 
 Module Structure
 ----------------
@@ -24,6 +25,7 @@ Examples
 
 from pathlib import Path
 
+from .comparison import Comparison, compare
 from .replay import ProgressCallback, ReplayResult, replay
 from .timeline import TimelineOperation
 from .traces import read_recording
@@ -123,3 +125,39 @@ class Experiment:
 
         """
         return replay(self, destination, progress=progress)
+
+    def compare(
+        self, destination: str | Path | None = None, *,
+        embedding_model: str | None = None,
+        embedding_backend: str = "auto",
+        embedding_revision: str | None = None,
+    ) -> Comparison:
+        """Compare an existing replay without re-executing either workspace.
+
+        Parameters
+        ----------
+        destination: str | pathlib.Path | None, optional
+            Existing sibling replay workspace, defaulting to the usual name.
+        embedding_model: str | None, optional
+            Explicit local or cached evaluation embedding model. Defaults to
+            None, so deterministic metrics do not require model inference.
+        embedding_backend: str, optional
+            Evaluation backend preference. Defaults to ``"auto"``.
+        embedding_revision: str | None, optional
+            Evaluation model revision. Defaults to None.
+
+        Returns
+        -------
+        Comparison
+            Fresh validation, alignment and quantitative comparison snapshot.
+
+        Notes
+        -----
+        Both closed recordings are read independently. No in-memory replay
+        result or previous report is required. Optional embedding evaluation
+        uses the same model instance on both sides without downloads.
+
+        """
+        return compare(self, destination, embedding_model=embedding_model,
+                       embedding_backend=embedding_backend,
+                       embedding_revision=embedding_revision)

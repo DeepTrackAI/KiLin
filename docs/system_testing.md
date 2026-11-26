@@ -1,4 +1,4 @@
-# System testing: reference inspection and replay
+# System testing: reference inspection, replay, and comparison
 
 The `kilin.system_testing` package inspects a closed, recorded project as a
 reference experiment. It reads the ordinary project and conversation traces,
@@ -6,6 +6,8 @@ including archived conversations, and reconstructs the recorded user commands
 in project-wide sequence order. Inspection does not start the GUI, initialize
 an inference backend, load models, or download resources. Replay is a separate,
 explicit operation that runs the validated history in a new workspace.
+Comparison reads both existing recordings independently; optional embedding
+evaluation is explicitly enabled by the researcher.
 
 See [trace architecture](trace_architecture.md) for the recording format and
 [conversation ownership](conversation_ownership.md) for checkpoint and archive
@@ -108,22 +110,26 @@ warnings; no model availability or inference-quality check is performed.
 
 Keep the experiments in a separate repository (for example,
 `KiLinSystemTests`), with original and replay workspaces at the same level so
-both can be opened in the ordinary GUI. Notebooks and the eventual comparison
+both can be opened in the ordinary GUI. Notebooks and the comparison
 reports also belong in that repository. The replay implementation itself
 belongs to KíLín; it does not require an experiment repository to be initialized
 as a Git repository.
 
 ```text
 KiLinSystemTests/
-    010_literature_original/
-    010_literature_replay/       # created by replay()
-    010_literature.ipynb
-    020_code_original/
-    020_code_replay/
-    020_code.ipynb
+    run_all.ipynb
+    workspaces/
+        010_literature_original/
+        010_literature_replay/    # created by replay()
+        010_literature.ipynb
+        010_literature_comparison.json
+        010_literature_comparison.md
+        020_code_original/
+        020_code_replay/
+        020_code.ipynb
 ```
 
-From a notebook in this directory:
+From a notebook in `workspaces/`:
 
 ```python
 from kilin.system_testing import Experiment, ReplayError
@@ -224,6 +230,125 @@ is closed if possible and retained for diagnosis; it is never presented as a
 successful replay. Invalid original recordings raise `InvalidRecordingError`
 before replay. Destination conflicts are rejected before execution.
 
+## Comparing recorded workspaces
+
+Once the replay exists, comparison can run independently, including from a
+fresh process using the current package. It does not require a `ReplayResult`,
+load the original answering model, or issue another question:
+
+```python
+from kilin.system_testing import Experiment
+
+experiment = Experiment("010_literature_original")
+comparison = experiment.compare()
+comparison.display()
+paths = comparison.save()
+print(paths)
+```
+
+`destination` optionally selects another sibling replay. Both workspaces
+must remain closed and stable throughout comparison. Validation errors are
+included in the report, and an invalid or missing replay is not treated as
+an empty successful run. No command pairs are inferred from invalid records.
+When both recordings validate but their operations diverge, only the
+unambiguous common prefix is paired. Matching uses recorded requests,
+source effects, conversation/turn identities, branch prefixes, and semantic
+user interactions, never answer similarity. A historical override may become
+identical to a new default: its submitted value must still be preserved,
+while the changed provenance remains observable. `comparison.complete`
+means the full valid command histories align, not that their outputs match
+or that every metric is available.
+
+`comparison.data` is a JSON-compatible snapshot with `format_version`,
+`original`, `replayed`, `alignment`, `summary`, `operations`, `final_state`,
+`embedding_evaluation`, `files`, and `report_issues`. The workspace sections
+include validation issues, recorded model/environment provenance, command
+counts, final catalogs, and token coverage. Alignment includes the mapped
+conversation IDs and turn UUIDs and any unmatched command suffixes. Each
+operation retains intermediate stage observations, source manifests and
+settings differences. Each matched committed question is counted once,
+including when its turn is inherited in multiple branches.
+
+### Metrics and coverage
+
+- Text: exact saved equality, normalized visible equality and multiset
+  token F1 (Dice overlap of words and punctuation). Normalization removes
+  model thinking blocks, applies Unicode NFC and collapses whitespace, but
+  retains case, punctuation and numbered citations. Empty pairs are not
+  assigned an invented similarity.
+- Evidence: Jaccard overlap of exact passages, source-file overlap, common
+  rank-prefix overlap, and mean absolute rank displacement of shared items.
+  Exact passage identity uses managed relative paths, line coordinates,
+  available symbol/section/cell metadata and text SHA-256. Scores and
+  generated chunk identifiers are not identities. Source-ranking channels
+  use source paths rather than passages. Ranking occurrences are paired by
+  recorded channel and ordinal, a descriptive comparison rather than proof
+  that the changed pipeline issued semantically identical searches.
+- Citations: numbered bracket citations are resolved against each saved
+  evidence list, so renumbering alone does not imply changed evidence. The
+  parser reports unresolved references and is syntactic; it does not check
+  whether cited evidence supports a claim or whether a bracketed number in
+  code is a citation.
+- Execution: recorded intents, tools, interaction proposals and decisions,
+  model-call provenance and available exact-text artifact metrics, event
+  counts, status, and durations. Only recorded token counts are used. Saved
+  turn totals and traced chat-call totals are separate observations, not
+  additive. Generated titles and diagnostics outside command intervals are
+  also retained. Nested inclusive timings are not a wall-time breakdown.
+  Cross-logger command timing uses recorded UTC boundaries when no matching
+  outer span duration is available.
+- Files: final regular files in `sources`, `templates` and `outputs` are
+  compared by relative path, size and SHA-256. Added, removed and changed
+  files are distinguished. Byte changes in generated files are not semantic
+  differences; indexes are neither copied nor judged by their bytes.
+
+Unavailable measurements are `None` in Python and `null` in JSON. Means
+include only available measurements and report available and total counts.
+Neither an empty evidence union nor a missing trace field is replaced by
+zero. Malformed optional diagnostic numbers are reported as unavailable.
+No composite quality score, pass threshold, LLM judge, or correctness verdict
+is computed.
+
+### Optional embedding evaluation
+
+For semantic answer comparison, explicitly choose a local or already cached
+embedding model, and preferably pin its revision for repeated experiments:
+
+```python
+comparison = experiment.compare(
+    embedding_model="your/local-or-cached-embedding-model",
+    embedding_backend="auto",
+    embedding_revision=None,
+)
+comparison.display()
+comparison.save(overwrite=True)
+```
+
+A single evaluator instance embeds both normalized visible answers and is
+closed after use. Cosine similarity is reported in [-1, 1]. The evaluator
+uses the same model on both sides regardless of their original embedding
+settings. The evaluation model, backend, requested revision and resolved
+source are reported when available. Downloads, retries and fallback models
+are not requested. Model loading or embedding errors leave the metric
+unavailable with an explanation. No additional answer-generation calls are
+made. With `embedding_model=None` (the default), no model is loaded.
+
+### Reports and batch execution
+
+`display()` renders Markdown in a notebook or prints it in a terminal.
+`save()` writes `<experiment>_comparison.json` and
+`<experiment>_comparison.md` beside the workspaces, removing the original's
+`_original` suffix. Existing regular report files are replaced only with
+`overwrite=True`. This flag applies to reports, not replay workspaces.
+Each report file is published atomically, but the pair is not a filesystem
+transaction. The JSON report contains saved answers and potentially
+sensitive trace observations; keep it with the private experiment data.
+
+A root-level batch notebook can enumerate `workspaces/*_original` and
+compare each independently. Leave replay disabled unless explicitly
+requested, never automatically delete an existing replay, and collect errors
+per experiment so a divergent run does not suppress unrelated comparisons.
+
 ## Limits and ownership
 
 Inspection assumes a stable, closed workspace. It does not acquire a writer
@@ -244,7 +369,6 @@ It does not hold a lock on the reference and must not be used with concurrent
 writers. Environment and real-model availability remain the researcher's
 responsibility. Replay establishes that the recorded operations and their
 required durable effects were reproduced, not that regenerated model outputs
-are identical or correct. Quantitative comparison and reporting remain
-separate from this API.
+are identical or correct. Comparison is a separate read-only operation and never executes replay.
 
 The [module map](module_map.md) lists the package modules and their tests.

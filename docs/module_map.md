@@ -213,14 +213,18 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/writing_check/_scope.py`](../kilin/tools/writing_check/_scope.py) | Choose the part of a document a question asks to check. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/writing_check/tool.py`](../kilin/tools/writing_check/tool.py) | Tool ``writing_check``: check the grammar and style of a document. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tool_settings.py`](../kilin/tool_settings.py) | List and change the tool settings of one KíLín project. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
-| [`kilin/system_testing/__init__.py`](../kilin/system_testing/__init__.py) | Expose experiment inspection, validation, and replay records. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
-| [`kilin/system_testing/experiment.py`](../kilin/system_testing/experiment.py) | Represent, inspect, and independently replay a reference workspace. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/__init__.py`](../kilin/system_testing/__init__.py) | Expose experiment inspection, validation, replay, and comparison records. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/experiment.py`](../kilin/system_testing/experiment.py) | Represent, inspect, replay, and compare recorded workspaces. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/replay.py`](../kilin/system_testing/replay.py) | Execute validated chronological commands and map their outcomes. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/_replay_sources.py`](../kilin/system_testing/_replay_sources.py) | Plan historical source selections and verify reproduced inventories. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/_replay_interactions.py`](../kilin/system_testing/_replay_interactions.py) | Match recorded responses against live prompts without guessing. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/traces.py`](../kilin/system_testing/traces.py) | Decode original diagnostic events and compact span terminals. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/timeline.py`](../kilin/system_testing/timeline.py) | Reconstruct chronological recorded user commands. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/validation.py`](../kilin/system_testing/validation.py) | Validate recording completeness, sources, settings, and durable history. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/comparison.py`](../kilin/system_testing/comparison.py) | Compare independent workspaces and assemble quantitative observations. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/_comparison_alignment.py`](../kilin/system_testing/_comparison_alignment.py) | Align recorded operations and reconstruct persistent identity mappings. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/_comparison_metrics.py`](../kilin/system_testing/_comparison_metrics.py) | Measure text, retrieval, call, timing, and retained file observations. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/_comparison_report.py`](../kilin/system_testing/_comparison_report.py) | Render and publish sibling JSON and Markdown comparison reports. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/_trace_configuration.py`](../kilin/_trace_configuration.py) | Encode complete effective configurations and construct and verify compact references. | [Trace architecture](trace_architecture.md) | [Configuration trace tests](../tests/kilin/test_trace_logging__configuration.py) |
 | [`kilin/_trace_project.py`](../kilin/_trace_project.py) | Coordinate project-wide event numbering and shared trace publication. | [Trace architecture](trace_architecture.md) | [Project trace tests](../tests/kilin/test__trace_project.py) |
 | [`kilin/trace_logging.py`](../kilin/trace_logging.py) | Record structured execution events and resumable conversation state. | [Trace recording](trace_recording.md) | [Core tests](../tests/kilin/) |
@@ -242,13 +246,13 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Project workspaces | 6 |
 | Retrieval pipeline | 32 |
 | Source pipeline | 23 |
-| System testing | 8 |
+| System testing | 12 |
 | Tool extension contracts | 27 |
 | Tool packages | 2 |
 | Trace architecture | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 204.**
+**Total production Python modules: 208.**
 
 ## Non-Python resources and UI assets
 
