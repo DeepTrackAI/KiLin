@@ -124,6 +124,50 @@ class TestReplay(unittest.TestCase):
             self.experiment.workspace
         ))
 
+    def test_rename_replays_close_and_reopen_in_fixed_directory(self):
+        """Restore the selected chat without moving the replay directory."""
+        first = self.fixture._ask("Before moving")
+        active = self.engine.active_conversation.conversation_id
+        original = self.experiment.workspace
+        moved = original.with_name("renamed_original")
+        self.engine.rename_project(moved.name)
+        self.fixture._ask("After moving")
+        self.engine.close()
+        experiment = Experiment(moved)
+        before = experiment_tests._snapshot(moved)
+        report = experiment.validate()
+        self.assertTrue(report.valid, report.issues)
+        with self._model():
+            result = experiment.replay(self.target)
+        self.assertTrue(result.validation.valid, result.validation.issues)
+        self.assertEqual(result.operation_count, len(report.operations))
+        self.assertEqual(result.workspace, self.target)
+        self.assertFalse(original.exists())
+        self.assertEqual([op.kind for op in result.validation.operations], [
+            "create_project", "ask", "close_project", "open_project",
+            "ask", "close_project",
+        ])
+        opening = result.validation.operations[3]
+        self.assertEqual(opening.request["conversation_id"],
+                         result.conversation_ids[active])
+        restored = opening.matching("conversation.restored")[0]
+        self.assertEqual(restored.details["turn_uuids"], [
+            result.turn_uuids[first.conversation_turn_uuid]
+        ])
+        changes = [d for d in result.differences
+                   if d.field == "project.relocation"]
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0].replayed["directory"], str(self.target))
+        comparison = experiment.compare(self.target)
+        self.assertTrue(comparison.complete, comparison.data["alignment"])
+        row = next(op for op in comparison.data["operations"]
+                   if "relocation" in op)
+        self.assertFalse(row["relocation"]["physical_rename_replayed"])
+        self.assertEqual(row["relocation"]["original"]["provenance"],
+                         "recorded")
+        self.assertIn("replay directory retained", comparison.markdown())
+        self.assertEqual(before, experiment_tests._snapshot(moved))
+
     def test_sources_are_imported_in_order_from_retained_copies(self):
         self.fixture._ask("First")
         folder = self.fixture.root / "folder"

@@ -157,6 +157,17 @@ def markdown_report(data: dict) -> str:
                           op["kind"], op["duration"]["original"]["ms"],
                           op["duration"]["replayed"]["ms"],
                           len(op["settings_differences"])))
+    for op in data["operations"]:
+        relocation = op.get("relocation")
+        if relocation is not None:
+            recorded = relocation["original"]
+            outcome = ("physical rename recorded" if relocation[
+                "physical_rename_replayed"] else "replay directory retained")
+            lines.extend(("", "Project relocation at original sequence "
+                          f"{op['original_sequence']}: "
+                          f"{_cell(recorded['source_directory'])} to "
+                          f"{_cell(recorded['destination_directory'])} "
+                          f"({recorded['provenance']}); {outcome}."))
     for side in ("original", "replayed"):
         unmatched = alignment[side + "_unmatched"]
         if unmatched:

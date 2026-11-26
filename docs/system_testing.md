@@ -29,13 +29,19 @@ semantics.
 - Do not manually alter templates, generated outputs, profile files, traces,
   indexes, or saved feedback. Avoid cancelled or interrupted operations and
   concurrent writers. Close the project before inspection or copying it.
+- Renaming the project folder through KíLín is supported. The operation is
+  recorded as a close followed by reopening the same active conversation.
+  The replay retains its designated workspace name.
 - Keep the original workspace unchanged. Replay requires a separate sibling
   workspace path that does not yet exist.
 
 GUI appearance and view-only actions are not replay inputs. Older recordings
 or direct core-only sessions that do not contain the required command and
-creation metadata are not complete reference experiments. No migration or
-inference of missing command history is attempted.
+creation metadata are not complete reference experiments. No migration of traces or
+inference of missing commands is attempted. A narrow exception for earlier
+recordings is an already-recorded internal reopening that can be identified
+as a successful sibling-directory rename from independent path and lifecycle
+metadata. Such identification is reported as a validation warning.
 
 ## Inspecting a recording
 
@@ -82,7 +88,15 @@ logger lifetimes, and unambiguous chronological command boundaries. A
 missing counter, malformed trace, missing archive or interrupted command is
 an error, not permission to reconstruct the missing history. The one
 supported detached-writer case is an active conversation archived by a
-recorded successful deletion.
+recorded successful deletion. A project rename is validated using matching
+request/completion markers around a successful close and internal reopening,
+corroborated by recorded directory paths and the restored conversation.
+For older traces without either marker, only independently corroborated
+sibling moves are accepted. Incomplete markers, same-directory internal
+reopens, mismatched active conversations, failed renames, and persistent
+configuration mutations remain blocking issues. Recorded absolute paths
+are compared lexically in their original platform's path syntax, never
+opened on the inspection machine.
 
 The source checks use recorded copy outcomes and historical indexing
 manifests. The final managed source inventory and content hashes must agree
@@ -199,8 +213,14 @@ inputs. New conversation and turn IDs are allocated normally; branch
 prefixes must consist of the corresponding replayed turns. Explicit names,
 feedback, exclusions, memory synchronization, archive operations, selection,
 reset, project reopenings and card regeneration are replayed through the
-same engine. Automatic titles, answers, index files, cards, templates and
-outputs are produced afresh; they are not copied from the reference.
+same engine. A validated project rename is replayed through the normal
+close and explicit resume commands, restoring the mapped active conversation
+without renaming the replay directory. Normal resume can also emit a
+source-change diagnostic that the original internal reopening did not emit.
+The relocation provenance and this normalization are reported separately
+from effective settings differences. Automatic titles, answers, index files,
+cards, templates and outputs are produced afresh; they are not copied from
+the reference.
 
 ### Interactions and failure
 

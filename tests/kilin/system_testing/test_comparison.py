@@ -65,8 +65,10 @@ class TestComparison(unittest.TestCase):
                             question["interactions"]["replayed"])
         paths = comparison.save()
         self.assertEqual(paths[0].parent, original.parent)
-        self.assertEqual(json.loads(paths[0].read_text()), data)
-        self.assertIn("Matched committed questions: 1", paths[1].read_text())
+        self.assertEqual(json.loads(paths[0].read_text(encoding="utf-8")),
+                         data)
+        self.assertIn("Matched committed questions: 1",
+                      paths[1].read_text(encoding="utf-8"))
         with self.assertRaises(FileExistsError):
             comparison.save()
         self.assertEqual(comparison.save(overwrite=True), paths)

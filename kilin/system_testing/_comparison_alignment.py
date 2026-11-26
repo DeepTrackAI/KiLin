@@ -299,6 +299,9 @@ def _same_request(before: TimelineOperation, after: TimelineOperation,
     elif kind == "create_conversation":
         _check(all(first.get(k) == second.get(k) for k in (
             "branch", "turn_count")), "Requested branch prefix differs.")
+    elif kind == "open_project":
+        _check("relocation" not in second or "relocation" in first,
+               "Unexpected replay-side project rename.")
     elif kind == "rename_conversation":
         _check(first["name"] == second["name"], "Explicit title differs.")
     elif kind in ("feedback", "memory_exclusion"):

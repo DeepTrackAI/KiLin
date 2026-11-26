@@ -497,6 +497,9 @@ class _Runner:
     def _open(self, op: TimelineOperation) -> None:
         """Reopen using the original explicit or inherited selection policy.
 
+        A validated relocation is reproduced as a normal resume with the
+        mapped active conversation, not as a physical filesystem rename.
+
         Parameters
         ----------
         op: TimelineOperation
@@ -508,6 +511,13 @@ class _Runner:
                    self.conversations[selected] if selected else None,
                    expected="opened")
         self._check_active(op.request["conversation_id"])
+        if "relocation" in op.request:
+            self.differences.append(ReplayDifference(
+                op.start_sequence, "project.relocation",
+                op.request["relocation"],
+                {"directory": str(self.workspace),
+                 "policy": "retain_destination_directory"},
+            ))
 
     def _ask(self, op: TimelineOperation) -> None:
         """Reissue a question and map its newly committed turn.

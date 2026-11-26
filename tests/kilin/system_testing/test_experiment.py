@@ -15,7 +15,9 @@ from shutil import copytree
 import unittest
 from unittest.mock import patch
 
+from kilin.project import open_project
 from kilin.system_testing import Experiment, InvalidRecordingError
+from kilin.trace_logging import TraceLogger
 from tests.kilin.gui import test_engine__recording as recording_tests
 
 
@@ -169,6 +171,121 @@ class TestExperiment(unittest.TestCase):
         self.assertEqual(asks[1].request["explicit_generation_settings"], {
             "temperature": 0.3, "thinking": False, "max_new_tokens": 128,
         })
+
+    def _rename(self, name):
+        """Use the ordinary engine command and follow the moved fixture."""
+        destination = self.root.with_name(name)
+        self.engine.rename_project(name)
+        self.assertEqual(self.engine.session.project.root, destination)
+        self.root = destination
+        self.experiment = Experiment(destination)
+
+    def test_recorded_consecutive_renames(self):
+        """Recognize distinct marker pairs, even with no intervening ask."""
+        self.fixture._ask("First question")
+        self.engine.create_conversation()
+        self.fixture._ask("Second question")
+        original = self.root
+        active = self.engine.active_conversation.conversation_id
+        self._rename("first_move")
+        middle = self.root
+        self._rename("second_move")
+        self.engine.rename_project(self.root.name)  # No-op.
+        self.engine.close()
+        before = _snapshot(self.root)
+        report = self.assertValid()
+        self.assertFalse(original.exists())
+        self.assertFalse(middle.exists())
+        openings = [op for op in report.operations
+                    if op.kind == "open_project"]
+        self.assertEqual(len(openings), 2)
+        self.assertEqual([op.request["conversation_id"] for op in openings],
+                         [active, active])
+        self.assertEqual([op.request["requested_conversation_id"]
+                          for op in openings], [active, active])
+        moves = [op.request["relocation"] for op in openings]
+        self.assertEqual([m["provenance"] for m in moves],
+                         ["recorded", "recorded"])
+        self.assertEqual([m["source_directory"] for m in moves],
+                         [str(original), str(middle)])
+        self.assertEqual([m["destination_directory"] for m in moves],
+                         [str(middle), str(self.root)])
+        self.assertNotEqual(moves[0]["rename_id"], moves[1]["rename_id"])
+        self.assertNotIn("relocation.inferred", {w.code for w in
+                                                 report.warnings})
+        self.assertEqual(before, _snapshot(self.root))
+
+    def _rename_without_markers(self, *, completion_only=False):
+        """Simulate an older producer or a missing completion marker."""
+        emit = TraceLogger.emit
+
+        def legacy(logger, event_type, **options):
+            if event_type == "gui.project.rename.completed" or (
+                    not completion_only and
+                    event_type == "gui.project.rename.requested"):
+                return None
+            return emit(logger, event_type, **options)
+
+        with patch.object(TraceLogger, "emit", legacy):
+            self._rename("renamed")
+        self.engine.close()
+
+    def test_legacy_rename_is_inferred_with_warning(self):
+        """Accept an already-recorded move only with independent paths."""
+        self.fixture._ask("Before legacy rename")
+        self._rename_without_markers()
+        report = self.assertValid()
+        reopening = next(op for op in report.operations
+                         if op.kind == "open_project")
+        self.assertEqual(reopening.request["relocation"]["provenance"],
+                         "inferred")
+        self.assertIn("relocation.inferred", {w.code for w in report.warnings})
+        self.assertFalse(any(e.event_type.startswith("gui.project.rename.")
+                             for e in report.events))
+
+    def test_incomplete_rename_markers_do_not_use_legacy_fallback(self):
+        self._rename_without_markers(completion_only=True)
+        self.assertInvalid("relocation.history")
+
+    def test_mismatched_rename_markers(self):
+        self._rename("renamed")
+        self.engine.close()
+        self._change(self.root / "logs/traces/project.json",
+                     "gui.project.rename.completed", lambda node: node[
+                         "details"].update(rename_id="different"))
+        self.assertInvalid("relocation.history")
+
+    def test_legacy_rename_requires_independent_path_corroboration(self):
+        self._rename_without_markers()
+        self._change(self.root / "logs/traces/project.json",
+                     "gui.project.configuration.effective", lambda node: node[
+                         "details"]["behavior"].update(
+                             project=str(self.root.with_name("other"))))
+        self.assertInvalid("relocation.history")
+
+    def test_unrelated_same_directory_internal_reopen_is_rejected(self):
+        active = self.engine.active_conversation.conversation_id
+        self.engine.close()
+        self.engine._reopen_project_conversation(open_project(self.root),
+                                                 active)
+        self.engine.close()
+        self.assertInvalid("relocation.history")
+
+    def test_failed_project_rename_is_not_replayable(self):
+        activate = self.engine._activate_project
+        calls = []
+
+        def fail_once(*args):
+            calls.append(args)
+            if len(calls) == 1:
+                raise RuntimeError("Failed to reopen after move")
+            return activate(*args)
+
+        with patch.object(self.engine, "_activate_project", fail_once):
+            self.engine.rename_project("renamed")
+        self.engine.close()
+        self.assertInvalid("command.failed")
+        self.assertInvalid("relocation.history")
 
     def test_relocated_reference_and_environment_difference(self):
         self.engine.close()

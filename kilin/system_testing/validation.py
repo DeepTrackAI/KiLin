@@ -1535,6 +1535,13 @@ def validate_recording(recording: Recording) -> ValidationReport:
         "workspace. Unrecorded actions and edits restored before observation "
         "cannot always be detected. Model availability is not checked."
     )]
+    warnings.extend(ValidationIssue(
+        "relocation.inferred",
+        "Historical sibling rename inferred from independent trace paths; "
+        "explicit rename markers were not recorded.",
+        sequence=op.start_sequence,
+    ) for op in operations if op.request.get("relocation", {}).get(
+        "provenance") == "inferred")
     warnings.extend(_environment_warnings(recording))
     return ValidationReport(recording.root, tuple(recording.issues),
                             tuple(warnings), len(recording.events),

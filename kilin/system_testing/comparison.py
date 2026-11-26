@@ -544,6 +544,12 @@ def _operation(original: TimelineOperation, replayed: TimelineOperation,
                    else op.request) for side, op in (
                        ("original", original), ("replayed", replayed))
         }
+    if original.kind == "open_project" and "relocation" in original.request:
+        row["relocation"] = {
+            "original": original.request["relocation"],
+            "replayed": replayed.request.get("relocation"),
+            "physical_rename_replayed": "relocation" in replayed.request,
+        }
     if original.kind == "create_project":
         row["settings_provenance"] = {
             side: op.request["settings"] for side, op in (

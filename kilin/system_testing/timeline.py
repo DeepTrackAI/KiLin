@@ -21,7 +21,8 @@ Examples
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import PurePath, PurePosixPath, PureWindowsPath
 
 from .traces import Recording, TraceEvent
 
@@ -143,6 +144,166 @@ def _batch_end(recording: Recording, start: TraceEvent,
     return found[0]
 
 
+def _historical_directory(value: object) -> PurePath:
+    """Interpret a recorded absolute directory without touching the disk.
+
+    Parameters
+    ----------
+    value: object
+        Recorded directory on the original operating system.
+
+    Returns
+    -------
+    pathlib.PurePath
+        Absolute, lexical path in its recorded platform's path syntax.
+
+    """
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValueError("Missing historical project directory.")
+    windows = PureWindowsPath(value)
+    path = windows if windows.drive else PurePosixPath(value)
+    if not path.is_absolute() or ".." in path.parts or not path.name:
+        raise ValueError("Invalid historical project directory.")
+    return path
+
+
+def _opening_directory(op: TimelineOperation) -> PurePath:
+    """Read the absolute project identity from an opening's configuration.
+
+    Parameters
+    ----------
+    op: TimelineOperation
+        Project creation or reopening command.
+
+    Returns
+    -------
+    pathlib.PurePath
+        Historical directory, independent of the inspection machine.
+
+    """
+    config = one(op.events, "gui.project.configuration.effective").details
+    return _historical_directory(config["behavior"]["project"])
+
+
+def _relocations(recording: Recording,
+                 operations: list[TimelineOperation]) -> None:
+    """Normalize proven folder moves into explicit close/open operations.
+
+    Parameters
+    ----------
+    recording: Recording
+        Snapshot receiving any ambiguous relocation issues.
+    operations: list[TimelineOperation]
+        Sorted candidate operations, updated in place with replay inputs.
+
+    Notes
+    -----
+    New recordings require matching rename markers when either marker is
+    present. Older recordings can establish a sibling rename through the
+    preceding and following opening configurations and independently
+    recorded trace paths, a complete close/open boundary, and unchanged
+    conversation identity. Persistent settings and source manifests are
+    checked separately by validation. Historical paths are never opened.
+
+    """
+    events = recording.events
+    markers = [e for e in events if e.event_type in (
+        "gui.project.rename.requested", "gui.project.rename.completed")]
+    trace_starts = [e for e in events if e.event_type ==
+                    "conversation.trace.started"]
+    consumed = set()
+    identities = set()
+    previous_open = None
+    for i, op in enumerate(operations):
+        if op.kind not in ("create_project", "open_project"):
+            continue
+        if op.request.get("reason") != "internal_reopen":
+            previous_open = op
+            continue
+        try:
+            if (previous_open is None or i < 2 or op.status != "completed"
+                    or operations[i - 1].kind != "close_project"):
+                raise ValueError("Internal reopen lacks a completed close.")
+            close = operations[i - 1]
+            active = op.request["conversation_id"]
+            if not active or close.request.get("conversation_id") != active:
+                raise ValueError("Relocation changed active conversation.")
+            source = _opening_directory(previous_open)
+            destination = _opening_directory(op)
+            if (type(source) is not type(destination) or source == destination
+                    or source.parent != destination.parent):
+                raise ValueError("Internal reopen is not a sibling rename.")
+            gap = [e for e in events if close.end_sequence < e.sequence <
+                   op.start_sequence]
+            if any(e.event_type not in ("trace.closed", "trace.started",
+                                        "conversation.trace.started",
+                                        "runtime.output") for e in gap):
+                raise ValueError("Unexpected operation during relocation.")
+            old_trace = next((e for e in reversed(trace_starts)
+                              if e.sequence < close.start_sequence), None)
+            new_trace = one(gap, "conversation.trace.started")
+            for trace, directory in ((old_trace, source),
+                                     (new_trace, destination)):
+                if (trace is None or _historical_directory(trace.details.get(
+                        "project_directory")) != directory or
+                        trace.details["conversation"]["conversation_id"] !=
+                        active):
+                    raise ValueError("Relocation trace identity differs.")
+            starts = [e for e in gap if e.event_type == "trace.started"
+                      and e.details.get("scope") == "project"]
+            if (len(starts) != 1 or _historical_directory(
+                    starts[0].details.get("output_path")) !=
+                    destination / "logs" / "traces" / "project.json"):
+                raise ValueError("Relocation project trace path differs.")
+            lower = operations[i - 2].end_sequence
+            upper = (operations[i + 1].start_sequence
+                     if i + 1 < len(operations) else float("inf"))
+            # A following consecutive rename may already have requested
+            # its move before its close event. Match each marker by both
+            # type and its own boundary, not the entire intervening window.
+            relevant = [e for e in markers if e.sequence not in consumed
+                        and ((e.event_type == "gui.project.rename.requested"
+                              and lower < e.sequence < close.start_sequence)
+                             or (e.event_type ==
+                                 "gui.project.rename.completed"
+                                 and op.end_sequence < e.sequence < upper))]
+            relocation = {"source_directory": str(source),
+                          "destination_directory": str(destination),
+                          "provenance": "inferred"}
+            if relevant:
+                request = one(relevant, "gui.project.rename.requested")
+                result = one(relevant, "gui.project.rename.completed")
+                identity = request.details.get("rename_id")
+                if (not isinstance(identity, str) or not identity or
+                        identity in identities or len(relevant) != 2 or
+                        request.path != _PROJECT or result.path != _PROJECT or
+                        not lower < request.sequence < close.start_sequence <
+                        op.start_sequence <= op.end_sequence <
+                        result.sequence < upper or
+                        request.details != result.details or
+                        request.details.get("conversation_id") != active or
+                        _historical_directory(request.details.get(
+                            "source_directory")) != source or
+                        _historical_directory(request.details.get(
+                            "destination_directory")) != destination):
+                    raise ValueError("Uncorrelated project rename markers.")
+                consumed.update((request.sequence, result.sequence))
+                identities.add(identity)
+                relocation.update(provenance="recorded", rename_id=identity)
+            operations[i] = replace(op, request={
+                **op.request, "requested_conversation_id": active,
+                "relocation": relocation,
+            })
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            recording.issue("relocation.history", str(error),
+                            sequence=op.start_sequence)
+        previous_open = op
+    for marker in markers:
+        if marker.sequence not in consumed:
+            recording.issue("relocation.history", "Unmatched rename marker.",
+                            marker.path, marker.sequence)
+
+
 def build_timeline(recording: Recording) -> tuple[TimelineOperation, ...]:
     """Build supported command intervals from explicit recorded boundaries.
 
@@ -251,10 +412,7 @@ def build_timeline(recording: Recording) -> tuple[TimelineOperation, ...]:
                         "open": start.details,
                     })
                     continue
-                if reason == "internal_reopen":
-                    # Internal reopening must belong to a known user command.
-                    continue
-                if reason != "resume":
+                if reason not in ("resume", "internal_reopen"):
                     recording.issue("command.unsupported",
                                     "Unknown project opening reason.",
                                     start.path, start.sequence)
@@ -304,6 +462,7 @@ def build_timeline(recording: Recording) -> tuple[TimelineOperation, ...]:
         add("close_project", event, event, event.details)
 
     operations.sort(key=lambda op: op.start_sequence)
+    _relocations(recording, operations)
     previous = None
     for op in operations:
         if previous is not None and op.start_sequence <= previous.end_sequence:
@@ -333,6 +492,7 @@ def build_timeline(recording: Recording) -> tuple[TimelineOperation, ...]:
     failures = {
         "gui.question.failed", "gui.answer.cancelled",
         "gui.project.prepare.failed", "gui.project.resume.failed",
+        "gui.project.rename.failed", "gui.indexing.change.failed",
         "gui.sources.sync.failed", "gui.source_cards.regenerate.failed",
         "gui.conversation_create.failed", "gui.conversation_select.failed",
         "gui.conversation_rename.failed", "gui.conversation_delete.failed",
