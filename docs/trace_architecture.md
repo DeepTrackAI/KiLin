@@ -237,3 +237,8 @@ as completed replay inputs.
 These records are the inputs to future timeline reconstruction and replay,
 not a replay implementation. See [Trace recording](trace_recording.md) for
 activation and failure policy.
+
+For offline inspection of a closed workspace, see
+[System testing](system_testing.md). The validator expands compact span
+terminals, checks global event identity, and uses explicit command boundaries
+rather than inferring commands from display titles.
