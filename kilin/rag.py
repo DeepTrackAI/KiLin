@@ -144,7 +144,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from functools import partial
 from hashlib import sha256
@@ -350,6 +350,7 @@ from kilin.tools import (
     run_tool,
 )
 from kilin.tools._shared.model_results import incomplete_notice
+from kilin.tools._shared.planning import _record_choice
 from kilin.tools._shared.choose_document import document_scope
 from kilin.tools._shared.enough_evidence import passages_answer
 from kilin.tool_settings import with_project_settings
@@ -1354,6 +1355,9 @@ class RAGSession:
                 data={
                     "message_count": len(messages),
                     "turn_count": len(turns),
+                    "turn_uuids": [
+                        turn.conversation_turn_uuid for turn in turns
+                    ],
                     "path": str(self.conversation_path),
                     "checkpoint_id": checkpoint_id,
                 },
@@ -1885,6 +1889,13 @@ class RAGSession:
             "question_characters": len(question),
             "retrieval_count_override": retrieval_count,
             "generation_settings_override": generation_settings,
+            "answer_guidance_override": answer_guidance,
+            "retrieval_query_override": retrieval_query,
+            "reuse_evidence": reuse_evidence,
+            "use_router": use_router,
+            "confirm_callback_available": confirm_callback is not None,
+            "choice_callback_available": choice_callback is not None,
+            "pdf_writer_available": pdf_writer is not None,
             "conversation_state": conversation_state,
         }
         if trace.include_content:
@@ -1981,16 +1992,24 @@ class RAGSession:
 
                     """
 
-                    report_phase(
-                        ANSWER_PHASE_PROCESSING,
-                        message="Waiting for your choice",
-                        choice={
-                            "question": text,
-                            "options": list(options),
-                            "allow_cancel": False,
-                        },
+                    def notify() -> None:
+                        """Display the routing clarification before waiting."""
+                        report_phase(
+                            ANSWER_PHASE_PROCESSING,
+                            message="Waiting for your choice",
+                            choice={
+                                "question": text,
+                                "options": list(options),
+                                "allow_cancel": False,
+                            },
+                        )
+
+                    return _record_choice(
+                        text, options, choice_callback, notify,
+                        trace=trace, turn_id=turn_id,
+                        prefix="routing.choice", component="rag",
+                        allow_cancel=False,
                     )
-                    return choice_callback(text, options)
 
                 route_options["choose"] = ask_user
             decision = self._route(
@@ -2547,7 +2566,9 @@ class RAGSession:
                     ANSWER_PHASE_MEMORY_RETRIEVING,
                     message="Retrieving conversation memories",
                 )
-                memory_index = self.sync_conversation_memory()
+                memory_index = self.sync_conversation_memory(
+                    trace_turn_id=turn_id
+                )
                 memory_recall_checked = historical_topic is not None
                 previously_shown = frozenset(
                     self.turns[number - 1].conversation_turn_uuid
@@ -3047,6 +3068,7 @@ class RAGSession:
             data={
                 "message_count": len(messages),
                 "turn_count": len(turns),
+                "turn_uuids": [turn.conversation_turn_uuid for turn in turns],
                 "path": str(self.conversation_path),
                 "checkpoint_id": checkpoint_id,
                 "models_reused": True,
@@ -6027,8 +6049,17 @@ class RAGSession:
         )
         return selection
 
-    def sync_conversation_memory(self: RAGSession) -> MemoryIndex:
+    def sync_conversation_memory(
+        self: RAGSession, *, trace_turn_id: str | None = None
+    ) -> MemoryIndex:
         """Synchronize derived project conversation memory on demand.
+
+        Parameters
+        ----------
+        trace_turn_id: str | None, optional
+            Turn correlation ID for automatic synchronization during an
+            answer. None denotes an explicit update outside an answer.
+            Defaults to None.
 
         Returns
         -------
@@ -6042,24 +6073,63 @@ class RAGSession:
         The next memory search catches up after conversation commits,
         archiving, feedback edits, or project policy changes. A GUI may call
         this method during idle time without changing those guarantees.
+        Explicit updates use project diagnostics; automatic updates retain
+        their turn correlation. The index is never copied into the trace.
 
         """
 
-        config = self._behavior_config()
-        if not config.conversation_memory.enabled:
-            return MemoryIndex("", (), {})
-        identity = getattr(self.indexes, "embedding_model_identity", None)
-        if not identity:
-            identity = (
-                f"{self.embedding_session.model_id}@"
-                f"{self.embedding_session.model_source}"
-            )
-        return synchronize_memory(
-            self.project.root,
-            config,
-            self.embedding_session,
-            model_identity=identity,
+        manual = trace_turn_id is None
+        trace = self._project_diagnostics() if manual else self.trace
+        prefix = "project.memory.sync" if manual else "memory.sync"
+        diagnostics = (
+            self._project_embedding_diagnostics() if manual else nullcontext()
         )
+        with diagnostics, trace.span(
+            prefix, component="rag", turn_id=trace_turn_id,
+            data={"trigger": "manual" if manual else "answer"},
+        ):
+            config = self._behavior_config()
+            enabled = config.conversation_memory.enabled
+            if enabled:
+                identity = getattr(
+                    self.indexes, "embedding_model_identity", None
+                )
+                if not identity:
+                    identity = (
+                        f"{self.embedding_session.model_id}@"
+                        f"{self.embedding_session.model_source}"
+                    )
+                index = synchronize_memory(
+                    self.project.root, config, self.embedding_session,
+                    model_identity=identity,
+                )
+            else:
+                index = MemoryIndex("", (), {})
+            if trace.enabled:
+                trace.emit(
+                    f"{prefix}.result", component="rag",
+                    turn_id=trace_turn_id,
+                    data={
+                        "enabled": enabled,
+                        "model_identity": index.model_identity,
+                        "embedded_count": index.embedded_count,
+                        "changed": index.changed,
+                        "vector_count": len(index.vectors),
+                        "records": [
+                            {
+                                "turn_uuid": record.turn_uuid,
+                                "role": record.role,
+                                "fingerprint": record.fingerprint,
+                                "priority": record.priority,
+                                "origins": [
+                                    asdict(origin) for origin in record.origins
+                                ],
+                            }
+                            for record in index.records
+                        ],
+                    },
+                )
+            return index
 
     def _format_memory_query(self: RAGSession, question: str) -> str:
         """Format an embedding query for remembered discussions.
@@ -6979,6 +7049,10 @@ class RAGSession:
                 "immutable_state_saved": True,
                 "conversation_path": str(path),
                 "turn_count": len(turns),
+                "conversation_turn_uuid": (
+                    pending_turn.conversation_turn_uuid
+                    if pending_turn is not None else None
+                ),
                 "index_fingerprint": self.indexes.fingerprint,
             },
             turn_id=trace_turn_id,

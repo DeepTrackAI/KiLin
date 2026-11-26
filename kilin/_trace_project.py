@@ -19,6 +19,9 @@ Key Features
 
 Module Structure
 ----------------
+- ``TRACE_FORMAT_VERSION`` and ``OPERATION_RECORDING_VERSION``
+
+  Structural trace version and full command-recording contract version.
 - ``ProjectTraceSequence``
 
   Allocate and persist project-wide event numbers.
@@ -58,12 +61,16 @@ from kilin.conversation_ownership import (
 
 __all__ = [
     "TRACE_FORMAT_VERSION",
+    "OPERATION_RECORDING_VERSION",
     "ProjectTraceSequence",
     "project_trace_directory",
     "write_project_trace",
 ]
 
 TRACE_FORMAT_VERSION: Final[int] = 1
+# Mark fresh projects recorded with complete engine command provenance.
+# Do not stamp existing projects as complete when they are reopened.
+OPERATION_RECORDING_VERSION: Final[int] = 1
 _SEQUENCE_NAME: Final[str] = ".sequence.json"
 _LOCK_TIMEOUT: Final[float] = 5.0
 _LOCK_POLL: Final[float] = 0.01

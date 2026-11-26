@@ -210,6 +210,21 @@ standardized-question notebook, see [Performance analysis](performance.md).
 The analysis does not require a new trace mode or change the persistence
 behavior described above. Raw traces remain sensitive project data.
 
+## Operation recording
+
+The shared project trace preserves explicit conversation lifecycle, feedback,
+and manual memory commands independently of conversation selection. The
+conversation trace records each question request and the core turn, including
+persistent checkpoint and turn identifiers and correlated interactive choices.
+Generated titles and automatic memory synchronization are diagnostics rather
+than independent user commands. A proposal and its outcome share an
+interaction ID; option labels are retained alongside numeric indices.
+
+See [Trace architecture](trace_architecture.md#conversation-operations) for
+the command boundaries and the creation-time recording version. Existing
+workspaces remain usable but are not automatically upgraded into complete
+reference experiments.
+
 ## Tests
 
 The tracing contract is tested without network or model dependencies:

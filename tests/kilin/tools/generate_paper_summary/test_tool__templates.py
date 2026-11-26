@@ -446,10 +446,14 @@ class TestListingAndChecking(_Project):
             context.trace.emit.call_args_list[0].kwargs["turn_id"],
             "turn-1",
         )
-        self.assertEqual(
-            context.trace.emit.call_args_list[1].kwargs["data"],
-            {"index": 1, "asked": True},
-        )
+        proposed = context.trace.emit.call_args_list[0].kwargs["data"]
+        decided = context.trace.emit.call_args_list[1].kwargs["data"]
+        self.assertTrue(proposed["interaction_id"])
+        self.assertEqual(decided, {
+            "index": 1, "asked": True, "response": 1,
+            "interaction_id": proposed["interaction_id"],
+            "selected_option": "Journal Club Handout (journal_club)",
+        })
 
     def test_invalid_gui_choice_stops_before_paper_selection(self) -> None:
         for value in (-1, 100, True, "1", None):

@@ -117,7 +117,63 @@ the project. A standalone RAG session similarly records its initialization and
 closure in its project sink; switching its conversation does not change that
 sink's lifetime.
 
-These records provide project-operation history, not a workspace replay
-implementation. Complete replay also requires explicit recording of
-conversation operations and independent validation of recording completeness.
-See [Trace recording](trace_recording.md) for activation and failure policy.
+### Conversation operations
+
+The shared project trace records the conversation catalog and active identity
+at each opening. Explicit create, select, rename, delete, and reset commands
+have `gui.conversation.*` operation spans with request data, results, and
+terminal status. Creation records whether the command created or reused an
+empty conversation, the selected conversation, and its branch origin and
+inherited turn count, if any. Inherited turns retain their persistent UUIDs;
+branching does not ask their questions again. Deletion records the archive
+and replacement identity, including whether a replacement was created.
+Selecting the already active conversation is recorded as a no-op. Generated
+titles are separate diagnostics, not explicit rename requests.
+
+Each `gui.question.request` span in the conversation trace retains the
+question passed to the backend, the title question, requested retrieval
+count, generation settings, effort selectors, and active conversation ID.
+The GUI's full-form generation settings are compared with the saved profile
+before applying the request. Reaffirming an unchanged value is not separately
+observable. Partial/direct requests are explicit. The resolved selection is
+recorded in `gui.question.settings.resolved`. The core turn is correlated to
+the request by its parent span. `state.checkpoint.committed` and
+`gui.question.saved` identify the persisted turn UUID and checkpoint, so the
+original request is not confused with a branch's inherited turn. Settings
+changes performed while answering are part of that question operation, not
+additional user commands. Direct RAG calls retain their own core turn input
+and checkpoint diagnostics, but are not GUI command recordings.
+
+Routing and tool choices record a proposal and decision (or failure) with a
+common interaction ID and turn correlation. Decisions retain whether a
+callback was actually invoked, its response, and the chosen option label as
+well as the original index. Plans record the semantic action, confirmation
+policy, and whether confirmation was requested. Automatic defaults are not
+user choices. Invalid or ended GUI input and callback failures are recorded
+separately; recording them does not change ordinary cancellation behavior.
+A replay must resolve the original label/action against the newly offered
+choices, not blindly reuse the index.
+
+Feedback and memory exclusions record their requested mutations and revision,
+conversation ID, persistent turn UUID, role, and committed rating/revision.
+Manual memory updates have project-level spans; automatic memory updates
+have turn-level spans. Result metadata describes the eligible records,
+origins, fingerprints, priorities, and index counts without duplicating the
+message texts or vectors. Memory remains derived from the authoritative
+conversation and feedback state.
+
+### Recording completeness
+
+The creation event carries `operation_recording_version` in addition to the
+structural trace-format version. Workspaces created before full operation
+recording do not acquire this marker on reopening. A fresh workspace with
+tracing enabled throughout is required for a reference experiment. The
+marker is necessary but not sufficient: independent validation must also
+check event coverage, sequence continuity, command completion, referenced
+files and identities. An unrecorded change cannot always be detected from
+traces alone. Interrupted or unsuccessful commands are not silently treated
+as completed replay inputs.
+
+These records are the inputs to future timeline reconstruction and replay,
+not a replay implementation. See [Trace recording](trace_recording.md) for
+activation and failure policy.

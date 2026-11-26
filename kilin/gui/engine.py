@@ -84,6 +84,7 @@ from time import perf_counter
 from typing import Callable, Final
 
 from kilin._model_completion import GenerationCancelled
+from kilin._trace_project import OPERATION_RECORDING_VERSION
 from kilin.model_settings import (
     SourceCardGenerationSettings,
     default_source_card_generation_settings,
@@ -738,7 +739,7 @@ class ChatEngine:
             "gui.project.", "gui.project_", "gui.sources.",
             "gui.indexing.", "gui.models.", "gui.model.", "gui.folder.",
             "gui.tool_settings.", "gui.source_cards.",
-            "gui.answer_settings.",
+            "gui.answer_settings.", "gui.conversation_",
         ))
         trace = (
             self.project_trace if project_event and self.project_trace.enabled
@@ -1261,8 +1262,11 @@ class ChatEngine:
             self._start_conversation_trace(project.root, conversation)
             with self.project_trace.span(
                 "gui.project.open", component="gui_engine",
-                data={"reason": "resume", "conversation_id":
-                      conversation.conversation_id},
+                data={
+                    "reason": "resume",
+                    "conversation_id": conversation.conversation_id,
+                    "requested_conversation_id": conversation_id,
+                },
             ):
                 self._activate_project(project, conversation)
             self._report_source_changes(project)
@@ -2105,6 +2109,7 @@ class ChatEngine:
             self.project_trace.emit(
                 "gui.project.creation.settings", component="gui_engine",
                 data={
+                    "operation_recording_version": OPERATION_RECORDING_VERSION,
                     "requested_settings": requested,
                     "explicit_settings": explicit,
                     "provenance": provenance,
@@ -2254,6 +2259,17 @@ class ChatEngine:
                     "gui.project.configuration.effective",
                     component="gui_engine", data=effective,
                 )
+        if self.project_trace.enabled:
+            self.project_trace.emit(
+                "gui.conversation.catalog.opened", component="gui_engine",
+                data={
+                    "active_conversation_id": conversation.conversation_id,
+                    "conversations": [
+                        self._conversation_trace_record(item)
+                        for item in self.conversation_store.conversations()
+                    ],
+                },
+            )
         options["conversation_path"] = self.conversation_store.state_path(
             conversation
         )
@@ -2684,12 +2700,36 @@ class ChatEngine:
             if self._answering:
                 raise RuntimeError("Finish the current answer first.")
             root = self._memory_project(project)
-            snapshot = FeedbackStore(root).update(
-                identity["conversation_id"], identity["turn_uuid"],
-                identity["role"], saved=identity["saved"],
-                reaction=identity["reaction"],
-                expected_revision=identity["revision"],
-            )
+            with self.project_trace.span(
+                "gui.conversation.feedback", component="gui_engine",
+                data={
+                    "conversation_id": identity["conversation_id"],
+                    "turn_uuid": identity["turn_uuid"],
+                    "role": identity["role"],
+                    "saved": identity["saved"],
+                    "reaction": identity["reaction"],
+                    "expected_revision": identity["revision"],
+                },
+            ):
+                snapshot = FeedbackStore(root).update(
+                    identity["conversation_id"], identity["turn_uuid"],
+                    identity["role"], saved=identity["saved"],
+                    reaction=identity["reaction"],
+                    expected_revision=identity["revision"],
+                )
+                self.project_trace.emit(
+                    "gui.conversation.feedback.saved",
+                    component="gui_engine",
+                    data={
+                        "conversation_id": identity["conversation_id"],
+                        "turn_uuid": identity["turn_uuid"],
+                        "role": identity["role"],
+                        "revision": snapshot.revision,
+                        "rating": asdict(snapshot.get(
+                            identity["turn_uuid"], identity["role"]
+                        )),
+                    },
+                )
             self._send(
                 "message_feedback", **response,
                 revision=snapshot.revision,
@@ -2800,12 +2840,35 @@ class ChatEngine:
             if self._answering:
                 raise RuntimeError("Finish the current answer first.")
             root = self._memory_project(data["project"])
-            snapshot = FeedbackStore(root).update(
-                data["conversation_id"], data["turn_uuid"],
-                data["role"], saved=None, reaction=None,
-                excluded=data["excluded"],
-                expected_revision=data["revision"],
-            )
+            with self.project_trace.span(
+                "gui.conversation.memory_exclusion", component="gui_engine",
+                data={
+                    "conversation_id": data["conversation_id"],
+                    "turn_uuid": data["turn_uuid"],
+                    "role": data["role"],
+                    "excluded": data["excluded"],
+                    "expected_revision": data["revision"],
+                },
+            ):
+                snapshot = FeedbackStore(root).update(
+                    data["conversation_id"], data["turn_uuid"],
+                    data["role"], saved=None, reaction=None,
+                    excluded=data["excluded"],
+                    expected_revision=data["revision"],
+                )
+                self.project_trace.emit(
+                    "gui.conversation.memory_exclusion.saved",
+                    component="gui_engine",
+                    data={
+                        "conversation_id": data["conversation_id"],
+                        "turn_uuid": data["turn_uuid"],
+                        "role": data["role"],
+                        "revision": snapshot.revision,
+                        "rating": asdict(snapshot.get(
+                            data["turn_uuid"], data["role"]
+                        )),
+                    },
+                )
             self._send(
                 "memory_exclusion", **response,
                 revision=snapshot.revision,
@@ -2874,7 +2937,22 @@ class ChatEngine:
             if self._answering:
                 raise RuntimeError("Finish the current answer first.")
             self._send("memory_sync_started", project=project)
-            index = self.session.sync_conversation_memory()
+            with self.project_trace.span(
+                "gui.conversation.memory.sync", component="gui_engine",
+                data={"trigger": "manual"},
+            ):
+                index = self.session.sync_conversation_memory()
+                self.project_trace.emit(
+                    "gui.conversation.memory.sync.result",
+                    component="gui_engine",
+                    data={
+                        "model_identity": index.model_identity,
+                        "record_count": len(index.records),
+                        "vector_count": len(index.vectors),
+                        "embedded_count": index.embedded_count,
+                        "changed": index.changed,
+                    },
+                )
             self._send(
                 "memory_synced", project=project,
                 embedded_count=index.embedded_count,
@@ -3567,6 +3645,10 @@ class ChatEngine:
             ),
         )
         self.active_conversation = renamed
+        self.active_trace.emit(
+            "conversation.title.generated", component="gui_engine",
+            data=asdict(renamed),
+        )
         self._send_conversations("conversations")
 
     def ask(
@@ -3611,91 +3693,153 @@ class ChatEngine:
             if self.session is None:
                 raise RuntimeError("Open a project before asking a question.")
             generation_settings = dict(generation_settings or {})
+            full_form = "_title_question" in generation_settings
             title_question = str(
                 generation_settings.pop("_title_question", question)
             )
-            # Answer settings belong to the project; every chat uses them.
-            self._save_answer_settings(generation_settings)
-            backend = self.session.backend
-            levels = read_effort_levels(self.session.project.root, backend)
-            indexes = _effort_indexes(effort)
-            is_mlx = self.session.chat_session.backend == BACKEND_MLX
-            # Name a new chat after its first answer, from question and answer.
-            name_after_answer = (
-                indexes is not None
-                and not self.session.turns
-                and self.conversation_store is not None
-                and self.active_conversation is not None
-                and self.active_conversation.name.startswith("Conversation ")
-            )
-            if indexes is not None:
-                model_index, depth_index = indexes
-                depth = read_search_depth(self.session.project.root)
-                retrieval_count = depth[depth_index]
-                model_id = str(levels[model_index]["model"])
-                # RAGSession switches chat models in place only on MLX.
-                if is_mlx:
-                    if model_id != self.session.chat_session.model_id:
-                        # Loading can take seconds; show it as its own stage.
-                        self._send(
-                            "answer_phase",
-                            phase=ENGINE_PHASE_LOADING_MODEL,
-                            model_id=model_id,
-                        )
-                    self.session.use_chat_model(model_id)
-            self._send("status", message="Finding evidence and answering…")
-            options: dict[str, object] = {}
-            if retrieval_count is not None:
-                options["retrieval_count"] = retrieval_count
-            if generation_settings:
-                options["generation_settings"] = generation_settings
-            # The RAG core resolves project-type and intent guidance.
-            stream = _AnswerStream(self._send)
-            options["token_callback"] = stream.add
-            options["phase_callback"] = lambda phase, details: self._send(
-                "answer_phase",
-                phase=phase,
-                **details,
-            )
-            options["activity_callback"] = lambda event: self._send(
-                "answer_activity", **event
-            )
-            if self.read_command is not None:
-                options["confirm_callback"] = self._confirm_plan
-                options["choice_callback"] = self._choose_option
-            # Reports such as research briefings also get a one-page PDF.
-            options["pdf_writer"] = write_report_pdf
-            options["stop_requested"] = self._answer_stop.is_set
-            self._answer_stop.clear()
-            self._answering = True
-            try:
-                with self._live_usage():
-                    self.session.ask(question, **options)
-            finally:
-                self._answering = False
-                self._answer_stop.clear()
-            stream.flush()
-            if (
-                self.conversation_store is not None
-                and self.active_conversation is not None
+            profile = self.session.project.profile
+            requested = {
+                "question": question,
+                "title_question": title_question,
+                "retrieval_count": retrieval_count,
+                "generation_settings": generation_settings,
+                "profile_generation_settings": {
+                    key: getattr(profile, key)
+                    for key in ("temperature", "thinking", "max_new_tokens")
+                },
+                "generation_provenance": (
+                    "profile_difference" if full_form else "explicit_request"
+                ),
+                "explicit_generation_settings": {
+                    key: value for key, value in generation_settings.items()
+                    if not full_form or value != getattr(profile, key, None)
+                },
+                "effort": effort,
+                "conversation_id": (
+                    self.active_conversation.conversation_id
+                    if self.active_conversation is not None else None
+                ),
+            }
+            with self.active_trace.span(
+                "gui.question.request", component="gui_engine",
+                data=requested,
             ):
-                self.active_conversation = self.conversation_store.touch(
-                    self.active_conversation.conversation_id,
-                    ownership=self._store_ownership(
-                        self.active_conversation.conversation_id
-                    ),
-                    state_writer=self._store_state_writer(
-                        self.active_conversation.conversation_id
-                    ),
+                # Answer settings belong to the project; every chat uses them.
+                self._save_answer_settings(generation_settings)
+                backend = self.session.backend
+                levels = read_effort_levels(self.session.project.root, backend)
+                indexes = _effort_indexes(effort)
+                is_mlx = self.session.chat_session.backend == BACKEND_MLX
+                # Name a new chat from its first question and answer.
+                name_after_answer = (
+                    indexes is not None
+                    and not self.session.turns
+                    and self.conversation_store is not None
+                    and self.active_conversation is not None
+                    and self.active_conversation.name.startswith(
+                        "Conversation "
+                    )
                 )
-            # An answer can add files (a tool's report in outputs/, the
-            # conversation log), so the workspace tree is refreshed too.
-            self._send(
-                "answered",
-                turn=asdict(self.session.turns[-1]),
-                usage=self._usage_totals(),
-                workspace_files=list_project_files(self.session.project),
-            )
+                if indexes is not None:
+                    model_index, depth_index = indexes
+                    depth = read_search_depth(self.session.project.root)
+                    retrieval_count = depth[depth_index]
+                    model_id = str(levels[model_index]["model"])
+                    # RAGSession switches chat models in place only on MLX.
+                    if is_mlx:
+                        if model_id != self.session.chat_session.model_id:
+                            # Loading can take seconds; show its own stage.
+                            self._send(
+                                "answer_phase",
+                                phase=ENGINE_PHASE_LOADING_MODEL,
+                                model_id=model_id,
+                            )
+                        self.session.use_chat_model(model_id)
+                if self.active_trace.enabled:
+                    self.active_trace.emit(
+                        "gui.question.settings.resolved",
+                        component="gui_engine",
+                        data={
+                            "effort_indexes": (
+                                list(indexes) if indexes else None
+                            ),
+                            "selected_model": model_id if indexes else None,
+                            "model_selection_applied": bool(
+                                indexes and is_mlx
+                            ),
+                            "retrieval_count": (
+                                retrieval_count if retrieval_count is not None
+                                else profile.retrieval_count
+                            ),
+                            "chat_model": self.session.chat_session.model_id,
+                        },
+                    )
+                self._send("status", message="Finding evidence and answering…")
+                options: dict[str, object] = {}
+                if retrieval_count is not None:
+                    options["retrieval_count"] = retrieval_count
+                if generation_settings:
+                    options["generation_settings"] = generation_settings
+                # The RAG core resolves project-type and intent guidance.
+                stream = _AnswerStream(self._send)
+                options["token_callback"] = stream.add
+                options["phase_callback"] = lambda phase, details: self._send(
+                    "answer_phase",
+                    phase=phase,
+                    **details,
+                )
+                options["activity_callback"] = lambda event: self._send(
+                    "answer_activity", **event
+                )
+                if self.read_command is not None:
+                    options["confirm_callback"] = self._confirm_plan
+                    options["choice_callback"] = self._choose_option
+                # Reports such as research briefings also get a one-page PDF.
+                options["pdf_writer"] = write_report_pdf
+                options["stop_requested"] = self._answer_stop.is_set
+                self._answer_stop.clear()
+                self._answering = True
+                try:
+                    with self._live_usage():
+                        self.session.ask(question, **options)
+                finally:
+                    self._answering = False
+                    self._answer_stop.clear()
+                stream.flush()
+                if (
+                    self.conversation_store is not None
+                    and self.active_conversation is not None
+                ):
+                    self.active_conversation = self.conversation_store.touch(
+                        self.active_conversation.conversation_id,
+                        ownership=self._store_ownership(
+                            self.active_conversation.conversation_id
+                        ),
+                        state_writer=self._store_state_writer(
+                            self.active_conversation.conversation_id
+                        ),
+                    )
+                if self.active_trace.enabled:
+                    self.active_trace.emit(
+                        "gui.question.saved", component="gui_engine",
+                        data={
+                            "conversation_turn_uuid": (
+                                self.session.turns[-1].conversation_turn_uuid
+                            ),
+                            "turn_count": len(self.session.turns),
+                            "checkpoint_id": getattr(
+                                self.session, "_checkpoint_id", None
+                            ),
+                        },
+                    )
+                # An answer can add files (a tool's report in outputs/, the
+                # conversation log), so the workspace tree is refreshed too.
+                self._send(
+                    "answered",
+                    turn=asdict(self.session.turns[-1]),
+                    usage=self._usage_totals(),
+                    workspace_files=list_project_files(self.session.project),
+                )
         except GenerationCancelled:
             # Stop: no turn is saved, and models and project stay loaded.
             self.active_trace.emit(
@@ -3862,6 +4006,10 @@ class ChatEngine:
         while True:
             command = self.read_command()
             if command is None:
+                self.active_trace.emit(
+                    "gui.interaction.input.ended", component="gui_engine",
+                    status="failed", data={"kind": "plan"},
+                )
                 return PLAN_CHOICE_CANCEL
             if command.get("action") == "cancel_answer":
                 raise GenerationCancelled("Stopped by the user.")
@@ -3869,6 +4017,10 @@ class ChatEngine:
                 choice = command.get("choice")
                 if choice in PLAN_CHOICE_CHOICES:
                     return choice
+                self.active_trace.emit(
+                    "gui.interaction.input.invalid", component="gui_engine",
+                    status="failed", data={"kind": "plan", "choice": choice},
+                )
                 return PLAN_CHOICE_CANCEL
             self._send(
                 "error",
@@ -3906,6 +4058,10 @@ class ChatEngine:
         while True:
             command = self.read_command()
             if command is None:
+                self.active_trace.emit(
+                    "gui.interaction.input.ended", component="gui_engine",
+                    status="failed", data={"kind": "option"},
+                )
                 return None
             if command.get("action") == "cancel_answer":
                 raise GenerationCancelled("Stopped by the user.")
@@ -3914,7 +4070,14 @@ class ChatEngine:
                 number = choice.removeprefix("option:")
                 if choice.startswith("option:") and number.isdigit():
                     index = int(number)
-                    return index if index < len(options) else None
+                    if index < len(options):
+                        return index
+                if choice != PLAN_CHOICE_CANCEL:
+                    self.active_trace.emit(
+                        "gui.interaction.input.invalid",
+                        component="gui_engine", status="failed",
+                        data={"kind": "option", "choice": choice},
+                    )
                 return None
             self._send(
                 "error",
@@ -4042,30 +4205,80 @@ class ChatEngine:
                 or self.active_conversation is None
             ):
                 raise RuntimeError("Open a project first.")
-            unused = None if branch else self._unused_empty_conversation()
-            if unused is not None:
-                self.conversation_store.select(unused.conversation_id)
-                self._switch_with_store_rollback(unused)
-                return
-            parent_id = (
-                self.active_conversation.conversation_id if branch else None
-            )
-            conversation = self.conversation_store.create(
-                branch_from=parent_id,
-                turn_count=turn_count,
-                ownership=(
-                    self._store_ownership(parent_id)
-                    if parent_id is not None
-                    else None
-                ),
-            )
-            self._switch_with_store_rollback(conversation)
+            with self.project_trace.span(
+                "gui.conversation.create", component="gui_engine",
+                data={
+                    "previous_conversation_id": (
+                        self.active_conversation.conversation_id
+                    ),
+                    "branch": branch, "turn_count": turn_count,
+                },
+            ):
+                unused = None if branch else self._unused_empty_conversation()
+                if unused is not None:
+                    self.conversation_store.select(unused.conversation_id)
+                    self.project_trace.emit(
+                        "gui.conversation.create.result",
+                        component="gui_engine",
+                        data={
+                            **self._conversation_trace_record(unused),
+                            "reused": True,
+                        },
+                    )
+                    self._switch_with_store_rollback(unused)
+                    return
+                parent_id = (
+                    self.active_conversation.conversation_id
+                    if branch else None
+                )
+                conversation = self.conversation_store.create(
+                    branch_from=parent_id,
+                    turn_count=turn_count,
+                    ownership=(
+                        self._store_ownership(parent_id)
+                        if parent_id is not None
+                        else None
+                    ),
+                )
+                self.project_trace.emit(
+                    "gui.conversation.create.result", component="gui_engine",
+                    data={
+                        **self._conversation_trace_record(conversation),
+                        "reused": False,
+                    },
+                )
+                self._switch_with_store_rollback(conversation)
         except Exception as error:
             self._report_error(
                 "gui.conversation_create.failed",
                 error,
                 str(error),
             )
+
+    def _conversation_trace_record(
+        self, conversation: ConversationInfo
+    ) -> dict[str, object]:
+        """Describe a registered record without reading its saved turns.
+
+        Parameters
+        ----------
+        conversation: ConversationInfo
+            Registered conversation, including branch origin metadata.
+
+        Returns
+        -------
+        dict[str, object]
+            Metadata and its workspace-relative state path.
+
+        """
+
+        path = self.conversation_store.state_path(conversation)
+        return {
+            **asdict(conversation),
+            "path": path.relative_to(
+                self.conversation_store.project_directory
+            ).as_posix(),
+        }
 
     def _unused_empty_conversation(self) -> ConversationInfo | None:
         """Find an empty conversation other than the active one.
@@ -4110,14 +4323,23 @@ class ChatEngine:
         try:
             if self.conversation_store is None:
                 raise RuntimeError("Open a project first.")
-            conversation = self.conversation_store.select(conversation_id)
-            if (
-                self.active_conversation is not None
-                and conversation.conversation_id
-                == self.active_conversation.conversation_id
+            with self.project_trace.span(
+                "gui.conversation.select", component="gui_engine",
+                data={"conversation_id": conversation_id},
             ):
-                return
-            self._switch_with_store_rollback(conversation)
+                conversation = self.conversation_store.select(conversation_id)
+                if (
+                    self.active_conversation is not None
+                    and conversation.conversation_id
+                    == self.active_conversation.conversation_id
+                ):
+                    self.project_trace.emit(
+                        "gui.conversation.select.unchanged",
+                        component="gui_engine",
+                        data={"conversation_id": conversation_id},
+                    )
+                    return
+                self._switch_with_store_rollback(conversation)
         except Exception as error:
             self._report_error(
                 "gui.conversation_select.failed",
@@ -4148,24 +4370,27 @@ class ChatEngine:
         try:
             if self.conversation_store is None:
                 raise RuntimeError("Open a project first.")
-            renamed = self.conversation_store.rename(
-                conversation_id,
-                name,
-                ownership=self._store_ownership(conversation_id),
-                state_writer=self._store_state_writer(conversation_id),
-            )
-            if (
-                self.active_conversation is not None
-                and renamed.conversation_id
-                == self.active_conversation.conversation_id
+            with self.project_trace.span(
+                "gui.conversation.rename", component="gui_engine",
+                data={"conversation_id": conversation_id, "name": name},
             ):
-                self.active_conversation = renamed
-            self.active_trace.emit(
-                "conversation.renamed",
-                component="gui_engine",
-                data=asdict(renamed),
-            )
-            self._send_conversations("conversations")
+                renamed = self.conversation_store.rename(
+                    conversation_id,
+                    name,
+                    ownership=self._store_ownership(conversation_id),
+                    state_writer=self._store_state_writer(conversation_id),
+                )
+                if (
+                    self.active_conversation is not None
+                    and renamed.conversation_id
+                    == self.active_conversation.conversation_id
+                ):
+                    self.active_conversation = renamed
+                self.project_trace.emit(
+                    "gui.conversation.renamed", component="gui_engine",
+                    data=self._conversation_trace_record(renamed),
+                )
+                self._send_conversations("conversations")
         except Exception as error:
             self._report_error(
                 "gui.conversation_rename.failed",
@@ -4195,36 +4420,52 @@ class ChatEngine:
                 or self.active_conversation is None
             ):
                 raise RuntimeError("Open a project first.")
-            deleting_active = (
-                conversation_id == self.active_conversation.conversation_id
-            )
-            self._send(
-                "conversation_delete_started",
-                conversation_id=conversation_id,
-            )
-            if deleting_active and isinstance(
-                self.conversation_trace, TraceLogger
+            with self.project_trace.span(
+                "gui.conversation.delete", component="gui_engine",
+                data={"conversation_id": conversation_id},
             ):
-                self.conversation_trace.flush()
-            replacement, archived_path = self.conversation_store.archive(
-                conversation_id,
-                ownership=self._store_ownership(conversation_id),
-            )
-            if deleting_active:
-                self._detach_conversation_trace()
-                self._switch_conversation(
-                    replacement, close_current_trace=False
+                deleting_active = (
+                    conversation_id == self.active_conversation.conversation_id
                 )
-            else:
-                self._send_conversations("conversations")
-            self.active_trace.emit(
-                "conversation.deleted",
-                component="gui_engine",
-                data={
-                    "conversation_id": conversation_id,
-                    "archived_path": str(archived_path),
-                },
-            )
+                self._send(
+                    "conversation_delete_started",
+                    conversation_id=conversation_id,
+                )
+                if deleting_active and isinstance(
+                    self.conversation_trace, TraceLogger
+                ):
+                    self.conversation_trace.flush()
+                catalog_ids = {
+                    item.conversation_id
+                    for item in self.conversation_store.conversations()
+                }
+                replacement, archived_path = self.conversation_store.archive(
+                    conversation_id,
+                    ownership=self._store_ownership(conversation_id),
+                )
+                self.project_trace.emit(
+                    "gui.conversation.deleted", component="gui_engine",
+                    data={
+                        "conversation_id": conversation_id,
+                        "archived_path": archived_path.relative_to(
+                            self.conversation_store.project_directory
+                        ).as_posix(),
+                        "replacement": self._conversation_trace_record(
+                            replacement
+                        ),
+                        "replacement_created": (
+                            replacement.conversation_id not in catalog_ids
+                        ),
+                        "deleted_active": deleting_active,
+                    },
+                )
+                if deleting_active:
+                    self._detach_conversation_trace()
+                    self._switch_conversation(
+                        replacement, close_current_trace=False
+                    )
+                else:
+                    self._send_conversations("conversations")
         except Exception as error:
             if self.conversation_store is not None:
                 try:
@@ -4571,6 +4812,7 @@ class ChatEngine:
         if self.session is None or self.conversation_store is None:
             raise RuntimeError("Open a project first.")
         previous_trace = self.conversation_trace
+        previous = self.active_conversation
         try:
             # Acquiring the target first leaves the active writer untouched
             # if the conversation is locked by another KíLín process.
@@ -4594,10 +4836,14 @@ class ChatEngine:
             previous_trace.close()
         self.active_conversation = conversation
         self._use_project_answer_settings()
-        self.active_trace.emit(
-            "conversation.selected",
-            component="gui_engine",
-            data=asdict(conversation),
+        self.project_trace.emit(
+            "gui.conversation.selected", component="gui_engine",
+            data={
+                **self._conversation_trace_record(conversation),
+                "previous_conversation_id": (
+                    previous.conversation_id if previous is not None else None
+                ),
+            },
         )
         if not turns:
             # A new chat gets its own fresh suggested questions.
@@ -4673,9 +4919,20 @@ class ChatEngine:
         try:
             if self.session is None or self.conversation_store is None:
                 raise RuntimeError("Open a project first.")
-            conversation = self.conversation_store.create()
-            self._switch_with_store_rollback(conversation)
-            self._send("reset", archived=None)
+            with self.project_trace.span(
+                "gui.conversation.reset", component="gui_engine",
+                data={"previous_conversation_id": (
+                    self.active_conversation.conversation_id
+                    if self.active_conversation is not None else None
+                )},
+            ):
+                conversation = self.conversation_store.create()
+                self.project_trace.emit(
+                    "gui.conversation.reset.result", component="gui_engine",
+                    data=self._conversation_trace_record(conversation),
+                )
+                self._switch_with_store_rollback(conversation)
+                self._send("reset", archived=None)
         except Exception as error:
             self._report_error(
                 "gui.conversation_reset.failed",

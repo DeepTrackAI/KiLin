@@ -352,6 +352,13 @@ message text. No memory activity is emitted when indexing/retrieval is
 disabled for the current project or intent. These counts are separate from
 scientific source-reference counts.
 
+Explicit feedback and exclusion commands record requested and committed
+revisions and rating state in the project trace. Manual index synchronization
+records its result in the project trace; automatic synchronization remains
+correlated to the active answer. The synchronization diagnostics identify
+eligible messages and origins without copying their text or vectors. See
+[Trace architecture](trace_architecture.md#conversation-operations).
+
 The index contains prior research discussions and embeddings, potentially
 including sensitive or speculative content. It is not encrypted or anonymized.
 See [Security](security.md) for the local trust boundary.

@@ -2473,7 +2473,9 @@ def _event_session(event_type: str) -> str:
 
     """
 
-    if event_type.startswith(("project.", "workspace.", "gui.project")):
+    if event_type.startswith((
+        "project.", "workspace.", "gui.project", "gui.conversation."
+    )):
         return "project"
     if event_type.startswith(("source.", "document.")):
         return "sources"
