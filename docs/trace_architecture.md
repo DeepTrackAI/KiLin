@@ -57,9 +57,67 @@ Conversation switching and archival retain their existing ownership rules.
 Before archival, pending diagnostics are published; a trace that already
 contains all recorded events is left byte-for-byte unchanged.
 
-The trace architecture establishes the event identity and ownership contract.
-It does not itself redirect existing project operations or guarantee that
-every user operation is recorded. Complete workspace replay also requires
-explicit recording of project and conversation operations and independent
-validation of the recording. See [Trace recording](trace_recording.md) for
-the diagnostic activation and failure policy.
+### Project operations
+
+Project creation starts its trace only after the destination has been safely
+reserved. The creation trace is owned by workspace preparation and is closed
+before the GUI activates the project. Rollback removes trace files created by
+an unsuccessful preparation attempt together with other new workspace files.
+A creation conflict does not write to the occupied destination.
+
+A successful creation or subsequent import emits `workspace.prepare.started`,
+`workspace.source.copied` for each processed source, and
+`workspace.prepare.completed`, correlated by a `batch_id`. The start records
+requested source paths, selected files, project type, import policy, and
+profile settings. Each copy event records the original source, its kind, the
+managed workspace-relative destination, and the actual copied and preserved
+original-relative filenames. For a direct file, the managed destination is the
+file itself, which may have been renamed to avoid a collision. For a folder,
+append each copied relative filename to the managed destination. Do not infer
+historical imports from the current external directory contents.
+
+Synchronization records `workspace.sync.started`, the applied decisions in
+`workspace.sync.file` or `workspace.sync.detached`, and
+`workspace.sync.completed`, with a common batch ID and actual results. Source
+removal and explicit resource edits also leave project diagnostics. These
+operations are not automatically considered safe to replay: additive source
+imports can be reconstructed from the retained workspace copies, whereas
+replacement, deletion, or manual resource edits may destroy historical inputs.
+
+Index preparation, including model loading, index reuse/rebuild decisions,
+source-card reconciliation, and preparation progress, is recorded in the
+project trace. The content manifest already computed by indexing is included
+in `index.check.completed` or `index.empty`; it records relative filenames,
+sizes, and SHA-256 digests without rereading files for tracing. Comparing these
+manifests can detect changed or removed indexed source content. Source-card
+regeneration is recorded separately. Question-related model switches and
+inference, evidence, and mandatory checkpoints remain in conversation traces.
+
+### Configuration and lifecycle
+
+The GUI emits `gui.project.creation.settings` with the original request,
+`explicit_settings`, and `provenance`. A direct API request is treated as
+explicit. A full GUI settings form is compared recursively to the defaults
+last sent for that project type, and the comparison baseline is retained in
+`displayed_defaults`. Unchanged fields are inherited; lists are treated as
+whole values. Reaffirming a displayed value is indistinguishable from leaving
+it unchanged. If the comparison baseline is unavailable, explicit settings
+are recorded as null rather than guessed. The original request is preserved
+regardless of provenance; this classification does not change the settings
+applied during ordinary creation.
+
+`gui.project.open` spans identify creation, resumption, or an internal reopen
+with the selected conversation ID. `gui.project.configuration.effective`
+records the effective profile, effort levels, router models, search depths,
+source-card settings, behavior and tools after saved defaults are established.
+A failed diagnostic snapshot is recorded explicitly. Subsequent saved profile,
+model, tool, behavior and card settings changes are traced in the project.
+`gui.project.closed` records the selected conversation when the GUI releases
+the project. A standalone RAG session similarly records its initialization and
+closure in its project sink; switching its conversation does not change that
+sink's lifetime.
+
+These records provide project-operation history, not a workspace replay
+implementation. Complete replay also requires explicit recording of
+conversation operations and independent validation of recording completeness.
+See [Trace recording](trace_recording.md) for activation and failure policy.

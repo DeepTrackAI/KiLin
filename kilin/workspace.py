@@ -123,6 +123,7 @@ This writes a workspace copy; it does not alter the source repository.
 from __future__ import annotations
 
 from contextlib import nullcontext
+from dataclasses import asdict
 from hashlib import sha256
 import json
 import re
@@ -150,7 +151,12 @@ from kilin.repository_reason_codes import (
     SELECTION_REASON_FILE_TOO_LARGE,
     SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
 )
-from kilin.trace_logging import NullTraceLogger, TraceSink
+from kilin._trace_project import ProjectTraceSequence
+from kilin.conversation_ownership import ConversationFileLock
+from kilin.trace_logging import (
+    NullTraceLogger, TraceConfig, TraceLogger, TraceSink,
+    _project_trace_logger,
+)
 from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 
 __all__ = [
@@ -337,7 +343,7 @@ def prepare_sources_workspace(
     workspace_root: str | Path | None = None,
     selected_files: Mapping[str, Sequence[str]] | None = None,
     settings: dict[str, object] | None = None,
-    trace: TraceSink | None = None,
+    trace: TraceConfig | TraceSink | None = None,
 ) -> QAProject:
     """Create a new managed workspace without reusing an existing project.
 
@@ -360,9 +366,11 @@ def prepare_sources_workspace(
         Exact per-source selections. Defaults to None, using scan selections.
     settings: dict[str, object] | None, optional
         Validated profile overrides for this new project. Defaults to None.
-    trace: TraceSink | None, optional
-        Caller-owned diagnostic sink. Defaults to None. No event is emitted
-        before the destination is claimed and inputs are validated.
+    trace: TraceConfig | TraceSink | None, optional
+        Caller-owned diagnostic sink, or a configuration that creates an
+        owned project trace after exclusive reservation. Defaults to None.
+        No event is emitted before the destination is claimed and inputs
+        are validated. A configuration must not specify an output path.
 
     Returns
     -------
@@ -598,7 +606,7 @@ def _prepare_sources_workspace(
     selected_files: Mapping[str, Sequence[str]] | None = None,
     replace_existing: bool = False,
     settings: dict[str, object] | None = None,
-    trace: TraceSink | None = None,
+    trace: TraceConfig | TraceSink | None = None,
     existing: QAProject | None = None,
     allocate: bool = False,
 ) -> QAProject:
@@ -618,8 +626,9 @@ def _prepare_sources_workspace(
         Explicit snapshot replacement for imports. Defaults to False.
     settings: dict[str, object] | None, optional
         New-profile overrides only. Defaults to None.
-    trace: TraceSink | None, optional
-        Caller-owned diagnostic sink. Defaults to None.
+    trace: TraceConfig | TraceSink | None, optional
+        Caller-owned diagnostic sink, or a configuration that creates an
+        owned project trace after exclusive reservation. Defaults to None.
     existing: QAProject | None, optional
         Explicitly opened destination for an import. Defaults to None.
     allocate: bool, optional
@@ -633,7 +642,14 @@ def _prepare_sources_workspace(
     """
 
     started_at = perf_counter()
-    active_trace = trace if trace is not None else NullTraceLogger()
+    active_trace = (
+        trace if trace is not None and not isinstance(trace, TraceConfig)
+        else NullTraceLogger()
+    )
+    owned_trace = None
+    committed = False
+    if isinstance(trace, TraceConfig) and trace.output_path is not None:
+        raise ValueError("Workspace creation allocates its own trace path.")
     if type_id not in PROJECT_TYPE_IDS:
         raise ValueError(
             f"type_id must be one of: {', '.join(PROJECT_TYPE_IDS)}."
@@ -713,106 +729,140 @@ def _prepare_sources_workspace(
             workspace, type_id, settings=settings, allocate=allocate,
         )
     )
-    with preparation as (project, journal):
-        workspace = project.root
-        source_root = project.source
-        # A suggested path can be occupied; only the claimed root defines
-        # the creation boundary. Never inspect a skipped project's sources.
-        if allocate and any(
-            source == workspace or source.is_relative_to(workspace)
-            for source in chosen
-        ):
-            raise ValueError("Do not add the workspace as its own source.")
-        active_trace.emit(
-            "workspace.prepare.started",
-            component="workspace",
-            data={
-                "source_paths": [str(path) for path in source_paths],
-                "type_id": type_id,
-                "workspace_directory": str(workspace),
-                "selected_files": selected_files,
-                "replace_existing": replace_existing,
-                "settings": settings,
-            },
-            status="started",
-        )
-        managed = (workspace / PROJECT_SOURCES_DIRECTORY).resolve(strict=True)
-        if project.source != managed:
-            raise ValueError(
-                "project.source must use the managed sources/ folder."
-            )
-        manifest_path = workspace / "sources.json"
-        records = _read_records(manifest_path)
-        used = {item["name"] for item in records}
-        for source in chosen:
-            original = str(source)
-            record = next(
-                (item for item in records if item["original"] == original),
-                None,
-            )
-            if record is None:
-                name = _unique_name(source, used, source_root)
-                record = _SourceRecord(
-                    original=original, name=name,
-                    kind="file" if source.is_file() else "folder",
-                )
-            else:
-                record.setdefault(
-                    "kind", "file" if source.is_file() else "folder"
-                )
-            destination = source_root / record["name"]
-            selection = (
-                selections[original] if selections is not None else None
-            )
-            copied, preserved = _copy_source(
-                source,
-                destination,
-                project,
-                workspace,
-                selection,
-                replace_existing=replace_existing,
-                on_create=journal.note if journal is not None else None,
-            )
+    try:
+        with preparation as (project, journal):
+            workspace = project.root
+            source_root = project.source
+            # A suggested path can be occupied; only the claimed root defines
+            # the creation boundary. Never inspect a skipped project's sources.
+            if allocate and any(
+                source == workspace or source.is_relative_to(workspace)
+                for source in chosen
+            ):
+                raise ValueError("Do not add the workspace as its own source.")
+            if isinstance(trace, TraceConfig):
+                if trace.enabled and journal is not None:
+                    directory = project.logs / "traces"
+                    paths = (
+                        directory / "project.json",
+                        ProjectTraceSequence(directory).path,
+                    )
+                    for path in paths:
+                        journal.note(path)
+                        journal.note(ConversationFileLock(path).lock_path)
+                owned_trace = _project_trace_logger(trace, workspace)
+                active_trace = owned_trace
+            batch_id = active_trace.new_id("source_batch")
             active_trace.emit(
-                "workspace.source.copied",
+                "workspace.prepare.started",
                 component="workspace",
                 data={
-                    "source": str(source),
-                    "destination": str(destination),
-                    "requested_files": selection,
-                    "copied_files": copied,
-                    "preserved_files": preserved,
+                    "batch_id": batch_id,
+                    "operation": (
+                        "import" if existing is not None else "create"
+                    ),
+                    "source_paths": [str(path) for path in source_paths],
+                    "type_id": type_id,
+                    "workspace_directory": str(workspace),
+                    "selected_files": selected_files,
+                    "replace_existing": replace_existing,
+                    "settings": settings,
+                    "effective_profile": asdict(project.profile),
                 },
+                status="started",
             )
-            if source.is_file():
-                record["files"] = copied + preserved
-            else:
-                inventory = set(record.get("files", [])) | set(copied)
-                record["files"] = sorted(
-                    relative
-                    for relative in inventory
-                    if _is_regular_snapshot(destination, relative)
+            managed = (workspace / PROJECT_SOURCES_DIRECTORY).resolve(
+                strict=True
+            )
+            if project.source != managed:
+                raise ValueError(
+                    "project.source must use the managed sources/ folder."
                 )
-            _stamp_copies(record, destination, copied)
-            if record not in records:
-                records.append(record)
-                used.add(record["name"])
-            if journal is not None:
-                journal.note(manifest_path)
-            _write_records(manifest_path, records)
-    prepared = open_project(workspace)
-    active_trace.emit(
-        "workspace.prepare.completed",
-        component="workspace",
-        data={
-            "project_directory": str(prepared.root),
-            "source_directory": str(prepared.source),
-            "sources_manifest": str(manifest_path),
-            "source_count": len(records),
-        },
-        duration_ms=(perf_counter() - started_at) * 1000,
-    )
-    return prepared
+            manifest_path = workspace / "sources.json"
+            records = _read_records(manifest_path)
+            used = {item["name"] for item in records}
+            for source in chosen:
+                original = str(source)
+                record = next(
+                    (item for item in records if item["original"] == original),
+                    None,
+                )
+                if record is None:
+                    name = _unique_name(source, used, source_root)
+                    record = _SourceRecord(
+                        original=original, name=name,
+                        kind="file" if source.is_file() else "folder",
+                    )
+                else:
+                    record.setdefault(
+                        "kind", "file" if source.is_file() else "folder"
+                    )
+                destination = source_root / record["name"]
+                selection = (
+                    selections[original] if selections is not None else None
+                )
+                copied, preserved = _copy_source(
+                    source,
+                    destination,
+                    project,
+                    workspace,
+                    selection,
+                    replace_existing=replace_existing,
+                    on_create=journal.note if journal is not None else None,
+                )
+                if source.is_file():
+                    record["files"] = copied + preserved
+                else:
+                    inventory = set(record.get("files", [])) | set(copied)
+                    record["files"] = sorted(
+                        relative
+                        for relative in inventory
+                        if _is_regular_snapshot(destination, relative)
+                    )
+                _stamp_copies(record, destination, copied)
+                if record not in records:
+                    records.append(record)
+                    used.add(record["name"])
+                if journal is not None:
+                    journal.note(manifest_path)
+                _write_records(manifest_path, records)
+                active_trace.emit(
+                    "workspace.source.copied",
+                    component="workspace",
+                    data={
+                        "batch_id": batch_id,
+                        "source": str(source),
+                        "kind": record["kind"],
+                        "workspace_path": destination.relative_to(
+                            workspace
+                        ).as_posix(),
+                        "destination": str(destination),
+                        "requested_files": selection,
+                        "copied_files": copied,
+                        "preserved_files": preserved,
+                    },
+                )
+        committed = True
+        prepared = open_project(workspace)
+        active_trace.emit(
+            "workspace.prepare.completed",
+            component="workspace",
+            data={
+                "batch_id": batch_id,
+                "operation": "import" if existing is not None else "create",
+                "project_directory": str(prepared.root),
+                "source_directory": str(prepared.source),
+                "sources_manifest": str(manifest_path),
+                "source_count": len(records),
+            },
+            duration_ms=(perf_counter() - started_at) * 1000,
+        )
+        return prepared
+    finally:
+        if isinstance(owned_trace, TraceLogger):
+            # Failed creation rolls back the trace with the workspace. Do
+            # not recreate the rolled-back directory by closing the logger.
+            owned_trace.close(emit_event=committed)
 
 
 def _unique_name(source: Path, used: set[str], root: Path) -> str:
@@ -1545,6 +1595,7 @@ def sync_project_sources(
     project: QAProject,
     *,
     decisions: Mapping[str, SourceAction] | None = None,
+    trace: TraceSink | None = None,
 ) -> SourceChanges:
     """Synchronize selected files and optionally retain indexed versions.
 
@@ -1561,6 +1612,8 @@ def sync_project_sources(
         ``delete`` removes a missing original's copy. Unlisted paths are
         untouched. None replaces tracked changes and deletes missing
         copies, while preserving edited and detached copies.
+    trace: TraceSink | None, optional
+        Caller-owned project diagnostic sink. Defaults to None.
 
     Returns
     -------
@@ -1661,6 +1714,12 @@ def sync_project_sources(
             raise ValueError(
                 f"Source is empty or exceeds the file-size limit: {source}"
             )
+    active_trace = trace if trace is not None else NullTraceLogger()
+    batch_id = active_trace.new_id("source_sync")
+    active_trace.emit(
+        "workspace.sync.started", component="workspace", status="started",
+        data={"batch_id": batch_id, "decisions": decisions},
+    )
     modified = False
     try:
         for record, group, source, copy, relative in pending:
@@ -1679,6 +1738,10 @@ def sync_project_sources(
                 if decisions is not None and group == "deleted":
                     _untrack_file(record, relative)
                     modified = True
+                    active_trace.emit(
+                        "workspace.sync.detached", component="workspace",
+                        data={"batch_id": batch_id, "path": path},
+                    )
                 elif group == "edited" and (
                     decisions is None or path in decisions
                 ):
@@ -1754,11 +1817,24 @@ def sync_project_sources(
                     parent = parent.parent
                 done["deleted"].append(path)
                 modified = True
+            active_trace.emit(
+                "workspace.sync.file", component="workspace",
+                data={
+                    "batch_id": batch_id, "action": action,
+                    "path": path, "source": str(source),
+                    "original": record["original"],
+                    "relative": relative, "kind": record.get("kind"),
+                },
+            )
     finally:
         if modified:
             _write_records(manifest, records)
     for paths in done.values():
         paths.sort()
+    active_trace.emit(
+        "workspace.sync.completed", component="workspace",
+        data={"batch_id": batch_id, "changes": done},
+    )
     return done
 
 

@@ -25,6 +25,7 @@ import os
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
+import warnings
 
 from kilin import workspace
 from kilin.project import (
@@ -1900,6 +1901,181 @@ class TestWorkspaceTracing(WorkspaceFixture):
             [call.args[0] for call in trace.emit.call_args_list],
             ["workspace.prepare.started"],
         )
+
+
+    def test_owned_creation_trace_and_selected_folder_inventory(self):
+        """Record managed destinations and the selected files."""
+        from kilin.trace_logging import TraceConfig
+
+        first = self._file("a/same.py")
+        second = self._file("b/same.py")
+        folder = self._folder("library")
+        self._file("library/one.py")
+        self._file("library/two.py")
+        project = workspace.prepare_sources_workspace(
+            [first, second, folder], "code", self.destination,
+            selected_files={
+                str(first): ["same.py"], str(second): ["same.py"],
+                str(folder): ["one.py"],
+            },
+            trace=TraceConfig(enabled=True, failure_policy="raise"),
+        )
+        path = project.logs / "traces" / "project.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        operations = [
+            node for session in payload["sessions"].values()
+            for node in session.get("operations", {}).values()
+        ]
+        start = next(
+            node["details"] for node in operations
+            if node["event"]["event_type"] == "workspace.prepare.started"
+        )
+        copies = [node["details"] for node in operations if
+                  node["event"]["event_type"] == "workspace.source.copied"]
+        completed = next(node["details"] for node in operations if
+                         node["event"]["event_type"] ==
+                         "workspace.prepare.completed")
+        self.assertEqual(start["operation"], "create")
+        self.assertEqual(start["effective_profile"]["type_id"], "code")
+        self.assertEqual(len(copies), 3)
+        self.assertEqual({copy["batch_id"] for copy in copies},
+                         {start["batch_id"]})
+        self.assertEqual(completed["batch_id"], start["batch_id"])
+        self.assertNotEqual(copies[0]["workspace_path"],
+                            copies[1]["workspace_path"])
+        for copy in copies[:2]:
+            self.assertTrue((project.root / copy["workspace_path"]).is_file())
+            self.assertEqual(copy["kind"], "file")
+        self.assertEqual(copies[2]["kind"], "folder")
+        self.assertEqual(copies[2]["workspace_path"], "sources/library")
+        self.assertEqual(copies[2]["copied_files"], ["one.py"])
+        self.assertFalse((project.source / "library/two.py").exists())
+        self.assertEqual(payload["trace_scope"], "project")
+
+    def test_traced_creation_conflict_keeps_existing_bytes(self):
+        """Never start a trace in an already occupied destination."""
+        from kilin.trace_logging import TraceConfig
+
+        config = TraceConfig(enabled=True, failure_policy="raise")
+        project = self._prepare([self._file("one.py")], trace=config)
+        before = {path.relative_to(project.root): path.read_bytes()
+                  for path in project.root.rglob("*") if path.is_file()}
+        from kilin._project_creation import ProjectAlreadyExistsError
+
+        with self.assertRaises(ProjectAlreadyExistsError):
+            workspace.prepare_sources_workspace(
+                [], "code", project.root, trace=config,
+            )
+        after = {path.relative_to(project.root): path.read_bytes()
+                 for path in project.root.rglob("*") if path.is_file()}
+        self.assertEqual(after, before)
+
+    def test_traced_creation_failure_rolls_back_trace_files(self):
+        """Do not recreate traces when closing a rolled-back logger."""
+        from kilin.trace_logging import TraceConfig
+
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                destination = self.root / f"failed-{existing}"
+                if existing:
+                    destination.mkdir()
+                with self.assertRaisesRegex(ValueError, "empty or exceeds"):
+                    workspace.prepare_sources_workspace(
+                        [self._file("valid.py"), self._file("empty.py", "")],
+                        "code", destination,
+                        trace=TraceConfig(
+                            enabled=True, failure_policy="raise"
+                        ),
+                    )
+                if existing:
+                    self.assertEqual(list(destination.iterdir()), [])
+                else:
+                    self.assertFalse(destination.exists())
+
+    def test_creation_trace_failure_obeys_diagnostic_policy(self):
+        """Warn preserves successful creation; strict failure rolls back."""
+        from kilin.trace_logging import TraceConfig
+
+        source = self._file("one.py")
+        with patch("kilin.trace_logging.write_project_trace",
+                   side_effect=OSError("trace write failed")):
+            # Avoid assertWarns inspecting lazy-loaded optional modules.
+            with warnings.catch_warnings(record=True) as captured:
+                warnings.simplefilter("always", RuntimeWarning)
+                project = self._prepare(
+                    [source], trace=TraceConfig(enabled=True),
+                )
+            self.assertTrue(any(
+                issubclass(item.category, RuntimeWarning)
+                and "trace write failed" in str(item.message)
+                for item in captured
+            ))
+            counter = json.loads((project.logs / "traces/.sequence.json")
+                                 .read_text(encoding="utf-8"))
+            self.assertTrue(counter["incomplete"])
+            self.assertTrue((project.source / source.name).is_file())
+            destination = self.root / "strict"
+            with self.assertRaisesRegex(RuntimeError, "trace write failed"):
+                workspace.prepare_sources_workspace(
+                    [source], "code", destination,
+                    trace=TraceConfig(enabled=True, failure_policy="raise"),
+                )
+            self.assertFalse(destination.exists())
+
+    def test_disabled_creation_trace_writes_no_diagnostics(self):
+        """Explicitly disabled core tracing does not allocate a sequence."""
+        from kilin.trace_logging import TraceConfig
+
+        project = self._prepare([], trace=TraceConfig(enabled=False))
+        self.assertFalse((project.logs / "traces/project.json").exists())
+        self.assertFalse((project.logs / "traces/.sequence.json").exists())
+
+    def test_traced_allocation_uses_claimed_root(self):
+        """Write diagnostics only in the collision-safe allocated project."""
+        from kilin.trace_logging import TraceConfig
+
+        source = self._file("one.py")
+        config = TraceConfig(enabled=True, failure_policy="raise")
+        occupied = workspace.prepare_sources_workspace(
+            [source], "code", workspace_root=self.root, trace=config,
+        )
+        trace = occupied.logs / "traces" / "project.json"
+        before = trace.read_bytes()
+        allocated = workspace.prepare_sources_workspace(
+            [source], "code", workspace_root=self.root, trace=config,
+        )
+        self.assertNotEqual(allocated.root, occupied.root)
+        self.assertEqual(trace.read_bytes(), before)
+        self.assertTrue((allocated.logs / "traces/project.json").is_file())
+
+    def test_sync_records_exact_imported_file_and_batch(self):
+        """Record the original source identity and selected new snapshot."""
+        folder = self._folder("library")
+        self._file("library/one.py")
+        project = self._prepare([folder])
+        new = self._file("library/nested/two.py")
+        self._file("library/three.py")
+        trace = MagicMock()
+        trace.new_id.return_value = "batch"
+        path = "sources/library/nested/two.py"
+        done = workspace.sync_project_sources(
+            project, decisions={path: "import"}, trace=trace,
+        )
+        self.assertEqual(done["added"], [path])
+        self.assertEqual(
+            [call.args[0] for call in trace.emit.call_args_list],
+            ["workspace.sync.started", "workspace.sync.file",
+             "workspace.sync.completed"],
+        )
+        self.assertEqual(trace.emit.call_args_list[1].kwargs["data"], {
+            "batch_id": "batch", "action": "import", "path": path,
+            "source": str(new), "original": str(folder),
+            "relative": "nested/two.py", "kind": "folder",
+        })
+        self.assertEqual(trace.emit.call_args.kwargs["data"], {
+            "batch_id": "batch", "changes": done,
+        })
+        self.assertFalse((project.source / "library/three.py").exists())
 
 
 if __name__ == "__main__":

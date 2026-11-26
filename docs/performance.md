@@ -11,7 +11,8 @@ by a small, read-only parser in
 The notebook supports two workflows:
 
 1. **Analyze saved traces (default):** point `EXISTING_TRACES` to explicit
-   conversation JSON files and run the notebook. No models or projects are
+   conversation or project JSON files and run the notebook. No models or
+   projects are
    opened. Readable spans are extracted from the existing numbered session,
    turn, stage, and operation hierarchy.
 2. **Repeat standardized questions (opt-in):** create a separate KíLín project
@@ -73,8 +74,14 @@ loading KíLín; other third-party backends may not honor them. The actual
 | `median_ms`, `min_ms`, `max_ms` | External per-question repeats | Median and observed range, separated by trace state |
 
 The notebook also produces an operation-level listing for initialization and
-other recorded spans, including `session.ready` and model-load spans. This
-allows inspection of startup components without introducing new counters.
+other recorded spans, including `session.ready` and model-load spans. These
+preparation operations now live in the shared `project.json`. In a live run,
+the notebook selects project operations by the project logger ID for each
+repetition so previous repetitions are not counted again. For read-only
+analysis, explicitly include the project trace under a separate label;
+`read_trace_operations` also accepts an optional `trace_id` filter. The filter
+is not part of the exported measurements. Older conversation traces remain
+readable without a filter.
 
 A saved `ConversationTurn.timeline` also contains ordered, non-overlapping
 phase-based activities, independently of tracing. This is an end-user

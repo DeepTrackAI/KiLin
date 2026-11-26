@@ -111,6 +111,7 @@ class TestRAGLifecycle(unittest.TestCase):
     ) -> None:
         """Unload both interactive models and restore conversation state."""
         session = _session()
+        session.project_trace = MagicMock()
         original = session.chat_session
         original.messages = [
             {"role": "system", "content": "instructions"},
@@ -132,7 +133,7 @@ class TestRAGLifecycle(unittest.TestCase):
             self.assertIsNone(session._router_session)
         session._new_chat_session.assert_called_once_with(
             original.model_id, thinking=True, temperature=0.2,
-            max_new_tokens=432,
+            max_new_tokens=432, trace=session.project_trace,
         )
         replacement.restore_history.assert_called_once_with(
             original.messages
@@ -140,6 +141,7 @@ class TestRAGLifecycle(unittest.TestCase):
         self.assertEqual(replacement.input_token_total, 123)
         self.assertEqual(replacement.output_token_total, 45)
         self.assertIs(session.chat_session, replacement)
+        self.assertIs(replacement.trace, session.trace)
         self.assertFalse(session._closed)
 
     def test_card_generation_restores_chat_when_generation_fails(self):

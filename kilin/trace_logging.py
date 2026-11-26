@@ -1786,6 +1786,44 @@ def create_trace_logger(
     )
 
 
+def _project_trace_logger(
+    config: TraceConfig, root: Path
+) -> TraceLogger | NullTraceLogger:
+    """Create the project diagnostic sink at its canonical workspace path.
+
+    Parameters
+    ----------
+    config: TraceConfig
+        Recording settings. An explicit path must be the project trace.
+    root: pathlib.Path
+        Opened or exclusively reserved workspace directory.
+
+    Returns
+    -------
+    TraceLogger | NullTraceLogger
+        Caller-owned sink; disabled configurations perform no I/O.
+
+    """
+
+    if not config.enabled:
+        return NullTraceLogger()
+    path = root / "logs" / "traces" / "project.json"
+    if config.output_path is not None and (
+        Path(config.output_path).expanduser().resolve() != path.resolve()
+    ):
+        raise ValueError("Project tracing requires logs/traces/project.json.")
+    return TraceLogger(
+        TraceConfig(
+            enabled=True, output_path=path,
+            include_embedding_vectors=config.include_embedding_vectors,
+            failure_policy=config.failure_policy,
+        ),
+        default_directory=path.parent,
+        project_directory=root,
+        scope="project",
+    )
+
+
 def _trace_path(
     configured: str | Path | None,
     default_directory: Path,

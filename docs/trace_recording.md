@@ -7,7 +7,8 @@ mode switch and no automatic redaction or sanitization.
 
 ## Enabling or disabling tracing
 
-A `RAGSession` creates an enabled trace when `trace=None` (the default):
+A `RAGSession` creates enabled project and conversation traces when
+`trace=None` (the default):
 
 ```python
 session = kilin.RAGSession(project_directory)
@@ -42,12 +43,16 @@ activation also remain configurable.
 
 ### Project-creation ordering
 
-The engine creates a project before opening its trace/conversation files;
-precreating a trace inside a fresh destination would make that destination
-occupied. Core preparation can use a caller-owned external sink and emits
-preparation events only after reservation. For a later import, create/open
-the project first, start the trace, then call
-`add_project_sources(..., trace=trace)`.
+The core reserves the creation destination before opening its project trace;
+precreating a trace inside a fresh destination would make it occupied. The GUI
+requests this ordinary tracing behavior. Core callers can request it with
+`prepare_sources_workspace(..., trace=kilin.TraceConfig(enabled=True))`.
+The configuration must not specify a path because automatic allocation may
+choose a different destination. The preparation owns and closes this sink.
+Caller-owned sinks are also supported; omitting the argument preserves
+untraced low-level preparation. For a later import or synchronization, pass
+the opened project sink to `add_project_sources(..., trace=trace)` or
+`sync_project_sources(..., trace=trace)` respectively.
 
 GUI creation conflicts and preparation failures before session switching
 do not append errors to the previous project's trace. The
@@ -74,8 +79,12 @@ files with a `"standard"` or `"forensic"` marker remain readable. Previously
 stored events are preserved when reopening, without retroactive filtering.
 
 Managed workspaces use shared event numbering across conversation and project
-traces. See [Trace architecture](trace_architecture.md) for the files,
-sequence scope, shared ownership, and recording-completeness limitations.
+traces. Initialization, source operations, indexing and configuration are
+recorded in `project.json`. An enabled RAG session creates its own project
+sink unless the caller supplies a shared `project_trace`; the owner closes
+the sink. The GUI shares one project sink through conversation switches.
+See [Trace architecture](trace_architecture.md) for event contracts, settings
+provenance, sequence scope, ownership, and completeness limitations.
 
 Tracing only captures information that the execution components expose:
 external backends and custom tools may not offer every diagnostic detail.

@@ -361,6 +361,7 @@ from kilin.trace_logging import (
     TraceSink,
     TRACE_EVENT_ANSWER_ACTIVITY,
     create_trace_logger,
+    _project_trace_logger,
     trace_text_preview,
 )
 
@@ -1090,6 +1091,7 @@ class RAGSession:
         trace: TraceConfig | TraceSink | None = None,
         conversation_path: str | Path | None = None,
         router_model: str | None = None,
+        project_trace: TraceSink | None = None,
     ) -> None:
         """Open a project, its models, indexes, and saved conversation.
 
@@ -1117,6 +1119,9 @@ class RAGSession:
             loaded beside the answering model, or is shared with it when
             both are the same model. Defaults to ``None``, which uses the
             project's saved router model or the packaged router default.
+        project_trace: TraceSink | None, optional
+            Caller-owned shared project diagnostic sink. Defaults to None,
+            creating one when conversation tracing is enabled.
 
         Raises
         ------
@@ -1135,6 +1140,7 @@ class RAGSession:
 
         self._conversation_ownership: ConversationFileLock | None = None
         self._owns_trace = False
+        self._owns_project_trace = False
         try:
             self._initialize(
                 project_directory,
@@ -1142,6 +1148,7 @@ class RAGSession:
                 trace=trace,
                 conversation_path=conversation_path,
                 router_model=router_model,
+                project_trace=project_trace,
             )
         except BaseException as error:
             ownership = self._conversation_ownership
@@ -1154,6 +1161,13 @@ class RAGSession:
                             f"Trace cleanup failed: {cleanup_error!r}"
                         )
             finally:
+                if self._owns_project_trace:
+                    try:
+                        self.project_trace.close()
+                    except BaseException as cleanup_error:
+                        error.add_note(
+                            f"Project trace cleanup failed: {cleanup_error!r}"
+                        )
                 if ownership is not None:
                     try:
                         ownership.release()
@@ -1172,6 +1186,7 @@ class RAGSession:
         trace: TraceConfig | TraceSink | None,
         conversation_path: str | Path | None,
         router_model: str | None,
+        project_trace: TraceSink | None,
     ) -> None:
         """Prepare the owned trace, conversation history, indexes and models.
 
@@ -1187,6 +1202,8 @@ class RAGSession:
             Path of the conversation record, or None for a new one.
         router_model: str | None
             Optional separate model identifier used to route questions.
+        project_trace: TraceSink | None
+            Optional caller-owned shared project diagnostic sink.
 
         Notes
         -----
@@ -1215,7 +1232,29 @@ class RAGSession:
             ownership = ConversationFileLock(self.conversation_path)
             ownership.acquire()
             self._conversation_ownership = ownership
-        self.trace.emit(
+        if project_trace is not None:
+            if project_trace.enabled != self.trace.enabled:
+                raise ValueError(
+                    "Project and conversation tracing must agree."
+                )
+            if project_trace.enabled and (
+                not isinstance(project_trace, TraceLogger)
+                or project_trace.scope != "project"
+                or project_trace.output_path.resolve() != (
+                    self.project.logs / "traces" / "project.json"
+                ).resolve()
+            ):
+                raise ValueError("Invalid shared project trace.")
+            self.project_trace = project_trace
+        elif isinstance(self.trace, TraceLogger):
+            self.project_trace = _project_trace_logger(
+                replace(self.trace.config, output_path=None),
+                self.project.root,
+            )
+            self._owns_project_trace = True
+        elif isinstance(self.trace, NullTraceLogger):
+            self.project_trace = self.trace
+        self._project_diagnostics().emit(
             "session.started",
             component="rag",
             data={
@@ -1244,7 +1283,7 @@ class RAGSession:
             if router_model is not None
             else read_router_model(self.project.root, self.backend)
         )
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "backend.selected",
             component="rag",
             data={
@@ -1267,9 +1306,9 @@ class RAGSession:
                 embedding_model,
                 backend=self.backend,
                 allow_download=profile.allow_download,
-                trace=self.trace,
+                trace=self._project_diagnostics(),
             )
-            with self.trace.span(
+            with self._project_diagnostics().span(
                 "indexing",
                 component="rag",
                 data={"project_directory": str(self.project.root)},
@@ -1295,9 +1334,13 @@ class RAGSession:
                 max_new_tokens=profile.max_new_tokens,
                 system_prompt=self._behavior_config().system_prompt,
                 allow_download=profile.allow_download,
-                trace=self.trace,
+                trace=self._project_diagnostics(),
                 block_unrequested_cjk=profile.block_unrequested_cjk,
             )
+            # Initialization diagnostics belong to the project, but model
+            # calls made while answering belong to the active conversation.
+            chat_session.trace = self.trace
+            embedding_session.trace = self.trace
             self._emit_progress(
                 "loading_conversation",
                 97.0,
@@ -1332,7 +1375,7 @@ class RAGSession:
                 )
         except BaseException as error:
             try:
-                self.trace.exception(
+                self._project_diagnostics().exception(
                     "session.open.failed",
                     error,
                     component="rag",
@@ -1372,7 +1415,7 @@ class RAGSession:
             tuple[list[Chunk], str | None, SuggestionWords] | None
         ) = None
         self._closed = False
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "session.ready",
             component="rag",
             data={
@@ -1387,6 +1430,46 @@ class RAGSession:
             100.0,
             f"KíLín ready. Index {self.index_status}.",
         )
+
+    def _project_diagnostics(self: RAGSession) -> TraceSink:
+        """Return the shared project sink for preparation diagnostics.
+
+        Returns
+        -------
+        TraceSink
+            Project sink, or the session's conversation/no-op sink when
+            no separate project sink was installed.
+
+        """
+
+        return getattr(
+            self, "project_trace", getattr(self, "trace", NullTraceLogger())
+        )
+
+    @contextmanager
+    def _project_embedding_diagnostics(self: RAGSession) -> Iterator[None]:
+        """Route shared embedding calls to the project during indexing.
+
+        Yields
+        ------
+        None
+            Index preparation can use the shared model without recording
+            its embedding calls in the active conversation.
+
+        Notes
+        -----
+        The command owner executes indexing and answering sequentially.
+        Restore the conversation sink even when preparation raises.
+
+        """
+
+        model = self.embedding_session
+        previous = getattr(model, "trace", self.trace)
+        model.trace = self._project_diagnostics()
+        try:
+            yield
+        finally:
+            model.trace = previous
 
     def _emit_progress(
         self: RAGSession,
@@ -1445,7 +1528,7 @@ class RAGSession:
             elapsed_seconds=elapsed_seconds,
             eta_seconds=eta_seconds,
         )
-        trace = getattr(self, "trace", NullTraceLogger())
+        trace = self._project_diagnostics()
         last_trace_percent = self._progress_last_trace_percent.get(stage)
         completed_count = (
             current is not None and total is not None and current == total
@@ -2935,6 +3018,9 @@ class RAGSession:
         self._conversation_ownership = target_ownership
         self.chat_session.trace = trace
         self.embedding_session.trace = trace
+        router = getattr(self, "_router_session", None)
+        if router is not None:
+            router.trace = trace
         self.conversation_path = target_path
         self.chat_session.reset()
         if messages:
@@ -3085,17 +3171,18 @@ class RAGSession:
             return
         self._closed = True
         trace = getattr(self, "trace", NullTraceLogger())
+        project_trace = self._project_diagnostics()
         errors = self._close_model_sessions()
         try:
             if errors:
-                trace.emit(
+                project_trace.emit(
                     "session.closed",
                     component="rag",
                     status="failed",
                     data={"model_cleanup_errors": len(errors)},
                 )
             else:
-                trace.emit("session.closed", component="rag")
+                project_trace.emit("session.closed", component="rag")
         except BaseException as error:
             errors.append(error)
         try:
@@ -3104,6 +3191,11 @@ class RAGSession:
         except BaseException as error:
             errors.append(error)
         finally:
+            if getattr(self, "_owns_project_trace", False):
+                try:
+                    project_trace.close()
+                except BaseException as error:
+                    errors.append(error)
             ownership = getattr(self, "_conversation_ownership", None)
             if ownership is not None:
                 self._conversation_ownership = None
@@ -3137,19 +3229,19 @@ class RAGSession:
         """
 
         self.project = project
-        with self.trace.span(
-            "indexing",
-            component="rag",
-            data={"project_directory": str(project.root), "refresh": True},
-        ):
-            chunks, indexes, status, source_changes = self._prepare_retrieval(
-                self.embedding_session
+        self._progress_last_trace_percent.clear()
+        with self._project_embedding_diagnostics():
+            with self._project_diagnostics().span(
+                "indexing",
+                component="rag",
+                data={"project_directory": str(project.root), "refresh": True},
+            ):
+                chunks, indexes, status, source_changes = (
+                    self._prepare_retrieval(self.embedding_session)
+                )
+            cards, vectors = self._prepare_source_cards(
+                chunks, indexes, self.embedding_session,
             )
-        cards, vectors = self._prepare_source_cards(
-            chunks,
-            indexes,
-            self.embedding_session,
-        )
         self.chunks = chunks
         self.indexes = indexes
         self.index_status = status
@@ -3180,12 +3272,16 @@ class RAGSession:
         )
         if not policy.enabled:
             raise RuntimeError("Enable source cards before regenerating.")
-        cards, vectors = self._prepare_source_cards(
-            self.chunks,
-            self.indexes,
-            self.embedding_session,
-            force_regenerate=True,
-        )
+        with (
+            self._project_embedding_diagnostics(),
+            self._project_diagnostics().span(
+                "project.source_cards.regenerate", component="rag"
+            ),
+        ):
+            cards, vectors = self._prepare_source_cards(
+                self.chunks, self.indexes, self.embedding_session,
+                force_regenerate=True,
+            )
         self.source_cards = cards
         self.source_card_vectors = vectors
 
@@ -3206,11 +3302,10 @@ class RAGSession:
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
-        cards, vectors = self._prepare_source_cards(
-            self.chunks,
-            self.indexes,
-            self.embedding_session,
-        )
+        with self._project_embedding_diagnostics():
+            cards, vectors = self._prepare_source_cards(
+                self.chunks, self.indexes, self.embedding_session,
+            )
         self.source_cards = cards
         self.source_card_vectors = vectors
 
@@ -3278,11 +3373,18 @@ class RAGSession:
                 "Reopen the project."
             ) from release_error
         try:
-            self.trace.emit("source_cards.chat.released", component="rag")
+            self._project_diagnostics().emit(
+                "source_cards.chat.released", component="rag"
+            )
             yield
         finally:
             try:
-                restored = self._new_chat_session(previous.model_id, **options)
+                restored = self._new_chat_session(
+                    previous.model_id,
+                    trace=self._project_diagnostics(),
+                    **options,
+                )
+                restored.trace = self.trace
                 try:
                     restored.restore_history(messages)
                     restored.input_token_total = totals[0]
@@ -3291,7 +3393,9 @@ class RAGSession:
                     restored.close()
                     raise
                 self.chat_session = restored
-                self.trace.emit("source_cards.chat.restored", component="rag")
+                self._project_diagnostics().emit(
+                    "source_cards.chat.restored", component="rag"
+                )
             except BaseException as error:
                 self.chat_session = None
                 try:
@@ -3736,7 +3840,7 @@ class RAGSession:
             selected_count,
             reading_started,
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "source.read",
             component="rag",
             data={"selected_file_count": selected_count},
@@ -3778,7 +3882,7 @@ class RAGSession:
             for name in selected
             if name in reused or name in read
         ]
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "source.read.summary",
             component="rag",
             data={
@@ -3808,7 +3912,7 @@ class RAGSession:
             source_file_count,
             extracting_started,
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "source.extract",
             component="rag",
             data={"file_count": source_file_count},
@@ -3853,7 +3957,7 @@ class RAGSession:
             "max_tokens": profile.max_tokens,
             "overlap_tokens": profile.overlap_tokens,
         }
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "source.chunk",
             component="rag",
             data={"unit_count": unit_count, **chunk_settings},
@@ -3888,7 +3992,7 @@ class RAGSession:
                 Path(name), fresh_by_path.get(Path(name), [])
             )
         ]
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "source.chunk.summary",
             component="rag",
             data={
@@ -3909,7 +4013,7 @@ class RAGSession:
             current=len(chunks),
             total=len(chunks),
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "index.code_graph.build",
             component="rag",
             data={"chunk_count": len(chunks)},
@@ -3996,7 +4100,7 @@ class RAGSession:
             "selected_files": report.get("selected_files", []),
             "entries": report.get("entries", []),
         }
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "source.scan.completed",
             component="rag",
             data=report_data,
@@ -4067,13 +4171,14 @@ class RAGSession:
 
         configuration_changed = saved_metadata != expected_metadata
         changes["configuration_changed"] = configuration_changed
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "index.check.completed",
             component="rag",
             data={
                 "index_path": str(index_path),
                 "metadata_path": str(metadata_path),
                 "manifest_path": str(manifest_path),
+                "source_manifest": current_manifest,
                 "expected_metadata": expected_metadata,
                 "saved_metadata": saved_metadata,
                 "changes": changes,
@@ -4105,7 +4210,7 @@ class RAGSession:
                     32.0,
                     "Source unchanged; loading the saved retrieval index...",
                 )
-                with self.trace.span(
+                with self._project_diagnostics().span(
                     "index.load",
                     component="rag",
                     data={"index_path": str(index_path)},
@@ -4115,7 +4220,7 @@ class RAGSession:
                         raise ValueError(
                             "Saved index embedding model identity differs."
                         )
-                self.trace.emit(
+                self._project_diagnostics().emit(
                     "index.reused",
                     component="rag",
                     data={
@@ -4142,7 +4247,7 @@ class RAGSession:
                 ValueError,
                 json.JSONDecodeError,
             ) as error:
-                self.trace.exception(
+                self._project_diagnostics().exception(
                     "index.load.failed",
                     error,
                     component="rag",
@@ -4207,7 +4312,7 @@ class RAGSession:
         ]
         embedding_started = perf_counter()
         chunk_count = len(pending_chunks)
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "index.incremental.plan",
             component="rag",
             data={
@@ -4228,7 +4333,7 @@ class RAGSession:
             chunk_count,
             embedding_started,
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "index.semantic.build",
             component="rag",
             data={
@@ -4297,7 +4402,7 @@ class RAGSession:
             current=len(chunks),
             total=len(chunks),
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "index.lexical.build",
             component="rag",
             data={"chunk_count": len(chunks)},
@@ -4320,7 +4425,7 @@ class RAGSession:
             82.0,
             "Saving retrieval index and manifests...",
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "index.save",
             component="rag",
             data={
@@ -4332,7 +4437,7 @@ class RAGSession:
             save_indexes(indexes, index_path)
             _write_json(metadata_path, expected_metadata)
             _write_json(manifest_path, current_manifest)
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "index.rebuilt",
             component="rag",
             data={
@@ -4387,10 +4492,13 @@ class RAGSession:
             lexical=LexicalIndex((), (), {}),
             code_graph=CodeGraph((), ()),
         )
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "index.empty",
             component="rag",
-            data={"chunk_count": 0, "changes": changes},
+            data={
+                "chunk_count": 0, "changes": changes,
+                "source_manifest": manifest,
+            },
         )
         self._emit_progress(
             "index_ready",
@@ -6342,7 +6450,8 @@ class RAGSession:
         )
 
     def _new_chat_session(
-        self: RAGSession, model_id: str, **settings: object
+        self: RAGSession, model_id: str, *, trace: TraceSink | None = None,
+        **settings: object,
     ) -> ChatSession:
         """Load a chat model with this project's system prompt and trace.
 
@@ -6350,6 +6459,8 @@ class RAGSession:
         ----------
         model_id: str
             Hugging Face model ID or local model directory.
+        trace: TraceSink | None, optional
+            Sink for model initialization. Defaults to the conversation.
         **settings: object
             Optional ``thinking``, ``temperature``, and ``max_new_tokens``
             passed to ``ChatSession``.
@@ -6366,7 +6477,7 @@ class RAGSession:
             backend=self.backend,
             system_prompt=self._system_prompt(),
             allow_download=self.project.profile.allow_download,
-            trace=self.trace,
+            trace=self.trace if trace is None else trace,
             block_unrequested_cjk=(self.project.profile.block_unrequested_cjk),
             **settings,
         )
@@ -6638,7 +6749,7 @@ class RAGSession:
                 and indexes.semantic.embeddings
                 else None
             ),
-            trace=self.trace,
+            trace=self._project_diagnostics(),
             progress=report,
             force_regenerate=force_regenerate,
             generation_guard=(

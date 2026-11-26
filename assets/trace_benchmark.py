@@ -153,6 +153,7 @@ def _operation_rows(
     category: str,
     stage: str,
     turn: int | None,
+    trace_id: str | None = None,
 ) -> list[dict[str, object]]:
     """Collect only permitted performance fields from readable operations.
 
@@ -168,6 +169,8 @@ def _operation_rows(
         Turn stage name or empty text for initialization events.
     turn: int | None
         Persisted turn ordinal, if applicable.
+    trace_id: str | None, optional
+        Restrict measurements to one logger run. Defaults to None.
 
     Returns
     -------
@@ -185,6 +188,8 @@ def _operation_rows(
         timing = operation.get("timing")
         details = operation.get("details")
         if event_name not in _TRACKED_EVENTS or not isinstance(event, dict):
+            continue
+        if trace_id is not None and event.get("trace_id") != trace_id:
             continue
         if not isinstance(timing, dict):
             timing = {}
@@ -217,16 +222,19 @@ def _operation_rows(
 
 
 def read_trace_operations(
-    path: str | Path, label: str
+    path: str | Path, label: str, *, trace_id: str | None = None
 ) -> list[dict[str, object]]:
-    """Read timing-only operations from one KíLín conversation JSON file.
+    """Read timing-only operations from one KíLín diagnostic JSON file.
 
     Parameters
     ----------
     path: str | pathlib.Path
-        Explicit path of a saved KíLín conversation trace.
+        Explicit path of a saved KíLín conversation or project trace.
     label: str
         Local, non-sensitive run label used to associate its measurements.
+    trace_id: str | None, optional
+        Include only events from this logger run; useful for shared project
+        traces. Defaults to None, reading all recorded runs.
 
     Returns
     -------
@@ -253,6 +261,10 @@ def read_trace_operations(
 
     if not isinstance(label, str) or not label.strip():
         raise ValueError("A non-empty run label is required.")
+    if trace_id is not None and (
+        not isinstance(trace_id, str) or not trace_id.strip()
+    ):
+        raise ValueError("A non-empty trace ID is required.")
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("A KíLín trace must contain a JSON object.")
@@ -276,6 +288,7 @@ def read_trace_operations(
             category=category,
             stage="",
             turn=None,
+            trace_id=trace_id,
         ))
         if category != "conversations":
             continue
@@ -304,6 +317,7 @@ def read_trace_operations(
                     category=category,
                     stage=stage,
                     turn=int(match.group(1)),
+                    trace_id=trace_id,
                 ))
     return rows
 
