@@ -93,6 +93,66 @@ class TestAtomicTextWrites(unittest.TestCase):
         self.assertEqual(self.path.read_text(encoding="utf-8"), "committed")
         self.assertEqual(self._temporary_files(), [])
 
+    def test_windows_replacement_denial_is_retried(self) -> None:
+        """Reuse the closed temporary file after transient Windows denial."""
+
+        atomic_write_text(self.path, "committed")
+        denied = PermissionError("sharing violation")
+        denied.winerror = 5
+        replace = Path.replace
+        attempts = []
+
+        def replace_after_denial(temporary, path):
+            """Simulate a file scanner releasing the destination handle."""
+            attempts.append(temporary)
+            if len(attempts) == 1:
+                raise denied
+            return replace(temporary, path)
+
+        with patch.object(Path, "replace", replace_after_denial), patch(
+            "kilin.atomic_writes.sleep"
+        ) as pause:
+            atomic_write_text(self.path, "new")
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0], attempts[1])
+        pause.assert_called_once()
+        self.assertEqual(self.path.read_text(encoding="utf-8"), "new")
+        self.assertEqual(self._temporary_files(), [])
+
+    def test_windows_replacement_denial_is_bounded(self) -> None:
+        """Persistent denial preserves the destination and cleans up."""
+
+        atomic_write_text(self.path, "committed")
+        denied = PermissionError("sharing violation")
+        denied.winerror = 32
+        with patch.object(Path, "replace", side_effect=denied) as retry, (
+            patch("kilin.atomic_writes.monotonic", side_effect=[0, 0, 1])
+        ), patch("kilin.atomic_writes.sleep"):
+            with self.assertRaises(PermissionError):
+                atomic_write_text(self.path, "new")
+        self.assertEqual(retry.call_count, 2)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), "committed")
+        self.assertEqual(self._temporary_files(), [])
+
+    def test_other_permission_errors_do_not_retry(self) -> None:
+        """Do not retry unrelated POSIX permissions or Windows errors."""
+
+        atomic_write_text(self.path, "committed")
+        for code in (None, 2, 87):
+            with self.subTest(code=code):
+                denied = PermissionError("denied")
+                if code is not None:
+                    denied.winerror = code
+                with patch.object(
+                    Path, "replace", side_effect=denied
+                ) as retry, patch("kilin.atomic_writes.sleep") as pause:
+                    with self.assertRaises(PermissionError):
+                        atomic_write_text(self.path, "new")
+                retry.assert_called_once()
+                pause.assert_not_called()
+        self.assertEqual(self.path.read_text(encoding="utf-8"), "committed")
+        self.assertEqual(self._temporary_files(), [])
+
     def test_write_failure_preserves_original_and_cleans_up(self) -> None:
         """Remove the temporary file if the stream cannot write content."""
 

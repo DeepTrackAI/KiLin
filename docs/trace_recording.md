@@ -257,6 +257,23 @@ The project targets Python 3.12; run these tests under that interpreter and
 verify the OS-specific file-lock behavior on supported platforms.
 
 
+### Project renaming
+
+A successful GUI project rename records `gui.project.rename.requested` in
+its original directory before closing the session and releasing all trace
+leases. After the folder move and successful internal reopening, the same
+project trace records `gui.project.rename.completed`. Both point events
+include the same `rename_id`, `source_directory`, `destination_directory`,
+and `conversation_id`. Paths are historical provenance. Neither a span nor
+an owned trace file is held across the filesystem move. Failed renames do not
+emit a successful completion, even if the old workspace is reopened during
+recovery. A no-op rename emits neither marker.
+
+Shared trace publication uses atomic UTF-8 replacement. Transient Windows
+access-denied or sharing/lock violations during replacement receive a bounded
+one-second retry using the same closed temporary file under the existing
+lease. Persistent failures retain the ordinary diagnostic failure policy.
+
 ### Change impact and verification
 
 Diagnostic writes can fail without the same policy as a required checkpoint.

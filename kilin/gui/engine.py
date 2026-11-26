@@ -82,6 +82,7 @@ import sys
 from threading import Event, Lock, Thread
 from time import perf_counter
 from typing import Callable, Final
+from uuid import uuid4
 
 from kilin._model_completion import GenerationCancelled
 from kilin._trace_project import OPERATION_RECORDING_VERSION
@@ -4484,6 +4485,13 @@ class ChatEngine:
         name: str
             Filename or project name to use.
 
+        Notes
+        -----
+        The rename request is recorded before releasing the old trace leases.
+        Its matching completion is recorded only after successful activation
+        in the renamed directory. The two point events share an identity;
+        no span or file lease crosses the filesystem move.
+
         """
 
         source = destination = None
@@ -4508,11 +4516,25 @@ class ChatEngine:
             if destination.exists():
                 raise ValueError(f"A folder named {clean!r} already exists.")
             conversation_id = self.active_conversation.conversation_id
+            rename = {
+                "rename_id": uuid4().hex,
+                "source_directory": str(source),
+                "destination_directory": str(destination),
+                "conversation_id": conversation_id,
+            }
+            self.project_trace.emit(
+                "gui.project.rename.requested",
+                component="gui_engine", data=rename,
+            )
             self.close()
             source.rename(destination)
             moved = True
             project = open_project(destination)
             self._reopen_project_conversation(project, conversation_id)
+            self.project_trace.emit(
+                "gui.project.rename.completed",
+                component="gui_engine", data=rename,
+            )
         except Exception as error:
             if source is not None and self.session is None:
                 try:

@@ -166,6 +166,66 @@ class TestEngineRecording(unittest.TestCase):
                              for event in self.events), self.events)
         return session.turns[-1]
 
+    def test_project_rename_records_both_sides_of_move(self):
+        """Correlate successful rename events across released trace leases."""
+        turn = self._ask("Keep this question")
+        original = self.workspace
+        renamed = original.with_name("renamed")
+        active = self.engine.active_conversation.conversation_id
+        self.engine.rename_project(renamed.name)
+        self.assertFalse(original.exists())
+        self.assertEqual(self.engine.session.project.root, renamed)
+        self.assertEqual(self.engine.active_conversation.conversation_id,
+                         active)
+        self.assertEqual(self.engine.session.turns[0].conversation_turn_uuid,
+                         turn.conversation_turn_uuid)
+        self.engine.close()
+        nodes = sorted(_nodes(renamed / "logs" / "traces" / "project.json"),
+                       key=lambda node: node["event"]["sequence"])
+        selected = [node for node in nodes if node["event"]["event_type"]
+                    in ("gui.project.rename.requested", "gui.project.closed",
+                        "gui.project.open.started",
+                        "gui.project.rename.completed")]
+        self.assertEqual([node["event"]["event_type"] for node in selected], [
+            "gui.project.open.started", "gui.project.rename.requested",
+            "gui.project.closed", "gui.project.open.started",
+            "gui.project.rename.completed", "gui.project.closed",
+        ])
+        request = selected[1]["details"]
+        self.assertEqual(request, selected[4]["details"])
+        self.assertTrue(request["rename_id"])
+        self.assertEqual(request["source_directory"], str(original))
+        self.assertEqual(request["destination_directory"], str(renamed))
+        self.assertEqual(request["conversation_id"], active)
+        self.assertEqual(selected[3]["details"]["reason"], "internal_reopen")
+
+    def test_failed_project_rename_has_no_success_marker(self):
+        """A recovered failed move must not appear as a completed rename."""
+        original = self.workspace
+        renamed = original.with_name("renamed")
+        activate = self.engine._activate_project
+        calls = []
+
+        def fail_once(*args):
+            """Fail activation at the new path, then allow recovery."""
+            calls.append(args)
+            if len(calls) == 1:
+                raise RuntimeError("Failed loading model")
+            return activate(*args)
+
+        with patch.object(self.engine, "_activate_project", fail_once):
+            self.engine.rename_project(renamed.name)
+        self.assertTrue(original.is_dir())
+        self.assertFalse(renamed.exists())
+        self.assertEqual(self.engine.session.project.root, original)
+        self.engine.close()
+        self.assertEqual(len(self.project_details(
+            "gui.project.rename.requested")), 1)
+        self.assertEqual(self.project_details("gui.project.rename.completed"),
+                         [])
+        self.assertEqual(len(self.project_details(
+            "gui.project.rename.failed")), 1)
+
     def test_complete_lifecycle_and_interactions(self):
         """Preserve identity, selections, and feedback across an archive."""
         engine = self.engine
