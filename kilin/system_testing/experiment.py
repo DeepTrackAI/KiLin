@@ -5,6 +5,7 @@ Key Features
 - Inspect reference recordings without loading a model or starting the GUI.
 - Validate on demand and reconstruct supported chronological commands.
 - Never modify, repair, or migrate the reference workspace.
+- Reproduce its validated operations in a separate new workspace.
 
 Module Structure
 ----------------
@@ -23,6 +24,7 @@ Examples
 
 from pathlib import Path
 
+from .replay import ProgressCallback, ReplayResult, replay
 from .timeline import TimelineOperation
 from .traces import read_recording
 from .validation import ValidationReport, validate_recording
@@ -31,7 +33,7 @@ __all__ = ["Experiment"]
 
 
 class Experiment:
-    """Read-only system-testing reference experiment.
+    """Read-only reference inspection and independent workspace replay.
 
     Parameters
     ----------
@@ -48,8 +50,8 @@ class Experiment:
     -----
     Each inspection reads a fresh snapshot. Close the original project and
     keep its files unchanged during inspection. No writer lock is acquired;
-    acquiring one could modify the reference. Replay and comparison are not
-    implemented by this interface.
+    acquiring one could modify the reference. Replay creates an independent
+    sibling workspace; comparison of answers is separate.
 
     """
 
@@ -92,3 +94,32 @@ class Experiment:
         report = self.validate()
         report.raise_for_errors()
         return report.operations
+
+    def replay(
+        self, destination: str | Path | None = None, *,
+        progress: ProgressCallback | None = None,
+    ) -> ReplayResult:
+        """Execute the validated reference in a new sibling workspace.
+
+        Parameters
+        ----------
+        destination: str | pathlib.Path | None, optional
+            New sibling directory, which must not exist. Defaults to a
+            sibling with the suffix ``_replay``.
+        progress: ProgressCallback | None, optional
+            Called before each operation with index, total, and the
+            original TimelineOperation. Defaults to None.
+
+        Returns
+        -------
+        ReplayResult
+            Reproduced workspace, identity mappings and observed differences.
+
+        Notes
+        -----
+        Runs ordinary KíLín operations and models. Current inherited
+        defaults are not replaced with historical values. Divergence raises
+        ReplayError and leaves the partial workspace available for inspection.
+
+        """
+        return replay(self, destination, progress=progress)

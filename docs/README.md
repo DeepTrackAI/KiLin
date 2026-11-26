@@ -50,7 +50,7 @@ responsibility, not authority over the source implementation.
 | [Conversation memory](conversation_memory.md) | Turn UUIDs, authoritative feedback, active branch origins, independent indexing and separate prompt provenance. |
 | [Trace recording](trace_recording.md) | Diagnostic activation/content, trace metadata, event versus checkpoint failure policy. |
 | [Trace architecture](trace_architecture.md) | Shared project numbering, trace ownership and chronological event identity. |
-| [System testing](system_testing.md) | Reference preparation, read-only recording validation and chronological command reconstruction. |
+| [System testing](system_testing.md) | Reference preparation, recording validation, chronological reconstruction and independent replay. |
 | [Security](security.md) | Trust boundaries, sensitive data, deployment responsibilities and explicit non-guarantees. |
 | [Performance](performance.md) | Trace-derived measurements, reproducible workloads and limits of timing evidence. |
 | [Development](development.md) | Coding/documentation process, test runners, packaging and PR verification. |

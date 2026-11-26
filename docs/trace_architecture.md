@@ -234,8 +234,8 @@ files and identities. An unrecorded change cannot always be detected from
 traces alone. Interrupted or unsuccessful commands are not silently treated
 as completed replay inputs.
 
-These records are the inputs to future timeline reconstruction and replay,
-not a replay implementation. See [Trace recording](trace_recording.md) for
+These records are the inputs to timeline reconstruction and independent replay,
+implemented in the system-testing package. See [Trace recording](trace_recording.md) for
 activation and failure policy.
 
 For offline inspection of a closed workspace, see
