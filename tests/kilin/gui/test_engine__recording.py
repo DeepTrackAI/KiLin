@@ -11,6 +11,7 @@ weights are required.
 # pylint: disable=C0103:invalid-name
 
 from collections import deque
+import io
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -22,6 +23,7 @@ from kilin._trace_project import OPERATION_RECORDING_VERSION
 from kilin.answering import RouteDecision
 from kilin.conversation_format import conversation_state
 from kilin.conversation_memory.feedback import FeedbackStore
+from kilin.gui import engine as gui_engine
 from kilin.gui.engine import ChatEngine
 from kilin.project import open_project
 from kilin.project_type import RETRIEVAL_MODE_NONE
@@ -311,6 +313,54 @@ class TestEngineRecording(unittest.TestCase):
         self.assertEqual(sorted(sequences),
                          list(range(1, high["last_sequence"] + 1)))
         self.assertFalse(high["incomplete"])
+
+    def test_command_input_eof_closes_completed_project_recording(self):
+        """Close the real coordinator through the engine's EOF path."""
+        self._ask("Hello")
+        self._ask("Another question")
+        project_path = self.traces / "project.json"
+        conversation_path = self.engine.conversation_store.state_path(
+            self.engine.active_conversation
+        )
+        state = conversation_state(json.loads(conversation_path.read_text()))
+        self.assertEqual(len(state["turns"]), 2)
+        # No explicit close command: the parent ends its write channel.
+        with (
+            patch.object(gui_engine, "ChatEngine", return_value=self.engine),
+            patch.object(gui_engine, "default_workspace_directory",
+                         return_value=self.root),
+            patch("sys.stdin", io.StringIO()),
+            patch("sys.stdout", io.StringIO()),
+        ):
+            gui_engine.main()
+        self.assertIsNone(self.engine.session)
+        self.assertIsNone(self.engine.active_conversation)
+        events = []
+        for path in (project_path, conversation_path):
+            nodes = list(_nodes(path))
+            events.extend(node["event"] for node in nodes)
+            events.extend(node["completion"] for node in nodes
+                          if "completion" in node)
+            self.assertEqual(sum(e["event_type"] == "trace.started"
+                                 for e in (n["event"] for n in nodes)),
+                             sum(e["event_type"] == "trace.closed"
+                                 for e in (n["event"] for n in nodes)))
+        events.sort(key=lambda event: event["sequence"])
+        self.assertEqual([e["event_type"] for e in events[-3:]], [
+            "gui.project.closed", "trace.closed", "trace.closed",
+        ])
+        counter = json.loads((self.traces / ".sequence.json").read_text())
+        self.assertFalse(counter["incomplete"])
+        self.assertEqual([e["sequence"] for e in events],
+                         list(range(1, counter["last_sequence"] + 1)))
+        self.assertEqual(conversation_state(json.loads(
+            conversation_path.read_text()
+        )), state)
+        before = [p.read_bytes() for p in (project_path, conversation_path)]
+        self.engine.close()
+        self.assertEqual(before, [p.read_bytes() for p in (
+            project_path, conversation_path,
+        )])
 
     def test_delete_last_creates_and_records_replacement(self):
         old = self.engine.active_conversation

@@ -165,9 +165,11 @@ interrupted generation. The [Stop and restart protocol](gui_protocol.md#errors-s
 owns the command, terminal events, grace period and exact resume-ID behavior.
 
 The UI may show a remembered partial answer after Stop, but such display
-state does not imply a committed `ConversationTurn`. Closing the desktop
-window also terminates its owned child; ordinary closing is not a separate
-multi-file transaction. The detailed process and error events belong to
+state does not imply a committed `ConversationTurn`. Normal desktop window
+closure or application exit ends the child's command input and allows the
+engine to close its active project and trace loggers. An unresponsive child
+is still killed after a bounded wait; closure is not a separate multi-file
+transaction. The detailed process and error events belong to
 [GUI protocol](gui_protocol.md).
 
 ## PDF and native capabilities

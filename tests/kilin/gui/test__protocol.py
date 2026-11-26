@@ -19,7 +19,7 @@ from pathlib import Path
 import re
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from kilin._model_completion import GenerationCancelled
 from kilin.gui import engine
@@ -777,6 +777,105 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "trace_ready",
             "usage_progress",
         })
+
+
+class TestWindowShutdown(unittest.TestCase):
+    """Exercise the window's process policy without starting a Qt window."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        try:
+            cls.window = importlib.import_module("kilin.gui.window")
+        except ModuleNotFoundError as error:
+            if error.name and error.name.startswith("PySide6"):
+                raise unittest.SkipTest("PySide6 is not installed") from error
+            raise
+
+    def _window(self, state):
+        fake = MagicMock()
+        fake._closing = False
+        fake._stopping = False
+        fake._pending = [{"action": "readiness"}]
+        fake._stdout = bytearray()
+        fake.process.state.return_value = state
+        return fake
+
+    def test_shutdown_closes_input_and_waits_before_any_kill(self):
+        window = self.window
+        for state in (window.QProcess.ProcessState.Starting,
+                      window.QProcess.ProcessState.Running):
+            with self.subTest(state=state):
+                fake = self._window(state)
+                fake.process.waitForFinished.return_value = True
+                window.ChatWindow._shutdown_engine(fake)
+                self.assertTrue(fake._closing)
+                self.assertEqual(fake._pending, [])
+                fake._cancel_timer.stop.assert_called_once_with()
+                self.assertEqual(fake.process.mock_calls, [
+                    call.state(), call.closeWriteChannel(),
+                    call.waitForFinished(window.SHUTDOWN_GRACE_MS),
+                ])
+                # aboutToQuit may follow the window close event.
+                window.ChatWindow._shutdown_engine(fake)
+                fake.process.closeWriteChannel.assert_called_once_with()
+                fake.process.waitForFinished.assert_called_once_with(
+                    window.SHUTDOWN_GRACE_MS
+                )
+
+    def test_shutdown_timeout_kills_only_a_still_running_child(self):
+        window = self.window
+        fake = self._window(window.QProcess.ProcessState.Running)
+        fake.process.waitForFinished.side_effect = [False, True]
+        window.ChatWindow._shutdown_engine(fake)
+        self.assertEqual(fake.process.mock_calls, [
+            call.state(), call.closeWriteChannel(),
+            call.waitForFinished(window.SHUTDOWN_GRACE_MS),
+            call.state(), call.kill(),
+            call.waitForFinished(window.SHUTDOWN_GRACE_MS),
+        ])
+
+    def test_shutdown_handles_an_exit_during_the_wait(self):
+        window = self.window
+        state = window.QProcess.ProcessState
+        fake = self._window(state.Running)
+        fake.process.state.side_effect = [state.Running, state.NotRunning]
+        fake.process.waitForFinished.return_value = False
+        window.ChatWindow._shutdown_engine(fake)
+        fake.process.kill.assert_not_called()
+        fake.process.waitForFinished.assert_called_once_with(
+            window.SHUTDOWN_GRACE_MS
+        )
+
+    def test_shutdown_with_no_child_does_not_start_or_wait(self):
+        window = self.window
+        fake = self._window(window.QProcess.ProcessState.NotRunning)
+        window.ChatWindow._shutdown_engine(fake)
+        self.assertTrue(fake._closing)
+        self.assertEqual(fake._pending, [])
+        self.assertEqual(fake.process.mock_calls, [call.state()])
+        fake._start_engine.assert_not_called()
+
+    def test_closing_suppresses_commands_restarts_and_late_events(self):
+        window = self.window
+        fake = self._window(window.QProcess.ProcessState.Running)
+        fake._closing = True
+        fake._pending.clear()
+        fake._recovery_event = {"event": "backend_restarted"}
+        fake.process.readAllStandardOutput.return_value = (
+            b'{"event":"answered"}\n'
+        )
+        window.ChatWindow._send_command(fake, {"action": "readiness"})
+        window.ChatWindow._send_pending(fake)
+        window.ChatWindow._read_events(fake)
+        window.ChatWindow._process_started(fake)
+        window.ChatWindow._process_finished(fake)
+        window.ChatWindow._stop_operation(fake)
+        self.assertEqual(fake._pending, [])
+        self.assertEqual(fake._stdout, bytearray())
+        fake.process.write.assert_not_called()
+        fake.process.kill.assert_not_called()
+        fake._start_engine.assert_not_called()
+        fake.bridge.event.emit.assert_not_called()
 
 
 class TestGUIProtocolBridge(unittest.TestCase):

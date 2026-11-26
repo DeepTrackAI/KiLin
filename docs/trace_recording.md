@@ -172,8 +172,12 @@ The activity list remains saved with the turn when optional tracing is off.
 Activity event writes are throttled like progress updates; normal checkpoint
 writes flush all pending events.
 
-If the window must terminate the engine, the trace retains events already
-written before termination. A mid-turn exit can leave an operation without
+Normal GUI closure requests engine cleanup by ending command input. For a
+completed, idle project, this writes `gui.project.closed` and the closing
+`trace.closed` events for the conversation and project loggers. If cleanup
+fails or the window must forcibly terminate an unresponsive engine, these
+closing events may be absent. The trace retains events already written
+before termination. A mid-turn exit can leave an operation without
 a completion/failure event; reopening numbers later turns above it. Events
 other than throttled progress and answer-activity updates rewrite the file
 as they are emitted,

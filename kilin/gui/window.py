@@ -109,6 +109,8 @@ ROOT = Path(__file__).resolve().parents[2]
 # How long Stop waits for the engine to end an answer before restarting it,
 # as a last resort for an engine that no longer responds.
 CANCEL_GRACE_MS = 30_000
+# Let the engine finalize its project on EOF before forceful termination.
+SHUTDOWN_GRACE_MS = 3000
 ICONS = Path(__file__).resolve().parent / "icons"
 
 
@@ -1823,7 +1825,7 @@ class ChatWindow(QMainWindow):
     Methods
     -------
     closeEvent(event)
-        Stop only this window's backend child process on exit.
+        Gracefully shut down only this window's child process on exit.
 
     Notes
     -----
@@ -1990,7 +1992,7 @@ class ChatWindow(QMainWindow):
     def _process_started(self) -> None:
         """Report a successful automatic restart after an unexpected exit."""
 
-        if self._recovery_event is not None:
+        if not self._closing and self._recovery_event is not None:
             self.bridge.event.emit(json.dumps(self._recovery_event))
             self._recovery_event = None
 
@@ -2005,6 +2007,8 @@ class ChatWindow(QMainWindow):
 
         """
 
+        if self._closing:
+            return
         self._pending.append(command)
         if self.process.state() == QProcess.ProcessState.NotRunning:
             self._start_engine()
@@ -2014,7 +2018,10 @@ class ChatWindow(QMainWindow):
     def _send_pending(self) -> None:
         """Write queued commands as one JSON object per line."""
 
-        if self.process.state() != QProcess.ProcessState.Running:
+        if (
+            self._closing
+            or self.process.state() != QProcess.ProcessState.Running
+        ):
             return
         while self._pending:
             command = self._pending.pop(0)
@@ -2026,8 +2033,8 @@ class ChatWindow(QMainWindow):
         Notes
         -----
         Buffers incomplete stdout lines until newline, parses complete JSON
-        events, and ignores malformed lines. Events arriving during a stop are
-        discarded.
+        events, and ignores malformed lines. Events arriving during a stop or
+        shutdown are discarded.
 
         """
 
@@ -2038,7 +2045,7 @@ class ChatWindow(QMainWindow):
             try:
                 event = json.loads(line)
                 if (
-                    not self._stopping
+                    not (self._stopping or self._closing)
                     and isinstance(event, dict)
                     and "event" in event
                 ):
@@ -2108,7 +2115,7 @@ class ChatWindow(QMainWindow):
 
         """
 
-        if self._stopping:
+        if self._stopping or self._closing:
             return
         self._stopping = True
         self._stopped_pid = int(self.process.processId())
@@ -2198,24 +2205,40 @@ class ChatWindow(QMainWindow):
                 )
             )
 
+    def _shutdown_engine(self) -> None:
+        """End engine input and allow its existing cleanup path to finish.
+
+        Notes
+        -----
+        Window closure and application exit can both invoke this method.
+        Discard unsent commands, suppress restarts, and deliver EOF after
+        already written input. The engine closes its session and traces in
+        its command-loop finally block. An unresponsive child is killed
+        after the bounded grace period; incomplete recordings remain possible.
+
+        """
+
+        if self._closing:
+            return
+        self._closing = True
+        self._cancel_timer.stop()
+        self._pending.clear()
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            self.process.closeWriteChannel()
+            if not self.process.waitForFinished(SHUTDOWN_GRACE_MS):
+                if self.process.state() != QProcess.ProcessState.NotRunning:
+                    self.process.kill()
+                    self.process.waitForFinished(SHUTDOWN_GRACE_MS)
+
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Stop only this window's backend child process on exit.
+        """Gracefully shut down the backend and close the window.
 
         Parameters
         ----------
         event: QCloseEvent
             Qt event delivered by the corresponding widget event handler.
 
-        Notes
-        -----
-        Marks shutdown, kills a running child, waits up to the existing 3000 ms
-        bound, and delegates the event to QMainWindow. This is process
-        termination, not a graceful checkpoint request.
-
         """
 
-        self._closing = True
-        if self.process.state() != QProcess.ProcessState.NotRunning:
-            self.process.kill()
-            self.process.waitForFinished(3000)
+        self._shutdown_engine()
         super().closeEvent(event)

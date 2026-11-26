@@ -642,8 +642,14 @@ partial visible stream.
   starts a replacement child. The page requests settings/readiness again
   and may attempt to reopen the former project. The diagnostic text is
   bounded; these events do not claim recovery of an interrupted operation.
-- Closing the window terminates its child and does not issue an additional
-  graceful checkpoint transaction.
+- Normal window closure or application exit closes the child's standard input
+  after already written commands, discards unsent commands, and suppresses
+  restarts. The engine's existing input-loop cleanup releases the active
+  project and closes its trace loggers. The window waits up to 3,000 ms for
+  this graceful exit; if the child is still running, it kills the child and
+  waits up to another 3,000 ms. Closing is not a request to commit an unfinished
+  answer or a multi-file transaction. A forced fallback can leave an
+  incomplete recording; Stop retains its separate behavior described above.
 
 ## Known limitations and deferred changes
 
