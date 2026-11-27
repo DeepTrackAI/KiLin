@@ -841,6 +841,11 @@ def overview(data: dict) -> str:
         _agreement(data))
     body += ('<p class="ks-caption">Two null tool summaries are equal '
              'recorded absences, not proof that no tool ran.</p>')
+    body += "<h3>Effective model-call reproducibility</h3>" + (
+        _model_reproducibility_html(data))
+    body += "<h3>Recorded tool outcomes</h3>" + _tool_outcomes_html(data)
+    body += _section("Stage-specific performance", _performance_html(data),
+                     expanded=True)
     body += "<h3>Recorded operation durations</h3>" + _timings(data)
     duration = _dict(s.get("paired_command_duration_ms"))
     body += ('<p><b>Paired measured total:</b> '
@@ -1031,6 +1036,337 @@ def event_inventory_html(data: dict, *, original=None, replayed=None,
     return _wrap(body)
 
 
+def _flag_counts(values):
+    """Count measured Boolean observations without imputing missing values.
+
+    Parameters
+    ----------
+    values: iterable
+        Boolean flags or unavailable observations.
+
+    Returns
+    -------
+    dict
+        Equal, available and total counts.
+
+    """
+    values = list(values)
+    observed = [v for v in values if type(v) is bool]
+    return {"equal": sum(observed), "available": len(observed),
+            "total": len(values)}
+
+
+def _release_measurements(data: dict) -> dict:
+    """Collect a compact set of measurements for one point comparison.
+
+    Parameters
+    ----------
+    data: dict
+        Native comparison snapshot, possibly a partial or older report.
+
+    Returns
+    -------
+    dict
+        Independent recording coverage and paired behavioral observations.
+
+    """
+    questions = _questions(data)
+    summary = data["summary"]
+    agreement = {label: dict(equal=equal, available=available, total=total)
+                 for label, equal, available, total in _agreement(data)}
+    agreement["Exact saved answers"] = _flag_counts(
+        _at(op, "question", "answer", "exact_equal") for op in questions)
+    context = [row for op in data["operations"]
+               for row in _list(op.get("context"))]
+    for label, kinds, field in (
+        ("Final history selection", ("history.selection.result",),
+         "final_turn_ids"),
+        ("Memory inventory identities", ("memory.sync.result",
+                                         "project.memory.sync.result"), None),
+        ("Retrieved memory identities", ("conversation_memory.retrieved",),
+         None),
+    ):
+        if not all("context" in op for op in data["operations"]):
+            continue
+        agreement[label] = _flag_counts(
+            _at(row, "selection_equal", field) if field else
+            row.get("identity_equal") for row in context
+            if row.get("event_type") in kinds)
+    for name, label in (("evidence_jaccard", "Exact evidence agreement"),
+                        ("citation_jaccard", "Resolved citation agreement")):
+        index = 2 if name == "evidence_jaccard" else 3
+        values = [_question_metrics(op)[index] for op in questions]
+        agreement[label] = _flag_counts(
+            v == 1 if _number(v) is not None else None for v in values)
+    model = _dict(summary.get("model_reproducibility"))
+    for label, category in (("Comparable T=0 model outputs",
+                             "zero_temperature"),
+                            ("Comparable T>0 model outputs",
+                             "nonzero_temperature")):
+        metric = _at(model, "conditional", category)
+        if isinstance(metric, dict):
+            agreement[label] = {
+                "equal": metric.get("equal_outputs"),
+                "available": metric.get("available_outputs"),
+                "total": metric.get("identical_inputs"),
+            }
+    coverage = {}
+    for name, field, matched in (
+        ("operations", "operations", data["alignment"].get(
+            "matched_operations")),
+        ("questions", "saved_questions", summary.get("questions")),
+    ):
+        coverage[name] = {"matched": matched, **{
+            side: len(data[side][field]) if isinstance(data[side].get(field),
+                                                       list) else None
+            for side in SIDES}}
+    return {"coverage": coverage, "agreement": agreement,
+            "token_f1": summary.get("token_f1"),
+            "tool_transitions": summary.get("tool_transitions"),
+            "model_reproducibility": model or None}
+
+
+def _coverage_text(numerator, denominator):
+    """Format explicit counts; missing coverage is not a successful zero.
+
+    Parameters
+    ----------
+    numerator: int or None
+        Measured or equal count.
+    denominator: int or None
+        Relevant recorded population.
+
+    """
+    if type(numerator) is not int or type(denominator) is not int:
+        return "n/a"
+    return f"{numerator}/{denominator}"
+
+
+def _release_rows(rows):
+    """Build the compact experiment table shared by HTML and Markdown.
+
+    Parameters
+    ----------
+    rows: list[dict]
+        Batch action rows containing the current or explicitly saved metrics.
+
+    Returns
+    -------
+    list[tuple]
+        Execution status and paired coverage, without a composite score.
+
+    """
+    result = []
+    for row in rows:
+        metrics = _dict(row.get("release_measurements"))
+        cover = _dict(metrics.get("coverage"))
+        exact = _at(metrics, "agreement", "Exact saved answers") or {}
+        counts = []
+        for name in ("operations", "questions"):
+            record = _dict(cover.get(name))
+            counts.append(_coverage_text(record.get("matched"),
+                                         record.get("original")))
+        result.append((row.get("experiment"), row.get("execution_status"),
+                       row.get("replay_status"), *counts,
+                       _coverage_text(exact.get("equal"),
+                                      exact.get("available")),
+                       _metric_value(_at(metrics, "token_f1", "mean")),
+                       _at(row, "issue_counts", "review")))
+    return result
+
+
+def _release_totals(rows, *, include_saved=False):
+    """Summarize one invocation, keeping saved snapshots separate.
+
+    Parameters
+    ----------
+    rows: list[dict]
+        Batch action rows with compact measurement snapshots.
+    include_saved: bool, optional
+        Include saved snapshots for explicitly report-only displays.
+
+    Returns
+    -------
+    dict
+        Execution counters, measured coverage and tool outcome counts.
+
+    """
+    execution = Counter(row.get("execution_status") for row in rows)
+    eligible = [row["release_measurements"] for row in rows
+                if isinstance(row.get("release_measurements"), dict) and
+                (include_saved or row.get("snapshot") == "current")]
+    transitions = Counter()
+    coverage = {name: Counter() for name in ("operations", "questions")}
+    for item in eligible:
+        transitions.update(_dict(item.get("tool_transitions")))
+        for name in coverage:
+            record = _dict(_at(item, "coverage", name))
+            for key, value in record.items():
+                if type(value) is int:
+                    coverage[name][key] += value
+                    coverage[name][key + "_snapshots"] += 1
+    return {"complete": execution["complete"],
+            "blocked": execution["blocked"],
+            "inspection": execution["inspection only"],
+            "saved": execution["saved snapshot"],
+            "fresh": sum(r.get("replay_status") == "completed" for r in rows),
+            "review_experiments": sum(bool(_at(r, "issue_counts", "review"))
+                                      for r in rows),
+            "snapshots": len(eligible), "coverage": coverage,
+            "tool_transitions": dict(transitions)}
+
+
+def _release_agreement_rows(rows, *, include_saved=False):
+    """Aggregate counts, not averages of per-experiment percentages.
+
+    Parameters
+    ----------
+    rows: list[dict]
+        Batch action rows with compact measurement snapshots.
+    include_saved: bool, optional
+        Include saved reports for an explicitly historical display.
+
+    Returns
+    -------
+    list[tuple]
+        Metric label, equal count, available count, population and snapshot
+        coverage.
+        A metric absent from an old snapshot is not imputed.
+
+    """
+    sums = {}
+    snapshots = 0
+    for row in rows:
+        if not include_saved and row.get("snapshot") != "current":
+            continue
+        metrics = row.get("release_measurements")
+        if not isinstance(metrics, dict):
+            continue
+        snapshots += 1
+        for label, value in _dict(metrics.get("agreement")).items():
+            if all(type(value.get(k)) is int
+                   for k in ("equal", "available", "total")):
+                sums.setdefault(label, Counter()).update(value)
+                sums[label]["snapshots"] += 1
+    return [(label, value["equal"], value["available"], value["total"],
+             f'{value["snapshots"]}/{snapshots}')
+            for label, value in sums.items()]
+
+
+def _model_reproducibility_html(data):
+    """Show actual-input comparisons and conditional output coverage.
+
+    Parameters
+    ----------
+    data: dict
+        Saved comparison snapshot.
+
+    Returns
+    -------
+    str
+        Escaped HTML tables with explicit measurement boundaries.
+
+    """
+    model = _at(data, "summary", "model_reproducibility")
+    if not isinstance(model, dict):
+        return "<p>Effective model-call measurements unavailable.</p>"
+    body = (f'<p>Paired calls: {_e(model.get("paired_calls"))}; '
+            f'unpaired inputs: {_e(model.get("unpaired_inputs"))}.</p>')
+    body += _table(("Observation", "Equal", "Available", "Paired calls"), [
+        (key, value.get("equal"), value.get("available"), value.get("total"))
+        for key, value in _dict(model.get("agreement")).items()])
+    body += _table(("Conditional category", "Equal outputs",
+                    "Available outputs", "Identical recorded inputs"), [
+        (key, value.get("equal_outputs"), value.get("available_outputs"),
+         value.get("identical_inputs")) for key, value in
+        _dict(model.get("conditional")).items()])
+    body += ("<p>Conditional agreement uses equal recorded model revision, "
+             "backend, device, effective settings, rendered prompt and token "
+             "count. Normalized prompts are diagnostic only. This does not "
+             "establish identical unrecorded runtime state.</p>")
+    return body
+
+
+def _performance_html(data):
+    """Show category timing and throughput without summing nested spans.
+
+    Parameters
+    ----------
+    data: dict
+        Comparison snapshot with independent full-workspace performance.
+
+    Returns
+    -------
+    str
+        Escaped timing observations and coverage, or unavailable note.
+
+    """
+    performance = data.get("performance")
+    if not isinstance(performance, dict):
+        return "<p>Stage-specific performance unavailable.</p>"
+    names = dict.fromkeys(name for side in SIDES for name in
+                          _dict(_at(performance, side, "spans")))
+    rows = []
+    for name in names:
+        metrics = [_dict(_at(performance, side, "spans", name))
+                   for side in SIDES]
+        rows.append((name, *[value for metric in metrics for value in (
+            _seconds(metric.get("duration_ms")),
+            _coverage_text(metric.get("available"), metric.get("total")))]))
+    body = _table(("Category", "Original", "Coverage", "Replay", "Coverage"),
+                  rows)
+    body += _table(("Rate", "Original tokens/s", "Coverage",
+                    "Replay tokens/s", "Coverage"), [
+        (name, *[value for side in SIDES for value in (
+            _at(performance, side, "throughput", name, "tokens_per_second"),
+            _coverage_text(_at(performance, side, "throughput", name,
+                               "available"), _at(performance, side,
+                                                 "throughput", name,
+                                                 "total")))])
+        for name in ("generation", "reply")])
+    body += ("<p>Whole valid recordings, not only matched operations. "
+             "Nested intervals within a category and clock domain are merged; "
+             "categories overlap and are not additive. Rates use recorded "
+             "generated-token counts and include prompt processing; reply "
+             "timing includes additional overhead. Conditions are not "
+             "controlled, so no performance-regression verdict is "
+             "implied.</p>")
+    return body
+
+
+def _tool_outcomes_html(data):
+    """Display paired tool transitions and their saved reasons and outputs.
+
+    Parameters
+    ----------
+    data: dict
+        Saved comparison snapshot.
+
+    Returns
+    -------
+    str
+        Concise transition table with expandable full outcome records.
+
+    """
+    rows, detail = [], ""
+    for i, op in enumerate(_questions(data), 1):
+        tools = _dict(_at(op, "question", "tool_comparison"))
+        transition = tools.get("transition")
+        if transition in (None, "not_applicable"):
+            continue
+        outcomes = _dict(tools.get("outcomes"))
+        rows.append((f"Q{i}", *(_at(outcomes, side, "status")
+                                for side in SIDES), transition,
+                     *(_at(outcomes, side, "tool") for side in SIDES)))
+        detail += _section(f"Q{i} · {transition}", _raw(outcomes))
+    if not rows:
+        return "<p>No paired applicable tool outcomes measured.</p>"
+    return (_table(("Question", "Original", "Replay", "Transition",
+                    "Original tool", "Replay tool"), rows) +
+            "<p>Unknown completion is not proof of success. Historical "
+            "generator coverage is separate.</p>" + detail)
+
+
 def batch_overview(reports: dict, errors: dict | None = None,
                    *, runs: list | None = None) -> str:
     """Render cross-experiment measurements without a composite score.
@@ -1051,112 +1387,130 @@ def batch_overview(reports: dict, errors: dict | None = None,
         Visual dashboard and isolated run or report errors.
 
     """
-    body = "<h2>Experiment overview</h2>"
-    if runs is not None and any("status" in row for row in runs):
-        counts = Counter(row.get("status", "NOT ANALYZED") for row in runs)
-        body += '<div class="ks-cards">' + "".join(
-            _card(label, counts.get(label, 0), tone=tone)
-            for label, tone in (("CRITICAL", "bad"), ("REVIEW", "warn"),
-                                ("COMPLETE", "ok"),
-                                ("NOT ANALYZED", "muted"))) + "</div>"
-        body += ("<p>Critical: structural or execution failure. Review: "
-                 "recorded differences or warnings. Complete is not an "
-                 "answer-quality judgment. Counts refer to diagnostic "
-                 "groups; underlying findings remain below.</p>")
-        ordered = sorted(runs, key=lambda row: (
-            {"CRITICAL": 0, "REVIEW": 1, "NOT ANALYZED": 2,
-             "COMPLETE": 3}.get(row.get("status"), 4),
-            row.get("experiment", "")))
-        body += _table(("Experiment", "Status", "Snapshot", "Replay",
-                        "Alignment", "Questions", "Critical", "Review",
-                        "Coverage findings",
-                        "Comparison notebook", "Answer notebook"), [
-            (r.get("experiment"), r.get("status"), r.get("snapshot"),
-             r.get("replay_status"),
-             ("diverged (inspection only)" if r.get("inspection")
-              else r.get("alignment")), r.get("questions"),
-             _at(r, "issue_counts", "critical"),
-             _at(r, "issue_counts", "review"),
-             len(r.get("coverage_findings", [])),
-             _at(r, "notebooks", "comparison", "status"),
-             _at(r, "notebooks", "answers", "status")) for r in ordered])
+    # Associate only the current invocation's rows with their snapshots.
+    # A report-only display is explicitly saved data, never a new test pass.
+    if runs is None:
+        rows = [{"experiment": name, "execution_status": "saved snapshot",
+                 "snapshot": "saved", "release_measurements":
+                 _release_measurements(data)}
+                for name, data in reports.items()]
+    else:
+        rows = [dict(row) for row in runs]
+        for row in rows:
+            name = str(row.get("experiment", "")).removesuffix("_original")
+            if "release_measurements" not in row and name in reports:
+                row["release_measurements"] = _release_measurements(
+                    reports[name])
+    ordered = sorted(rows, key=lambda row: row.get("experiment", ""))
+    totals = _release_totals(rows, include_saved=runs is None)
+    body = "<h2>Release verification</h2>"
+    if runs is not None:
+        body += '<div class="ks-cards">' + "".join((
+            _card("Current complete comparisons",
+                  f'{totals["complete"]}/{len(rows)}', tone="ok" if
+                  totals["complete"] == len(rows) and rows else "muted"),
+            _card("Blocking experiments", totals["blocked"], tone="bad" if
+                  totals["blocked"] else "muted"),
+            _card("Fresh completed replays", totals["fresh"]),
+            _card("Experiments with review findings",
+                  totals["review_experiments"], tone="warn" if
+                  totals["review_experiments"] else "muted"))) + "</div>"
+        body += (f'<p>Inspection-only comparisons: '
+                 f'{_e(totals["inspection"])}; '
+                 f'saved snapshots: {_e(totals["saved"])}. A comparison-only '
+                 'run does not count as a fresh replay.</p>')
+    else:
+        body += "<p>Saved reports only; no current execution verified.</p>"
+    body += ("<p>Critical: blocking recording, replay or report failures. "
+             "Review: differences or explicit incomplete outcomes requiring "
+             "inspection. Information: descriptive observations. Neither "
+             "complete execution nor exact text proves answer "
+             "correctness.</p>")
+    body += _table(("Experiment", "Execution", "Replay", "Operations M/O",
+                    "Questions M/O", "Exact answers", "Token F1",
+                    "Review groups"), _release_rows(ordered))
+    body += '<p class="ks-caption">M/O = matched / recorded original; '
+    body += 'invalid recordings may contain unverified observations. '
+    body += ('Replay counts and unmatched operations are in detailed '
+             'reports.</p>')
+    if totals["snapshots"]:
+        body += "<h3>Measurement coverage</h3>"
+        body += _table(("Boundary", "Matched", "Original", "Replay"), [
+            (name, *(value.get(key) if value.get(key + "_snapshots") ==
+                     totals["snapshots"] else None for key in
+                     ("matched", "original", "replayed")))
+            for name, value in totals["coverage"].items()])
+        body += "<h3>Behavioral agreement</h3>" + _table(
+            ("Observation", "Equal", "Available", "Total", "Snapshots"),
+            _release_agreement_rows(rows, include_saved=runs is None))
+        body += ('<p class="ks-caption">Counts use available observations '
+                 'from current comparisons (or explicitly saved reports in '
+                 'report-only view). Unavailable metrics are not failures or '
+                 'successes. Context metrics count occurrences, not '
+                 'questions. Snapshots counts reports containing each '
+                 'metric. No similarity threshold or composite score.</p>')
+        body += "<h3>Recorded tool outcomes</h3>" + _table(
+            ("Transition", "Questions"), sorted(totals[
+                "tool_transitions"].items()))
+        body += "<p>Unknown tool completion is not proof of success.</p>"
+    else:
+        body += "<p>No current comparison measurements available.</p>"
+    if runs is not None:
+        body += "<h3>Findings requiring attention</h3>"
+        findings = [(row, group) for row in ordered
+                    for group in _list(row.get("issue_groups"))
+                    if group.get("severity") != "info"]
+        for row, group in sorted(findings, key=lambda pair: (
+                pair[1].get("severity") != "critical",
+                pair[0].get("experiment", ""))):
+            number = group.get("question_number")
+            where = f" · Q{number}" if number is not None else ""
+            title = (f'{row.get("experiment")}{where} · '
+                     f'{group.get("severity")} · {group.get("code")} '
+                     f'({len(group.get("issues", []))} observations)')
+            body += _section(title, _table(
+                ("Code", "Sequence", "Observation"), [
+                    (i.get("code"), i.get("sequence"), i.get("message"))
+                    for i in _list(group.get("issues"))]),
+                expanded=group.get("severity") == "critical")
+        if not findings:
+            body += "<p>No critical or review groups recorded.</p>"
+        body += _section("Artifact and snapshot status", _table(
+            ("Experiment", "Snapshot", "Comparison notebook",
+             "Answer notebook"),
+            [(r.get("experiment"), r.get("snapshot"),
+              _at(r, "notebooks", "comparison", "status"),
+              _at(r, "notebooks", "answers", "status")) for r in ordered]))
         for row in ordered:
-            issues = _list(row.get("issues"))
-            if not issues:
-                continue
-            important = [i for i in issues if i["severity"] != "info"]
-            info = [i for i in issues if i["severity"] == "info"]
-            def issue_table(items):
-                """Render a table of grouped or individual batch findings.
-
-                Parameters
-                ----------
-                items: list
-                    Recorded items in display order.
-
-                Returns
-                -------
-                str
-                    Rendered or formatted text.
-
-                """
-                return _table(("Severity", "Code", "Sequence", "Message"),
-                              [(i["severity"], i["code"], i["sequence"],
-                                i["message"]) for i in items])
-            section = ""
-            if row.get("issue_groups"):
-                section += _table(("Severity", "Diagnostic group", "Count"), [
-                    (g["severity"], g["code"], len(g["issues"]))
-                    for g in row["issue_groups"] if g["severity"] != "info"])
-            if important:
-                section += issue_table(important)
+            info = [i for i in _list(row.get("issues"))
+                    if i.get("severity") == "info"]
             if info:
-                section += _section("Informational observations",
-                                    issue_table(info))
-            body += _section(f'{row["experiment"]} · {row["status"]}',
-                             section, expanded=bool(important))
-    if not reports:
-        body += "<p>No comparison snapshots available.</p>"
-    rows = []
-    for name, data in sorted(reports.items()):
-        summary = data["summary"]
-        metrics = []
-        for key, _ in METRICS:
-            item = _dict(summary.get(key))
-            metrics.append(f'{_metric_value(item.get("mean"))} '
-                           f'({_format(item.get("available"))}/'
-                           f'{_format(item.get("total"))})')
-        duration = _dict(summary.get("paired_command_duration_ms"))
-        rows.append((name, _alignment_label(data),
-                     data["alignment"].get("matched_operations"),
-                     summary.get("questions"), *metrics,
-                     _seconds(duration.get("original")),
-                     _seconds(duration.get("replayed")),
-                     f'{_format(duration.get("available"))}/'
-                     f'{_format(duration.get("total"))}'))
-    if rows:
-        body += _table(("Experiment", "Alignment", "Operations", "Questions",
-                        *(label + " (coverage)" for _, label in METRICS),
-                        "Original time", "Replay time", "Timed pairs"), rows)
+                body += _section(f'{row.get("experiment")} · information',
+                                 _table(("Code", "Sequence", "Observation"), [
+                                     (i.get("code"), i.get("sequence"),
+                                      i.get("message")) for i in info]))
+    if reports:
+        body += "<h3>Detailed experiment measurements</h3>"
         for name, data in sorted(reports.items()):
-            value = _at(data, "summary", "token_f1", "mean")
-            body += (f'<div>{_e(name)} · F1: {_e(_metric_value(value))}</div>'
-                     + _bar(value))
-    body += ('<p class="ks-caption">Each experiment has its own coverage. '
-             'No cross-experiment average or acceptance threshold.</p>')
+            summary = data["summary"]
+            table = _table(("Metric", "Mean", "Available", "Total"), [
+                (label, _metric_value(_at(summary, key, "mean")),
+                 _at(summary, key, "available"), _at(summary, key, "total"))
+                for key, label in METRICS])
+            duration = _dict(summary.get("paired_command_duration_ms"))
+            table += (f'<p>Paired command duration: '
+                      f'{_e(_seconds(duration.get("original")))} / '
+                      f'{_e(_seconds(duration.get("replayed")))}.</p>')
+            table += _section("Effective model-call measurements",
+                              _model_reproducibility_html(data))
+            table += _section("Tool outcome transitions",
+                              _tool_outcomes_html(data))
+            table += _section("Recorded performance", _performance_html(data))
+            body += _section(name + " · " + str(_alignment_label(data)),
+                             table)
     if errors:
         body += "<h3>Report discovery errors</h3>" + _table(
             ("Experiment", "Error"), sorted(errors.items()))
-    if runs is not None and not any("status" in row for row in runs):
-        body += "<h3>Current batch actions</h3>" + _table(
-            ("Experiment", "Notebook", "Notebook error", "Alignment",
-             "Replay error", "Comparison error", "Save error",
-             "Analysis error"), [
-                (row.get("experiment"), row.get("notebook_status"),
-                 row.get("notebook_error"), row.get("alignment"),
-                 row.get("replay_error"), row.get("comparison_error"),
-                 row.get("save_error"),
-                 row.get("analysis_error")) for row in runs])
     if runs is not None:
         body += _section("Full batch action log", _raw(runs))
     return _wrap(body)
@@ -1585,7 +1939,9 @@ def _model_calls(op, roots, cache, include_text):
     for row in _list(op.get("model_calls")):
         title = f'{row.get("stage")} · occurrence {row.get("occurrence")}'
         pairs = []
-        for field in ("model_id", "backend", "input_sequence",
+        for field in ("model_id", "resolved_revision", "backend", "device",
+                      "thinking", "generation", "chat_template",
+                      "input_sequence",
                       "output_sequence", "input_tokens", "output_tokens",
                       "finish_reason", "reply_duration_ms",
                       "generation_duration_ms", "output_available"):
@@ -1593,6 +1949,7 @@ def _model_calls(op, roots, cache, include_text):
         panel = _table(("Call field", "Original", "Replay"), pairs)
         panel += _section("Prompt and response similarity / hashes", _raw({
             "similarities": row.get("text"),
+            "effective_inference": row.get("inference"),
             **{side: {key: _at(row, side, key) for key in
                        ("prompt_sha256", "answer_sha256", "model_source")}
                for side in SIDES}}))
@@ -1744,7 +2101,35 @@ def question_explorer(data: dict, *, question: int | None = None,
                           in _dict(_at(q, "tool_comparison", "outcomes")
                                    ).values()) or
                    bool(op.get("settings_differences") or op.get("issues")
-                        or q.get("issues")))
+                        or q.get("issues")) or
+                   any(row.get("identity_equal") is False or row.get("issues")
+                       for row in _list(op.get("context"))) or
+                   any(_at(call, "inference", key) is False for call in
+                       _list(op.get("model_calls")) for key in (
+                           "model_equal", "settings_equal", "output_equal",
+                           "finish_reason_equal")) or
+                   any((call.get("original") is None) !=
+                       (call.get("replayed") is None) for call in
+                       _list(op.get("model_calls"))) or
+                   any(_at(q, "evidence", "citations", side + "_unresolved")
+                       for side in SIDES) or
+                   any(_at(q, field, "original") != _at(q, field, "replayed")
+                       for field in ("completion", "finish_reason",
+                                     "interactions")) or
+                   any(_at(q, "completion", side, "status") in (
+                       "partial", "incomplete", "failed", "error") or
+                       _at(q, "finish_reason", side) == "length"
+                       for side in SIDES) or
+                   any(row.get("issues") or (
+                       _number(_at(row, "overlap", "jaccard")) is not None
+                       and _at(row, "overlap", "jaccard") < 1)
+                       for row in _list(op.get("rankings"))) or
+                   any(row.get("event_type") != "runtime.output" and
+                       _at(row, "original", "count") !=
+                       _at(row, "replayed", "count")
+                       for row in _list(op.get("stages"))) or
+                   any(_number(value) is not None and value < 1
+                       for value in _question_metrics(op)[2:]))
         if differences_only and not changed:
             continue
         body += _question_panel(op, i, roots, cache, include_model_text,
@@ -1769,6 +2154,8 @@ def question_explorer(data: dict, *, question: int | None = None,
                         _answer_html(q.get("answer")) + _raw({
                             "intent": q.get("intent"),
                             "tool_outcome": q.get("tool_outcome"),
+                            "completion": q.get("completion"),
+                            "finish_reason": q.get("finish_reason"),
                             "validated": q.get("validated")}), expanded=True)
                 body += _section(f"{side.title()} — independently saved "
                                  "questions (not paired)", panel,
@@ -1951,6 +2338,55 @@ def analysis_markdown(data: dict, name: str = "Workspace") -> str:
         _agreement(data))
     lines += ["Equal null tool summaries mean equal recorded absences, "
               "not proof that no tool ran.", ""]
+    model = _at(data, "summary", "model_reproducibility")
+    if isinstance(model, dict):
+        lines += ["## Effective model-call reproducibility", ""] + _md_table(
+            ("Observation", "Equal", "Available", "Paired calls"), [
+                (key, value.get("equal"), value.get("available"),
+                 value.get("total")) for key, value in
+                _dict(model.get("agreement")).items()])
+        lines += _md_table(("Conditional category", "Equal outputs",
+                            "Available outputs", "Identical inputs"), [
+            (key, value.get("equal_outputs"), value.get("available_outputs"),
+             value.get("identical_inputs")) for key, value in
+            _dict(model.get("conditional")).items()])
+        lines += ["Conditional equality uses exact recorded inputs, not "
+                  "metadata-normalized prompts.", ""]
+    lines += ["## Recorded tool outcomes", ""] + _md_table(
+        ("Question", "Original", "Replay", "Transition"), [
+            (f"Q{i}", *(_at(op, "question", "tool_comparison", "outcomes",
+                             side, "status") for side in SIDES),
+             _at(op, "question", "tool_comparison", "transition"))
+            for i, op in enumerate(questions, 1) if _at(
+                op, "question", "tool_comparison", "transition") not in (
+                    None, "not_applicable")])
+    lines += ["Unknown tool completion is not proof of success.", ""]
+    performance = data.get("performance")
+    if isinstance(performance, dict):
+        names = dict.fromkeys(name for side in SIDES for name in
+                              _dict(_at(performance, side, "spans")))
+        lines += ["## Recorded performance categories", ""] + _md_table(
+            ("Category", "Original", "Coverage", "Replay", "Coverage"), [
+                (name, *[value for side in SIDES for value in (
+                    _seconds(_at(performance, side, "spans", name,
+                                 "duration_ms")),
+                    _coverage_text(_at(performance, side, "spans", name,
+                                       "available"), _at(performance, side,
+                                                         "spans", name,
+                                                         "total")))])
+                for name in names])
+        lines += _md_table(("Rate", "Original tokens/s", "Coverage",
+                            "Replay tokens/s", "Coverage"), [
+            (name, *[value for side in SIDES for value in (
+                _at(performance, side, "throughput", name,
+                    "tokens_per_second"),
+                _coverage_text(_at(performance, side, "throughput", name,
+                                   "available"), _at(performance, side,
+                                                     "throughput", name,
+                                                     "total")))])
+            for name in ("generation", "reply")])
+        lines += ["Categories overlap and are not additive. Rates are not "
+                  "necessarily decoding-only throughput.", ""]
     lines += ["## Performance", "",
               "All operation bars share the same duration scale (rounded; "
               "positive values get at least one block). Nested "

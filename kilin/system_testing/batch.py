@@ -26,6 +26,7 @@ using the interpreter running the batch. Saved report text is data only.
 
 from __future__ import annotations
 
+from collections import Counter
 from hashlib import sha256
 from importlib.resources import files
 import json
@@ -38,7 +39,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from nbformat import NotebookNode
 
-from .analysis import load_report, save_analysis, event_inventory
+from .analysis import (
+    load_report, save_analysis, event_inventory, _release_measurements,
+    _release_rows, _release_totals, _release_agreement_rows,
+)
 
 __all__ = [
     "discover_originals", "run_batch", "collect_issues", "load_snapshot",
@@ -327,6 +331,136 @@ def _render_notebooks(prepared, row, snapshot, source, timeout):
                 f"Notebook save: {error}"))
 
 
+def _event_differences(data: dict, inventory: dict) -> list[dict]:
+    """Attribute event-count changes to aligned commands when corroborated.
+
+    Parameters
+    ----------
+    data: dict
+        Comparison with per-operation recorded stage counts.
+    inventory: dict
+        Reconciled independent workspace event inventories.
+
+    Returns
+    -------
+    list[dict]
+        Per-command changes and residual outside-matched-command changes.
+        Every side's counts must reconcile; no causal relationships are
+        inferred, and opposite changes in different commands are retained.
+
+    """
+    sides = ("original", "replayed")
+    counted = {side: Counter() for side in sides}
+    result = []
+    fallback = [{**item, "attribution": "unavailable"}
+                for item in inventory["differences"]]
+    for op in data["operations"]:
+        local = {side: Counter() for side in sides}
+        if not isinstance(op.get("stages"), list):
+            return fallback
+        for stage in op["stages"]:
+            name = stage.get("event_type")
+            for side in sides:
+                count = (stage.get(side) or {}).get("count")
+                if (not isinstance(name, str) or type(count) is not int
+                        or count < 0):
+                    # No reliable operation-level attribution is possible.
+                    return fallback
+                local[side][name] += count
+        for side in sides:
+            counted[side].update(local[side])
+        for name in sorted(local["original"].keys() |
+                           local["replayed"].keys()):
+            a, b = (local[side][name] for side in sides)
+            if a != b:
+                result.append({"event_type": name, "original": a,
+                               "replayed": b,
+                               "sequence": op.get("original_sequence")})
+    remainder = {}
+    for side in sides:
+        remainder[side] = Counter(inventory["counts"][side])
+        remainder[side].subtract(counted[side])
+        if any(count < 0 for count in remainder[side].values()):
+            return fallback
+    for name in sorted(remainder["original"].keys() |
+                       remainder["replayed"].keys()):
+        a, b = (remainder[side][name] for side in sides)
+        if a != b:
+            result.append({"event_type": name, "original": a,
+                           "replayed": b, "sequence": None})
+    return result
+
+
+def _incomplete_answer(completion: object, finish: object) -> bool:
+    """Identify explicit ordinary-answer incompletion without a tool.
+
+    Parameters
+    ----------
+    completion: object
+        Saved answer completion metadata.
+    finish: object
+        Saved model termination reason.
+
+    Returns
+    -------
+    bool
+        Whether recorded metadata explicitly indicates incompletion.
+
+    """
+    status = completion.get("status") if isinstance(completion, dict) else None
+    return finish == "length" or status in (
+        "incomplete", "partial", "failed", "error", "cancelled", "aborted",
+        "interrupted")
+
+
+def _tool_finding(tools: dict) -> tuple[str, str] | None:
+    """Describe a paired tool outcome without treating unknown as success.
+
+    Parameters
+    ----------
+    tools: dict
+        Functional tool comparison with side-specific outcome observations.
+
+    Returns
+    -------
+    tuple[str, str] | None
+        Diagnostic code and concise comparison, when attention is warranted.
+
+    """
+    outcomes = tools.get("outcomes", {})
+    transition = tools.get("transition")
+    states = [outcomes.get(side, {}).get("status")
+              for side in ("original", "replayed")]
+    failed = [side for side, state in zip(("original", "replayed"), states)
+              if state == "incomplete"]
+    labels = {
+        "incomplete_reproduced": "Incomplete outcome reproduced",
+        "potential_regression": "Potential regression: complete to incomplete",
+        "possible_improvement": "Changed outcome: incomplete to complete",
+        "changed": "Recorded tool applicability or outcome changed",
+    }
+    if transition in labels or failed:
+        label = labels.get(transition, "Incomplete recorded result")
+        reasons = []
+        for side, outcome in outcomes.items():
+            completion = outcome.get("completion") or {}
+            reason = completion.get("reason") or outcome.get("finish_reason")
+            items = outcome.get("incomplete_items") or completion.get(
+                "incomplete_items") or []
+            item_reasons = sorted({item["reason"] for item in items
+                                   if isinstance(item, dict) and isinstance(
+                                       item.get("reason"), str)})
+            if reason or item_reasons:
+                reasons.append(f"{side}: {reason or 'incomplete items'}"
+                               + (f" ({', '.join(item_reasons)})"
+                                  if item_reasons else ""))
+        code = ("capability.changed" if transition in (
+            "possible_improvement", "changed") else "capability.incomplete")
+        return code, (f"{label}; original: {states[0]}, replay: {states[1]}"
+                      + ("; " + "; ".join(reasons) if reasons else ""))
+    return None
+
+
 def collect_issues(data: dict | None, row: dict) -> list[dict]:
     """Classify execution failures separately from descriptive differences.
 
@@ -350,7 +484,7 @@ def collect_issues(data: dict | None, row: dict) -> list[dict]:
     """
     issues = []
 
-    def add(level, code, message, sequence=None):
+    def add(level, code, message, sequence=None, *, side=None):
         """Append an individual diagnostic finding.
 
         Parameters
@@ -362,11 +496,16 @@ def collect_issues(data: dict | None, row: dict) -> list[dict]:
         message: object
             Finding detail, converted to text.
         sequence: int or None
-            Original sequence associated with the finding.
+            Recorded sequence associated with the finding.
+        side: str or None, optional
+            Recording side for an independently observed sequence.
 
         """
-        issues.append({"severity": level, "code": code,
-                       "message": str(message), "sequence": sequence})
+        issue = {"severity": level, "code": code,
+                 "message": str(message), "sequence": sequence}
+        if side is not None:
+            issue["side"] = side
+        issues.append(issue)
 
     for field in ("replay_error", "comparison_error", "save_error",
                   "analysis_error", "snapshot_error"):
@@ -406,7 +545,8 @@ def collect_issues(data: dict | None, row: dict) -> list[dict]:
             break
     for hint in receipt.get("coverage", []):
         if isinstance(hint, str) and hint.startswith("REVIEW:"):
-            add("review", "generator.coverage", hint)
+            add("info", "generator.coverage",
+                "Reference at publication: " + hint)
     for side in ("original", "replayed"):
         workspace = data[side]
         if workspace.get("valid") is not True:
@@ -418,7 +558,7 @@ def collect_issues(data: dict | None, row: dict) -> list[dict]:
                     "recording.limit", "relocation.inferred",
                     "environment.difference") else level)
                 add(severity, f'{side}.{issue.get("code")}',
-                    issue.get("message"), issue.get("sequence"))
+                    issue.get("message"), issue.get("sequence"), side=side)
     for issue in data.get("report_issues", []):
         add("critical", "report.issue", issue)
     evaluation = data.get("embedding_evaluation", {})
@@ -439,7 +579,10 @@ def collect_issues(data: dict | None, row: dict) -> list[dict]:
                 for status, count in statuses.items():
                     if count and status in {"error", "failed", "cancelled",
                                             "aborted", "interrupted"}:
-                        add("critical", "stage.failure",
+                        # These are intermediate events in a matched valid
+                        # command. Blocking command failures are handled by
+                        # recording validation/alignment above.
+                        add("review", "stage.failure",
                             f'{side}: {stage.get("event_type")} '
                             f'{status} ({count})', seq)
         question = op.get("question")
@@ -476,6 +619,27 @@ def collect_issues(data: dict | None, row: dict) -> list[dict]:
                 if isinstance(entry, dict) and entry.get("issue"):
                     add("review", "model_call.issue",
                         f'{side}: {entry["issue"]}', seq)
+            flags = call.get("inference", {})
+            label = f'{call.get("stage")} #{call.get("occurrence")}'
+            changed = [key for key in ("model_equal", "settings_equal",
+                                       "finish_reason_equal")
+                       if flags.get(key) is False]
+            if (flags.get("rendered_prompt_equal") is True and
+                    flags.get("input_token_count_equal") is False):
+                changed.append("input_token_count_equal")
+            if changed:
+                add("review", "model_call.configuration",
+                    f'{label}: {", ".join(changed)}', seq)
+            category = flags.get("conditional_category")
+            if flags.get("output_equal") is False:
+                if category == "zero_temperature":
+                    add("review", "model_call.conditional_output",
+                        f"{label}: different output with identical recorded "
+                        "zero-temperature inputs.", seq)
+                elif category == "nonzero_temperature":
+                    add("info", "model_call.stochastic_output",
+                        f"{label}: output differs at nonzero temperature.",
+                        seq)
         if not isinstance(question, dict):
             continue
         for issue in question.get("issues", []):
@@ -485,12 +649,18 @@ def collect_issues(data: dict | None, row: dict) -> list[dict]:
             if tools.get("functional_equal") is False:
                 add("review", "question.tool", "Functional results differ.",
                     seq)
-            outcomes = tools.get("outcomes", {})
-            failed = [side for side, value in outcomes.items()
-                      if value.get("status") == "incomplete"]
-            if failed:
-                add("review", "capability.incomplete",
-                    "Incomplete recorded result: " + ", ".join(failed), seq)
+            finding = _tool_finding(tools)
+            if finding is not None:
+                add("review", *finding, seq)
+            ordinary = [side for side in ("original", "replayed")
+                        if tools.get("outcomes", {}).get(side, {}).get(
+                            "status") in ("not_applicable", "unknown") and
+                        _incomplete_answer(
+                            (question.get("completion") or {}).get(side),
+                            (question.get("finish_reason") or {}).get(side))]
+            if ordinary:
+                add("review", "answer.incomplete",
+                    "Incomplete saved answer: " + ", ".join(ordinary), seq)
         fields = ("intent", "retrieval_mode", "completion",
                   "finish_reason", "interactions")
         if not isinstance(tools, dict):
@@ -537,14 +707,20 @@ def collect_issues(data: dict | None, row: dict) -> list[dict]:
             add("review", "state.feedback", "Mapped feedback differs.")
     events = event_inventory(data)
     if events["complete"]:
-        for item in events["differences"]:
+        for item in _event_differences(data, events):
             # A runtime message is a diagnostic, not a failed command.
             level = ("info" if (item["event_type"] == "runtime.output" or
                      item["event_type"] in data.get(
                          "expected_event_differences", []) or
                      alignment.get("status") != "complete") else "review")
-            add(level, "events.difference", f'{item["event_type"]}: '
-                f'{item["original"]} -> {item["replayed"]}')
+            location = (
+                "Workspace total (operation attribution unavailable): "
+                if item.get("attribution") == "unavailable" else
+                "Outside matched commands: " if item.get("sequence") is None
+                else "")
+            add(level, "events.difference", location +
+                f'{item["event_type"]}: {item["original"]} -> '
+                f'{item["replayed"]}', item.get("sequence"))
     elif alignment.get("status") == "complete":
         add("review", "events.coverage", "Full event counts unavailable.")
     # A missing or invalid replay does not suppress independently saved
@@ -553,12 +729,20 @@ def collect_issues(data: dict | None, row: dict) -> list[dict]:
         paired = {op["question"].get(side + "_turn_uuid")
                   for op in data["operations"] if op.get("question")}
         for question in data[side].get("saved_questions", []):
-            if (question.get("turn_uuid") not in paired and
-                    question.get("tool_outcome", {}).get("status") ==
-                    "incomplete"):
+            if question.get("turn_uuid") in paired:
+                continue
+            status = question.get("tool_outcome", {}).get("status")
+            if status == "incomplete":
                 add("review", "capability.incomplete", f"{side}: "
                     "independently observed incomplete result.",
-                    question.get("sequence"))
+                    question.get("sequence"), side=side)
+            elif status in ("not_applicable", "unknown", None) and (
+                    _incomplete_answer(
+                        question.get("completion"),
+                        question.get("finish_reason"))):
+                add("review", "answer.incomplete", f"{side}: "
+                    "independently observed incomplete answer.",
+                    question.get("sequence"), side=side)
     return issues
 
 
@@ -584,11 +768,14 @@ def group_issues(issues, data):
     missing = bool(data and not data["replayed"].get("valid") and
                    data["replayed"].get("event_count") == 0)
     original_invalid = bool(data and not data["original"].get("valid"))
-    routed = {i["sequence"] for i in issues if i["code"] ==
-              "question.intent"}
+    operations = {op["original_sequence"]: op for op in
+                  (data or {}).get("operations", [])}
+    questions = {op["original_sequence"]: i for i, op in enumerate(
+        (op for op in operations.values() if op.get("question")), 1)}
     for i, issue in enumerate(issues):
         code, seq = issue["code"], issue["sequence"]
         key = (issue["severity"], code, i)
+        paired = issue.get("side") is None and seq in operations
         if missing and issue["severity"] == "critical" and (
                 code in ("alignment", "replay_error") or
                 code.startswith("replayed.") or
@@ -599,12 +786,22 @@ def group_issues(issues, data):
                    "recording.replayed", None)
         elif code.endswith(".environment.difference"):
             key = (issue["severity"], "environment.inspection", None)
-        elif (issue["severity"] == "review" and seq in routed and
-              (code in ("question.intent", "model_call.difference") or
-               code.startswith("context."))):
-            key = ("review", "question.routing", seq)
+        elif paired and code in (
+                "citation.unresolved", "citation.difference"):
+            key = (issue["severity"], "question.citations", seq)
+        elif paired and (code.startswith(("context.",
+                "ranking.", "model_call.")) or code in (
+                    "question.intent", "question.retrieval_mode",
+                    "question.interactions", "question.tool",
+                    "question.completion", "question.finish_reason",
+                    "events.difference", "settings.difference",
+                    "stage.failure", "evidence.difference")):
+            key = (issue["severity"], "question.execution" if seq in questions
+                   else "operation.execution", seq)
         group = groups.setdefault(key, {"severity": key[0], "code": key[1],
                                        "sequence": seq, "issues": []})
+        if paired and seq in questions:
+            group["question_number"] = questions[seq]
         group["issues"].append(issue)
     return list(groups.values())
 
@@ -825,6 +1022,7 @@ def run_batch(originals: list[Path], root: Path, *, run_replay: bool,
                     raise ValueError("Invalid comparison coverage counts.")
                 row["matched_operations"] = matched
                 row["questions"] = questions
+                row["release_measurements"] = _release_measurements(data)
                 for metric in ("token_f1", "embedding_cosine",
                                "evidence_jaccard", "citation_jaccard"):
                     row[metric] = data["summary"].get(metric)
@@ -835,6 +1033,7 @@ def run_batch(originals: list[Path], root: Path, *, run_replay: bool,
                 row["snapshot_error"] = str(error)
                 data = None
                 row["snapshot"] = None
+                row.pop("release_measurements", None)
             else:
                 reports[stem] = data
         if run_notebooks and prepared and data is not None:
@@ -867,11 +1066,20 @@ def run_batch(originals: list[Path], root: Path, *, run_replay: bool,
         row["issue_groups"] = group_issues(row["issues"], data)
         row["coverage_findings"] = [i for i in row["issues"]
                                     if i["code"] in ("capability.incomplete",
+                                                     "capability.changed",
                                                      "generator.coverage")]
+        row["tool_findings"] = [i for i in row["coverage_findings"]
+                                if i["code"] != "generator.coverage"]
         counts = {level: sum(issue["severity"] == level
                              for issue in row["issue_groups"])
                   for level in ("critical", "review", "info")}
         row["issue_counts"] = counts
+        # An old snapshot must never certify a newly requested replay.
+        row["execution_status"] = (
+            "blocked" if counts["critical"] else
+            "not analyzed" if data is None else
+            "saved snapshot" if row["snapshot"] != "current" else
+            "inspection only" if row.get("inspection") else "complete")
         if counts["critical"]:
             row["status"] = "CRITICAL"
         elif data is None:
@@ -916,26 +1124,37 @@ def save_batch_summary(directory: Path, rows: list[dict], *,
             raise ValueError(f"Nonregular summary destination: {target}")
         if target.exists() and not overwrite:
             raise FileExistsError(str(target))
-    levels = ("CRITICAL", "REVIEW", "COMPLETE", "NOT ANALYZED")
-    ordered = sorted(rows, key=lambda row: (
-        levels.index(row["status"]), row["experiment"]))
-    totals = {level: sum(row["status"] == level for row in rows)
-              for level in levels}
-    lines = ["# KíLín · Batch summary", "",
-             "Current invocation only; counts are diagnostic groups, "
-             "not proof of cause.", "",
-             " · ".join(f"**{level}: {totals[level]}**"
-                        for level in levels), ""]
-    lines += _md_table(("Experiment", "Status", "Snapshot", "Alignment",
-                        "Questions", "Critical", "Review", "Comparison NB",
-                        "Answers NB"), [
-        (row["experiment"], row["status"], row.get("snapshot"),
-         ("diverged (inspection only)" if row.get("inspection")
-          else row.get("alignment")), row.get("questions"),
-         row["issue_counts"]["critical"], row["issue_counts"]["review"],
-         row.get("notebooks", {}).get("comparison", {}).get("status"),
-         row.get("notebooks", {}).get("answers", {}).get("status"))
-        for row in ordered])
+    ordered = sorted(rows, key=lambda row: row["experiment"])
+    totals = _release_totals(rows)
+    lines = ["# KíLín · Release verification", "",
+             "Current invocation only. Execution, behavioral agreement and "
+             "capability observations are separate; no quality verdict.", "",
+             f"Current complete comparisons: **{totals['complete']} / "
+             f"{len(rows)}**; blocking experiments: **{totals['blocked']}**; "
+             f"fresh completed replays: **{totals['fresh']}**; "
+             f"inspection-only comparisons: **{totals['inspection']}**.", ""]
+    lines += _md_table(("Experiment", "Execution", "Replay", "Operations M/O",
+                        "Questions M/O", "Exact answers", "Token F1",
+                        "Review groups"), _release_rows(ordered))
+    lines += ["M/O = matched / recorded original.", "",
+              "## Measurement coverage", ""]
+    lines += _md_table(("Boundary", "Matched", "Original", "Replay"), [
+        (name, *(value.get(key) if value.get(key + "_snapshots") ==
+                 totals["snapshots"] and totals["snapshots"] else None
+                 for key in ("matched", "original", "replayed")))
+        for name, value in totals["coverage"].items()])
+    lines += ["## Behavioral agreement (current comparisons)", ""]
+    lines += _md_table(("Observation", "Equal", "Available", "Total",
+                        "Snapshots"), _release_agreement_rows(rows))
+    lines += ["Missing values are unavailable, not zero. Snapshots shows "
+              "the number of reports containing each metric. Saved snapshots "
+              "are excluded from current aggregate measurements.", "",
+              "## Recorded tool outcomes", ""]
+    lines += _md_table(("Transition", "Questions"), sorted(
+        totals["tool_transitions"].items()))
+    lines += ["Historical generator hints describe only the reference at "
+              "publication. Unknown tool completion is not proof of success.",
+              "", "## Findings by experiment", ""]
     for row in ordered:
         lines += [f'## {_md(row["experiment"])}', ""]
         if row.get("archived_replay"):
@@ -953,12 +1172,17 @@ def save_batch_summary(directory: Path, rows: list[dict], *,
         if row.get("replay_execution"):
             lines += ["Replay execution provenance: " + _md(
                 row["replay_execution"].get("status")), ""]
-        issues = [issue for issue in row["issues"]
-                  if issue["severity"] != "info"]
-        if issues:
-            lines += _md_table(("Severity", "Code", "Sequence", "Message"), [
-                (issue["severity"], issue["code"], issue["sequence"],
-                 issue["message"]) for issue in issues])
+        groups = [group for group in row.get("issue_groups", [])
+                  if group["severity"] != "info"]
+        if groups:
+            for group in groups:
+                where = (f"Q{group['question_number']} · " if
+                         group.get("question_number") is not None else "")
+                lines += [f"### {where}{_md(group['code'])} "
+                          f"({_md(group['severity'])})", ""]
+                lines += _md_table(("Code", "Sequence", "Observation"), [
+                    (issue["code"], issue["sequence"], issue["message"])
+                    for issue in group["issues"]])
         else:
             lines += ["No critical or review issues recorded.", ""]
     lines += ["The JSON includes informational observations, metrics, and "
