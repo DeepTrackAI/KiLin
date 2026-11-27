@@ -159,6 +159,75 @@ def markdown_report(data: dict) -> str:
             lines.extend(("", f"{side.capitalize()} explicitly incomplete "
                           f"saved outcomes: {_cell(incomplete)}."))
     lines.append("")
+    model = summary.get("model_reproducibility")
+    if model is not None:
+        lines.extend(("## Model-call reproducibility", "",
+                      f"Paired input calls: {model['paired_calls']}; "
+                      f"unpaired inputs: {_cell(model['unpaired_inputs'])}.",
+                      "Matched operations only; stage and occurrence pairing "
+                      "does not establish causal equivalence.", "",
+                      "| Observation | Equal | Available | Paired calls |",
+                      "|---|---:|---:|---:|"))
+        for name, metric in model["agreement"].items():
+            lines.append(_row(name, metric["equal"], metric["available"],
+                              metric["total"]))
+        lines.extend(("", "| Conditional category | Equal outputs | "
+                      "Available outputs | Identical recorded inputs |",
+                      "|---|---:|---:|---:|"))
+        for name, metric in model["conditional"].items():
+            lines.append(_row(name, metric["equal_outputs"],
+                              metric["available_outputs"],
+                              metric["identical_inputs"]))
+        lines.extend(("", "Conditional agreement requires a recorded model "
+                      "snapshot, backend, device, complete equal effective "
+                      "settings, exact rendered prompt and input-token count. "
+                      "Normalized prompts never qualify as identical input. "
+                      "This is evidence about recorded inputs, not a "
+                      "guarantee "
+                      "of identical runtime state.", ""))
+    if "tool_transitions" in summary:
+        lines.extend(("## Recorded tool outcomes", "",
+                      "| Original / replay outcome | Questions |",
+                      "|---|---:|"))
+        for label, count in summary["tool_transitions"].items():
+            lines.append(_row(label, count))
+        lines.extend(("", "Unknown completion is not a failure or a success. "
+                      "Historical generator coverage observations are not "
+                      "current replay outcomes.", ""))
+    performance = data.get("performance")
+    if performance is not None:
+        lines.extend(("## Recorded performance categories", "",
+                      "Complete workspace recordings, including calls outside "
+                      "matched commands. Timings are inclusive across "
+                      "categories; do not sum them. Within a category nested "
+                      "intervals in the same logger are counted once.", "",
+                      "| Category | Original ms | Coverage | Replay ms | "
+                      "Coverage |", "|---|---:|---:|---:|---:|"))
+        kinds = dict.fromkeys(k for side in ("original", "replayed")
+                             for k in (performance.get(side) or {}).get(
+                                 "spans", {}))
+        for kind in kinds:
+            values = [(performance.get(side) or {}).get("spans", {}).get(
+                kind, {}) for side in ("original", "replayed")]
+            lines.append(_row(kind, *(value for metric in values for value in (
+                metric.get("duration_ms"),
+                f"{metric['available']}/{metric['total']}" if metric
+                else None))))
+        lines.extend(("", "| Throughput | Original tokens/s | Coverage | "
+                      "Replay tokens/s | Coverage |",
+                      "|---|---:|---:|---:|---:|"))
+        for kind in ("generation", "reply"):
+            values = [(performance.get(side) or {}).get("throughput", {}).get(
+                kind, {}) for side in ("original", "replayed")]
+            lines.append(_row(kind, *(value for metric in values for value in (
+                metric.get("tokens_per_second"),
+                f"{metric['available']}/{metric['total']}" if metric
+                else None))))
+        lines.extend(("", "Only recorded generated-token counts with positive "
+                      "timing enter throughput. Generation includes backend "
+                      "prompt processing; reply includes additional overhead. "
+                      "Uncontrolled execution conditions preclude performance "
+                      "verdicts.", ""))
     lines.extend(("## Question metrics", "",
                   "Each mean includes only available measurements. "
                   "An empty evidence union is not a similarity of zero.",
@@ -279,6 +348,29 @@ def markdown_report(data: dict) -> str:
                               "output_tokens"]),
                       _row("Saved trace", q["original_trace"],
                            q["replayed_trace"]), ""))
+        if "tool_comparison" in q:
+            tools = q["tool_comparison"]
+            if "transition" in tools:
+                lines.extend(("Recorded tool transition: " +
+                              _cell(tools["transition"]), "",
+                              "| Tool observation | Original | Replay |",
+                              "|---|---|---|",
+                              _row("Tool outcome", *(
+                                  tools["outcomes"][side] for side in
+                                  ("original", "replayed"))), ""))
+        calls = op.get("model_calls") or []
+        if any("inference" in call for call in calls):
+            lines.extend(("| Stage | Occurrence | Model | Settings | "
+                          "Exact prompt | Output | Finish reason |",
+                          "|---|---:|---|---|---|---|---|"))
+            for call in calls:
+                flags = call.get("inference", {})
+                lines.append(_row(call["stage"], call["occurrence"], *(
+                    flags.get(k) for k in ("model_equal", "settings_equal",
+                                          "rendered_prompt_equal",
+                                          "output_equal",
+                                          "finish_reason_equal"))))
+            lines.append("")
         if op["rankings"]:
             lines.extend(("| Ranking channel | Occurrence | Exact Jaccard | "
                           "File Jaccard | Mean absolute rank shift |",

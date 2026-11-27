@@ -343,7 +343,9 @@ def _functional_tool(value: object) -> tuple[object, dict]:
     return functional, timing
 
 
-def _completion(tool: object, completion: object) -> dict:
+def _completion(tool: object, completion: object, *,
+                execution_count: int | None = None,
+                finish_reason: object = None) -> dict:
     """Describe explicit incomplete outcomes without judging answer quality.
 
     Parameters
@@ -352,29 +354,44 @@ def _completion(tool: object, completion: object) -> dict:
         Saved tool summary, if recorded.
     completion: object
         Saved completion metadata, if recorded.
+    execution_count: int | None, optional
+        Number of recorded tool starts. None means execution is unknown.
+    finish_reason: object, optional
+        Saved final model termination reason, if recorded.
 
     """
     a = tool if isinstance(tool, dict) else {}
     b = completion if isinstance(completion, dict) else {}
     failures = [v for v in (a.get("status"), b.get("status"))
                 if isinstance(v, str) and v in _FAILURES]
-    if a.get("valid") is False or failures:
+    if tool is None and execution_count == 0:
+        status = "not_applicable"
+    elif tool is None and execution_count is None:
+        status = "unknown"
+    elif (a.get("valid") is False or failures or
+          a.get("incomplete_items") or b.get("incomplete_items") or
+          finish_reason == "length"):
         status = "incomplete"
     elif a.get("valid") is True or a.get("status") in (
-            "completed", "complete", "success", "ok"):
+            "completed", "complete", "success", "ok") or b.get("status") in (
+                "completed", "complete", "success", "ok"):
         status = "complete"
-    elif tool is None and not b:
-        status = "not_reported"
     else:
-        status = "unconfirmed"
+        # A returned tool.run span or saved filename alone does not prove
+        # that every requested task was successfully completed.
+        status = "unknown"
     return {"status": status, "tool": a.get("name"),
             "tool_status": a.get("status"), "valid": a.get("valid"),
             "completion": b, "problems": a.get("problems"),
+            "execution_count": execution_count, "finish_reason": finish_reason,
+            "incomplete_items": a.get("incomplete_items"),
             "saved": {k: a[k] for k in ("report", "saved", "saved_pdf")
                       if k in a}}
 
 
-def tool_comparison(tool: dict, completion: dict) -> dict:
+def tool_comparison(tool: dict, completion: dict, *,
+                    executions: dict | None = None,
+                    finish_reasons: dict | None = None) -> dict:
     """Keep raw tool summaries in the report and compare functional fields.
 
     Parameters
@@ -383,15 +400,31 @@ def tool_comparison(tool: dict, completion: dict) -> dict:
         Original and replayed saved tool summaries.
     completion: dict
         Original and replayed saved completion metadata.
+    executions: dict | None, optional
+        Recorded tool-start counts by side.
+    finish_reasons: dict | None, optional
+        Saved termination reasons by side.
 
     """
     functional, timings, outcomes = {}, {}, {}
     for side in ("original", "replayed"):
         functional[side], timings[side] = _functional_tool(tool[side])
-        outcomes[side] = _completion(tool[side], completion[side])
+        outcomes[side] = _completion(
+            tool[side], completion[side],
+            execution_count=(executions or {}).get(side),
+            finish_reason=(finish_reasons or {}).get(side))
+    a, b = (outcomes[s]["status"] for s in ("original", "replayed"))
+    transition = {
+        ("complete", "complete"): "complete_reproduced",
+        ("incomplete", "incomplete"): "incomplete_reproduced",
+        ("complete", "incomplete"): "potential_regression",
+        ("incomplete", "complete"): "possible_improvement",
+        ("not_applicable", "not_applicable"): "not_applicable",
+    }.get((a, b), "unknown" if "unknown" in (a, b) else "changed")
     return {"functional": functional, "timing": timings,
             "functional_equal": functional["original"] ==
-            functional["replayed"], "outcomes": outcomes}
+            functional["replayed"], "outcomes": outcomes,
+            "transition": transition}
 
 
 def independent_questions(recording: Recording,
@@ -427,6 +460,9 @@ def independent_questions(recording: Recording,
     counts = Counter(e.details.get("conversation_turn_uuid") for e in events
                      if isinstance(e.details.get("conversation_turn_uuid"),
                                    str))
+    operations = {event.sequence: op for op in report.operations
+                  if op.kind == "ask" for event in op.matching(
+                      "gui.question.saved")}
     rows = []
     for event in events:
         uid = event.details.get("conversation_turn_uuid")
@@ -439,11 +475,17 @@ def independent_questions(recording: Recording,
         parameters = turn.get("parameters") or {}
         if not isinstance(parameters, dict):
             parameters = {}
+        op = operations.get(event.sequence)
+        count = (len(op.matching("tool.run.started"))
+                 if op is not None else None)
         rows.append({"sequence": event.sequence, "trace": event.path,
                      "turn_uuid": uid, "validated": report.valid,
                      "question": turn["question"], "answer": turn["answer"],
                      "intent": parameters.get("intent"),
-                     "tool_outcome": _completion(parameters.get("tool"),
-                                                 parameters.get(
-                                                     "completion"))})
+                     "completion": parameters.get("completion"),
+                     "finish_reason": parameters.get("finish_reason"),
+                     "tool_outcome": _completion(
+                         parameters.get("tool"), parameters.get("completion"),
+                         execution_count=count,
+                         finish_reason=parameters.get("finish_reason"))})
     return rows

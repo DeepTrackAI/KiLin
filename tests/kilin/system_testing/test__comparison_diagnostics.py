@@ -124,6 +124,41 @@ class TestDiagnostics(unittest.TestCase):
         self.assertFalse(tool_comparison(
             dict(original=a, replayed=b), completion)["functional_equal"])
 
+    def test_tool_outcome_transitions_and_unknown_execution(self):
+        completion = dict(original=None, replayed=None)
+        cases = (
+            (None, None, 0, 0, "not_applicable"),
+            (None, None, 1, 1, "unknown"),
+            ({"name": "summary", "saved": "outputs/file.md"},
+             {"name": "summary"}, 1, 1, "unknown"),
+            ({"valid": True}, {"valid": False}, 1, 1,
+             "potential_regression"),
+            ({"valid": False}, {"valid": True}, 1, 1,
+             "possible_improvement"),
+            ({"valid": True}, {"status": "completed", "valid": True}, 1, 1,
+             "complete_reproduced"),
+        )
+        for a, b, first, second, expected in cases:
+            with self.subTest(expected=expected):
+                row = tool_comparison(
+                    dict(original=a, replayed=b), completion,
+                    executions=dict(original=first, replayed=second))
+                self.assertEqual(row["transition"], expected)
+        row = tool_comparison(dict(original=None, replayed=None),
+                              dict(original={"status": "complete"},
+                                   replayed={"status": "partial"}))
+        self.assertEqual(row["transition"], "unknown")
+        row = tool_comparison(dict(original={"valid": True},
+                                   replayed={"valid": True}),
+                              dict(original={"status": "partial"},
+                                   replayed=None))
+        self.assertEqual(row["transition"], "possible_improvement")
+        row = tool_comparison(dict(original={"valid": True},
+                                   replayed={"valid": True}), completion,
+                              finish_reasons=dict(original="length",
+                                                  replayed="stop"))
+        self.assertEqual(row["transition"], "possible_improvement")
+
 
 if __name__ == "__main__":
     unittest.main()

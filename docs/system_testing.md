@@ -358,6 +358,51 @@ is annotated as inspection-only if the replay matches the preceding prefix.
 Strict alignment remains divergent; substantive changes and failed commands
 never qualify. A fresh replay reproduces the entire valid history.
 
+### Effective model settings, outcome transitions and performance
+
+Each paired model call retains the recorded backend, device, model source,
+recognized Hugging Face snapshot revision, effective generation settings
+(including suppression fields), template settings, thinking flag, token
+counts, and termination reason. Comparisons are by enclosing stage and
+occurrence, not by semantic equivalence. Snapshot revisions are recognized
+lexically in the matching repository cache path. Unversioned local model
+paths do not establish revision identity; no model files are opened.
+
+`summary.model_reproducibility` counts input calls and unpaired inputs in
+matched commands. Each equality statistic has `equal`, `available` and
+`total` counts. Conditional categories require equal recorded model identity,
+effective settings, exact rendered prompt and input-token count. Metadata-
+normalized structured prompts are reported separately and never used to
+qualify exact-input reproducibility. For zero and nonzero temperatures the
+report records `identical_inputs`, `available_outputs` and `equal_outputs`.
+Missing, ambiguous or incomplete input metadata cannot qualify. Equal output
+text is not proof of answer correctness or a universal determinism guarantee.
+
+Tool outcomes are `complete`, `incomplete`, `unknown` or `not_applicable`.
+An absent tool summary with no recorded tool start is not applicable; absence
+of a completion flag in a returned tool is unknown. Explicit validation
+failure, incomplete items or recorded incomplete completion takes precedence
+over a nominal success. Completion of a trace span or existence of a filename
+alone does not demonstrate success. The paired `transition` describes a
+reproduced completion/limitation, potential regression, possible improvement,
+changed outcome or unavailable comparison. Historical generator hints remain
+reference observations. Saved output paths are observations; the independent
+final file inventories retain their actual hashes and presence.
+
+The `performance` section covers each independently valid full workspace,
+including overhead outside matched commands. Categories select corroborated
+recorded spans for project initialization, indexing, model loading, retrieval
+and embeddings, model inference, and question duration. Intervals within each
+category and logger clock domain are merged to avoid counting nested spans
+more than once. Categories overlap and are not additive; measurements are
+reported with span coverage and no automatic performance thresholds. The
+recorded output-event generation duration is used when the duplicate detail
+is omitted. Generation and reply throughput use only actual recorded generated
+token counts with positive corresponding durations, as a ratio of total
+covered tokens to total covered time. Neither is necessarily decoding-only
+throughput. Missing samples remain unavailable. Hardware/cache conditions
+are not controlled by these observations.
+
 ### Optional embedding evaluation
 
 For semantic answer comparison, explicitly choose a local or already cached

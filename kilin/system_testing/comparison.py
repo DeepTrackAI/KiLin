@@ -39,8 +39,8 @@ from ._comparison_diagnostics import (
 )
 from ._comparison_metrics import (
     EmbeddingEvaluator, evidence_metrics, file_changes, inventory,
-    model_calls, operation_duration, ranking_metrics, stage_metrics,
-    text_metrics, usage,
+    inference_comparison, inference_summary, model_calls, operation_duration,
+    performance_summary, ranking_metrics, stage_metrics, text_metrics, usage,
 )
 from ._comparison_report import markdown_report, save_reports
 from ._inspection import note_inspection, relocation_event_differences
@@ -424,7 +424,8 @@ def _call_comparison(original: TimelineOperation,
                                                  if text is not None else None)
             rows.append({"stage": stage, "occurrence": i + 1,
                          "original": old, "replayed": new,
-                         "text": metrics})
+                         "text": metrics,
+                         "inference": inference_comparison(old, new, metrics)})
     return rows
 
 
@@ -618,7 +619,11 @@ def _operation(original: TimelineOperation, replayed: TimelineOperation,
                                     evaluator)
         question = row["question"]
         question["tool_comparison"] = tool_comparison(
-            question["tool"], question["completion"])
+            question["tool"], question["completion"],
+            executions={side: len(op.matching("tool.run.started"))
+                        for side, op in (("original", original),
+                                         ("replayed", replayed))},
+            finish_reasons=question["finish_reason"])
     return row
 
 
@@ -717,6 +722,9 @@ def _aggregate(operations: list[dict]) -> dict:
         "replayed": math.fsum(b for _, b in paired) if paired else None,
         "available": len(paired), "total": len(durations),
     }
+    result["model_reproducibility"] = inference_summary(operations)
+    result["tool_transitions"] = dict(sorted(Counter(
+        q["tool_comparison"]["transition"] for q in questions).items()))
     return result
 
 
@@ -839,6 +847,9 @@ def compare(experiment: Experiment, destination: str | Path | None = None,
                                           inventory(target, directory))
                   for directory in ("sources", "templates", "outputs")},
     }
+    data["performance"] = {
+        side: performance_summary(report.events) if report.valid else None
+        for side, report in (("original", before), ("replayed", after))}
     data["inspection"] = note_inspection(data, before)
     data["reference_publication"] = inspect_receipt(root, before)
     data["replay_execution"] = execution_provenance(target, after)

@@ -4,6 +4,7 @@
 # pylint: disable=C0116:missing-function-docstring
 # pylint: disable=C0103:invalid-name
 
+from copy import deepcopy
 from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,7 +12,8 @@ import unittest
 
 from kilin.system_testing._comparison_metrics import (
     cosine, evidence_metrics, file_changes, inventory, model_calls,
-    overlap, passage_identity, ranking_metrics, stage_metrics, text_metrics,
+    inference_comparison, inference_summary, overlap, passage_identity,
+    performance_summary, ranking_metrics, stage_metrics, text_metrics,
 )
 from kilin.system_testing.timeline import TimelineOperation
 from kilin.system_testing.traces import TraceEvent
@@ -139,6 +141,141 @@ class TestComparisonMetrics(unittest.TestCase):
             second = inventory(root, "outputs")
             self.assertTrue(second["issues"])
             self.assertIsNone(file_changes(first, second)["changes"])
+
+
+class TestInferenceAndPerformance(unittest.TestCase):
+    def setUp(self):
+        self.input = {
+            "model_id": "org/model", "backend": "mlx", "device": "metal",
+            "model_source": "/cache/models--org--model/snapshots/" + "a" * 40,
+            "thinking": False, "input_token_count": 20,
+            "generation": {"temperature": 0., "sampling": False,
+                           "max_new_tokens": 30,
+                           "cjk_blocking_requested": False,
+                           "cjk_tokens_blocked": False,
+                           "cjk_suppressed_token_count": 0},
+            "chat_template": {"add_generation_prompt": True,
+                              "enable_thinking": False},
+            "call_id": "call",
+        }
+        self.output = {"call_id": "call", "output_token_count": 10,
+                       "output_token_count_source": "generated_tokens",
+                       "reply_duration_ms": 600, "finish_reason": "stop"}
+        self.text = {"prompt": {"exact_equal": True},
+                     "answer": {"exact_equal": True},
+                     "structured_normalized_equal": True}
+
+    def _row(self, data=None, result=None):
+        return model_calls(_op(
+            _event(1, "llm.call.input", data or self.input,
+                   exact={"02_rendered_prompt": {"value": "prompt"}}),
+            _event(2, "llm.call.output", result or self.output,
+                   duration=500,
+                   exact={"01_generated_answer": {"value": "answer"}})
+        ))[0]
+
+    def test_equal_recorded_inputs_across_cache_roots(self):
+        a = self._row()
+        b = self._row({**self.input, "model_source":
+                       "C:\\cache\\models--org--model\\snapshots\\"
+                       + "a" * 40})
+        self.assertEqual(a["resolved_revision"], "a" * 40)
+        self.assertEqual(b["resolved_revision"], "a" * 40)
+        self.assertEqual(a["generation_duration_ms"], 500)
+        value = inference_comparison(a, b, self.text)
+        self.assertTrue(value["model_equal"])
+        self.assertTrue(value["settings_equal"])
+        self.assertEqual(value["conditional_category"], "zero_temperature")
+        self.assertTrue(value["finish_reason_equal"])
+        b["finish_reason"] = "length"
+        self.assertFalse(inference_comparison(a, b, self.text)[
+            "finish_reason_equal"])
+
+    def test_missing_revision_settings_and_prompt_never_qualify(self):
+        a = self._row()
+        for field in ("device", "resolved_revision", "thinking",
+                      "generation", "chat_template", "input_tokens"):
+            with self.subTest(field=field):
+                b = deepcopy(a)
+                b.pop(field)
+                self.assertIsNone(inference_comparison(a, b, self.text)[
+                    "conditional_category"])
+        b = self._row({**self.input, "model_source": "/unversioned/local"})
+        self.assertIsNone(b["resolved_revision"])
+        self.assertIsNone(inference_comparison(a, b, self.text)["model_equal"])
+        b = deepcopy(a)
+        b["generation"]["cjk_suppressed_token_count"] = 1
+        self.assertFalse(inference_comparison(a, b, self.text)[
+            "settings_equal"])
+        b["generation"]["temperature"] = float("nan")
+        self.assertIsNone(inference_comparison(a, b, self.text)[
+            "settings_equal"])
+        text = {**self.text, "prompt": {"exact_equal": False}}
+        self.assertIsNone(inference_comparison(a, a, text)[
+            "conditional_category"])
+
+    def test_output_denominators_and_nonzero_temperature(self):
+        a = self._row()
+        b = deepcopy(a)
+        flags = inference_comparison(a, b, self.text)
+        absent = inference_comparison(a, b, {**self.text, "answer": None})
+        b["generation"].update(temperature=.3, sampling=True)
+        stochastic = inference_comparison(b, b, {
+            **self.text, "answer": {"exact_equal": False}})
+        rows = [{"original": a, "replayed": a, "inference": flags},
+                {"original": a, "replayed": a, "inference": absent},
+                {"original": b, "replayed": b, "inference": stochastic},
+                {"original": None, "replayed": b}]
+        summary = inference_summary([{"model_calls": rows},
+                                     {"model_calls": None}])
+        self.assertEqual(summary["paired_calls"], 3)
+        self.assertEqual(summary["unpaired_inputs"],
+                         {"original": 0, "replayed": 1})
+        self.assertEqual(summary["unavailable_operations"], 1)
+        self.assertEqual(summary["conditional"]["zero_temperature"],
+                         dict(identical_inputs=2, available_outputs=1,
+                              equal_outputs=1))
+        self.assertEqual(summary["conditional"]["nonzero_temperature"],
+                         dict(identical_inputs=1, available_outputs=1,
+                              equal_outputs=0))
+
+    def _span(self, seq, kind, span, start, duration=None, trace="run"):
+        event = _event(seq, kind + (".started" if duration is None else
+                                    ".completed"), {}, duration=duration)
+        event.metadata.update(trace_id=trace, span_id=span,
+                              started_elapsed_ms=start)
+        return event
+
+    def test_timing_merges_nested_spans_and_reports_missing_samples(self):
+        events = (
+            self._span(1, "retrieval.semantic", "a", 100),
+            self._span(2, "embedding.calculate", "b", 110),
+            self._span(3, "embedding.calculate", "b", 110, 30),
+            self._span(4, "retrieval.semantic", "a", 100, 100),
+            self._span(5, "embedding.calculate", "c", 250),
+            self._span(6, "embedding.calculate", "d", 10, trace="other"),
+            self._span(7, "embedding.calculate", "d", 10, 15, "other"),
+        )
+        timing = performance_summary(events)["spans"]
+        self.assertEqual(timing["retrieval_and_embeddings"],
+                         dict(duration_ms=115., available=3, total=4))
+        self.assertIsNone(timing["indexing"]["duration_ms"])
+
+    def test_throughput_uses_measured_tokens_and_positive_durations(self):
+        second = {**self.input, "call_id": "other"}
+        events = (_event(1, "llm.call.input", self.input),
+                  _event(2, "llm.call.output", self.output, duration=500),
+                  _event(3, "llm.call.input", second),
+                  _event(4, "llm.call.output", {**self.output,
+                         "call_id": "other", "output_token_count_source":
+                         "retokenized_decoded_text"}, duration=500))
+        result = performance_summary(events)
+        self.assertEqual(result["output_tokens"]["recorded_total"], 20)
+        self.assertEqual(result["throughput"]["generation"],
+                         dict(tokens=10, duration_ms=500.,
+                              tokens_per_second=20., available=1, total=2))
+        self.assertAlmostEqual(result["throughput"]["reply"][
+            "tokens_per_second"], 1000 * 10 / 600)
 
 
 if __name__ == "__main__":

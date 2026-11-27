@@ -25,6 +25,7 @@ from collections import Counter
 from datetime import datetime
 from hashlib import sha256
 import math
+import json
 import os
 from pathlib import Path
 import re
@@ -498,6 +499,32 @@ def _artifact_text(event: TraceEvent | None, name: str) -> str | None:
     return None
 
 
+def _snapshot_revision(data: dict) -> str | None:
+    """Recognize a recorded Hugging Face snapshot without reading its path.
+
+    Parameters
+    ----------
+    data: dict
+        Recorded model-call input metadata.
+
+    Returns
+    -------
+    str | None
+        Recorded commit hash, only for a matching repository snapshot.
+        Local model files without a recorded revision remain unverified.
+
+    """
+    model, source = data.get("model_id"), data.get("model_source")
+    if not isinstance(model, str) or not isinstance(source, str):
+        return None
+    parts = source.replace("\\", "/").rstrip("/").split("/")
+    if (len(parts) >= 3 and parts[-3] == "models--" + model.replace("/", "--")
+            and parts[-2] == "snapshots" and
+            re.fullmatch(r"[0-9a-f]{40}", parts[-1])):
+        return parts[-1]
+    return None
+
+
 def model_calls(op: TimelineOperation) -> list[dict]:
     """Correlate LLM inputs and outputs by call identity within a command.
 
@@ -536,13 +563,19 @@ def model_calls(op: TimelineOperation) -> list[dict]:
             "output_sequence": end.sequence if end is not None else None,
             "model_id": data.get("model_id"), "backend": data.get("backend"),
             "model_source": data.get("model_source"),
+            "device": data.get("device"),
+            "resolved_revision": _snapshot_revision(data),
+            "thinking": data.get("thinking"),
+            "generation": data.get("generation"),
+            "chat_template": data.get("chat_template"),
             "input_tokens": _count(data.get("input_token_count")),
             "output_tokens": _count(result.get("output_token_count")),
             "output_token_count_source": result.get(
                 "output_token_count_source"),
             "finish_reason": result.get("finish_reason"),
             "generation_duration_ms": _number(result.get(
-                "generation_duration_ms")),
+                "generation_duration_ms", end.metadata.get("duration_ms")
+                if end is not None else None)),
             "reply_duration_ms": _number(result.get("reply_duration_ms")),
             "output_available": valid,
             "prompt": _artifact_text(event, "02_rendered_prompt"),
@@ -556,6 +589,295 @@ def model_calls(op: TimelineOperation) -> list[dict]:
                          "output_available": False,
                          "issue": "Unpaired or ambiguous model output."})
     return rows
+
+
+def _inference_settings(row: dict) -> dict | None:
+    """Require the producer's effective settings, not requested defaults.
+
+    Parameters
+    ----------
+    row: dict
+        One correlated model-call observation.
+
+    Returns
+    -------
+    dict | None
+        Complete recorded generation and template settings, or unavailable.
+
+    """
+    generation, template = row.get("generation"), row.get("chat_template")
+    if not isinstance(generation, dict) or not isinstance(template, dict):
+        return None
+    temperature = _number(generation.get("temperature"))
+    limit = generation.get("max_new_tokens")
+    thinking = row.get("thinking")
+    if (temperature is None or type(limit) is not int or limit <= 0 or
+            type(thinking) is not bool or
+            any(type(generation.get(k)) is not bool for k in (
+                "sampling", "cjk_blocking_requested", "cjk_tokens_blocked"))
+            or _count(generation.get("cjk_suppressed_token_count")) is None
+            or type(template.get("add_generation_prompt")) is not bool
+            or type(template.get("enable_thinking")) is not bool):
+        return None
+    # Retain every recorded field, including future additional settings.
+    settings = {"generation": generation, "chat_template": template,
+                "thinking": thinking}
+    try:
+        json.dumps(settings, allow_nan=False, sort_keys=True)
+    except (TypeError, ValueError):
+        return None
+    return settings
+
+
+def inference_comparison(original: dict | None, replayed: dict | None,
+                         text: dict) -> dict:
+    """Compare effective inference inputs and observed output reproducibility.
+
+    Parameters
+    ----------
+    original: dict | None
+        Original model-call row, if present.
+    replayed: dict | None
+        Corresponding model-call row, if present.
+    text: dict
+        Existing exact-text and structured-prompt comparison flags.
+
+    Returns
+    -------
+    dict
+        Independent tri-state equality observations and conditional category.
+        Equal recorded settings are not proof of equal model binaries or
+        complete backend state. Normalized prompts are never used as exact
+        inputs for conditional reproducibility.
+
+    """
+    left, right = original or {}, replayed or {}
+    fields = ("model_id", "resolved_revision", "backend", "device")
+    model = None
+    if all(isinstance(row.get(k), str) and row[k] for row in (left, right)
+           for k in fields):
+        model = all(left[k] == right[k] for k in fields)
+    else:
+        # Known differences remain observable even if revision is unknown.
+        if any(isinstance(left.get(k), str) and isinstance(right.get(k), str)
+               and left[k] != right[k] for k in fields):
+            model = False
+    a, b = _inference_settings(left), _inference_settings(right)
+    settings = a == b if a is not None and b is not None else None
+    prompt = (text.get("prompt") or {}).get("exact_equal")
+    answer = (text.get("answer") or {}).get("exact_equal")
+    finish = None
+    if all(isinstance(row.get("finish_reason"), str)
+           for row in (left, right)):
+        finish = left["finish_reason"] == right["finish_reason"]
+    tokens = None
+    if all(_count(row.get("input_tokens")) is not None
+           for row in (left, right)):
+        tokens = left["input_tokens"] == right["input_tokens"]
+    category = None
+    if (model is True and settings is True and prompt is True and
+            tokens is True):
+        generation = a["generation"]
+        if (generation["temperature"] == 0 and not generation["sampling"]):
+            category = "zero_temperature"
+        elif generation["temperature"] > 0 and generation["sampling"]:
+            category = "nonzero_temperature"
+    return {"model_equal": model, "settings_equal": settings,
+            "rendered_prompt_equal": prompt, "input_token_count_equal": tokens,
+            "normalized_structured_prompt_equal": text.get(
+                "structured_normalized_equal"),
+            "output_equal": answer, "finish_reason_equal": finish,
+            "conditional_category": category}
+
+
+_INFERENCE_FLAGS = (
+    "model_equal", "settings_equal", "rendered_prompt_equal",
+    "input_token_count_equal", "normalized_structured_prompt_equal",
+    "output_equal",
+    "finish_reason_equal",
+)
+_CONDITIONAL = ("zero_temperature", "nonzero_temperature")
+
+
+def inference_summary(operations: list[dict]) -> dict:
+    """Aggregate model-call comparison coverage over matched commands.
+
+    Parameters
+    ----------
+    operations: list[dict]
+        Aligned operation comparisons.
+
+    Returns
+    -------
+    dict
+        Paired/unpaired counts, flag denominators and conditional output
+        agreement. Unknown output text never contributes an equality value.
+        Model calls outside matched commands are not included.
+
+    """
+    rows = [row for op in operations for row in op.get("model_calls") or []]
+    sides = {side: sum(isinstance(row.get(side), dict) and
+                       row[side].get("input_sequence") is not None
+                       for row in rows) for side in ("original", "replayed")}
+    paired = [row for row in rows if all(
+        isinstance(row.get(side), dict) and
+        row[side].get("input_sequence") is not None
+        for side in ("original", "replayed"))]
+    result = {"input_calls": sides, "paired_calls": len(paired),
+              "unpaired_inputs": {s: n - len(paired)
+                                  for s, n in sides.items()},
+              "unavailable_operations": sum(
+                  op.get("model_calls") is None for op in operations),
+              "agreement": {}, "conditional": {}}
+    diagnostics = [row.get("inference", {}) for row in paired]
+    for key in _INFERENCE_FLAGS:
+        values = [d[key] for d in diagnostics if type(d.get(key)) is bool]
+        result["agreement"][key] = {"equal": sum(values),
+                                     "available": len(values),
+                                     "total": len(paired)}
+    for key in _CONDITIONAL:
+        eligible = [d for d in diagnostics
+                    if d.get("conditional_category") == key]
+        outputs = [d["output_equal"] for d in eligible
+                   if type(d.get("output_equal")) is bool]
+        result["conditional"][key] = {
+            "identical_inputs": len(eligible),
+            "available_outputs": len(outputs),
+            "equal_outputs": sum(outputs),
+        }
+    return result
+
+
+_TIMING_SPANS = {
+    "initialization": ("gui.project.open",),
+    "indexing": ("indexing",),
+    "model_loading": ("model.chat.load", "model.embedding.load"),
+    "retrieval_and_embeddings": (
+        "retrieval.semantic", "retrieval.lexical", "retrieval.code",
+        "embedding.calculate"),
+    "model_inference": ("llm.call",),
+    "question_duration": ("gui.question.request",),
+}
+
+
+def _union_duration(intervals: list[tuple[float, float]]) -> float:
+    """Measure the union of intervals in one logger's monotonic clock.
+
+    Parameters
+    ----------
+    intervals: list[tuple[float, float]]
+        Known start/end times in milliseconds.
+
+    Returns
+    -------
+    float
+        Nonduplicated inclusive duration within this clock domain.
+
+    """
+    total, end = 0., None
+    for start, stop in sorted(intervals):
+        if end is None or start >= end:
+            total += stop - start
+            end = stop
+        elif stop > end:
+            total += stop - end
+            end = stop
+    return total
+
+
+def _span_timing(events: tuple[TraceEvent, ...], kinds: tuple[str, ...]
+                 ) -> dict:
+    """Measure corroborated spans once, merging nested clock intervals.
+
+    Parameters
+    ----------
+    events: tuple[TraceEvent, ...]
+        Independently decoded recording events.
+    kinds: tuple[str, ...]
+        Selected span event-type stems.
+
+    Returns
+    -------
+    dict
+        Span coverage and measured union duration. Different categories can
+        overlap; even complete category times are not an additive breakdown.
+
+    """
+    starts, ends = {}, {}
+    for event in events:
+        stem, _, phase = event.event_type.rpartition(".")
+        if stem not in kinds or phase not in ("started", "completed",
+                                              "failed", "cancelled"):
+            continue
+        key = (event.metadata.get("trace_id"), event.span_id, stem)
+        group = starts if phase == "started" else ends
+        group.setdefault(key, []).append(event)
+    intervals = {}
+    available = 0
+    for key in starts.keys() | ends.keys():
+        a, b = starts.get(key, []), ends.get(key, [])
+        if len(a) != 1 or len(b) != 1 or not key[0] or not key[1]:
+            continue
+        start = _number(a[0].metadata.get("started_elapsed_ms"))
+        duration = _duration(b[0])
+        if (start is None or duration is None or
+                a[0].sequence >= b[0].sequence or
+                b[0].metadata.get("started_elapsed_ms") != start):
+            continue
+        intervals.setdefault(key[0], []).append((start, start + duration))
+        available += 1
+    count = len(starts.keys() | ends.keys())
+    return {"duration_ms": math.fsum(_union_duration(group) for group in
+                                    intervals.values()) if available else None,
+            "available": available, "total": count}
+
+
+def performance_summary(events: tuple[TraceEvent, ...]) -> dict:
+    """Measure independent recorded timing categories and reply throughput.
+
+    Parameters
+    ----------
+    events: tuple[TraceEvent, ...]
+        All events of a closed recording, including outside-command calls.
+
+    Returns
+    -------
+    dict
+        Coverage-aware span timings and output-token throughput. Generation
+        duration is taken from the output event (the producer records that
+        same duration in its metadata). Reply time includes prompt work;
+        neither rate is guaranteed to be pure decoding throughput.
+
+    """
+    timing = {key: _span_timing(events, kinds)
+              for key, kinds in _TIMING_SPANS.items()}
+    # Use the same input/output identity correlation as the call comparison.
+    op = TimelineOperation("performance", 0, 0, "completed", {}, events)
+    calls = model_calls(op)
+    result = {"spans": timing, "throughput": {}}
+    recorded = [row["output_tokens"] for row in calls
+                if row.get("output_available") and
+                row.get("output_tokens") is not None]
+    result["output_tokens"] = {
+        "recorded_total": sum(recorded) if recorded else None,
+        "available": len(recorded), "total": len(calls),
+    }
+    for kind in ("generation", "reply"):
+        samples = [(row["output_tokens"], row[kind + "_duration_ms"])
+                   for row in calls if row.get("output_available") and
+                   row.get("output_token_count_source") == "generated_tokens"
+                   and row.get("output_tokens") is not None and
+                   row.get(kind + "_duration_ms") is not None and
+                   row[kind + "_duration_ms"] > 0]
+        tokens = sum(n for n, _ in samples)
+        duration = math.fsum(ms for _, ms in samples)
+        result["throughput"][kind] = {
+            "tokens": tokens if samples else None,
+            "duration_ms": duration if samples else None,
+            "tokens_per_second": 1000 * tokens / duration if samples else None,
+            "available": len(samples), "total": len(calls),
+        }
+    return result
 
 
 def usage(turn: dict) -> dict:
