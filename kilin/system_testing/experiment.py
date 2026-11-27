@@ -27,6 +27,7 @@ from pathlib import Path
 
 from .comparison import Comparison, compare
 from .replay import ProgressCallback, ReplayResult, replay
+from .replay_management import ManagedReplay, run_replay
 from .timeline import TimelineOperation
 from .traces import read_recording
 from .validation import ValidationReport, validate_recording
@@ -125,6 +126,37 @@ class Experiment:
 
         """
         return replay(self, destination, progress=progress)
+
+    def run_replay(
+        self, destination: str | Path | None = None, *,
+        existing_replay: str = "retain",
+        archive_directory: str | Path | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> ManagedReplay:
+        """Manage a fresh or retained replay with explicit provenance.
+
+        Parameters
+        ----------
+        destination: str or pathlib.Path or None, optional
+            Separate sibling replay workspace; defaults to the usual name.
+        existing_replay: str, optional
+            Retain (default), archive, or reject an existing replay using
+            the corresponding lowercase policy string.
+        archive_directory: str or pathlib.Path or None, optional
+            Separate archive root outside workspace discovery. Defaults to
+            ``_replay_archive`` beside the discovery directory.
+        progress: ProgressCallback or None, optional
+            Progress callback for a new replay.
+
+        Returns
+        -------
+        ManagedReplay
+            Actual action outcome including archived workspace and receipt.
+
+        """
+        return run_replay(self, destination, existing_replay=existing_replay,
+                          archive_directory=archive_directory,
+                          progress=progress)
 
     def compare(
         self, destination: str | Path | None = None, *,

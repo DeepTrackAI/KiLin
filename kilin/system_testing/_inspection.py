@@ -117,3 +117,59 @@ def note_inspection(data: dict, report: ValidationReport) -> dict | None:
                        "The original has additional closed inspection "
                        "sessions. A fresh replay includes these sessions. "
                        "Strict alignment remains divergent."}
+
+
+def relocation_event_differences(data: dict, before: ValidationReport,
+                                 after: ValidationReport) -> list[str]:
+    """Identify fully explained event-count deltas for normalized renames.
+
+    Parameters
+    ----------
+    data: dict
+        Complete independently aligned comparison.
+    before: ValidationReport
+        Validated original recording.
+    after: ValidationReport
+        Validated replay recording.
+
+    Notes
+    -----
+    Only classify deltas when all counted extra events are accounted for
+    by recorded rename markers or empty checks immediately after a mapped
+    reopening. Other source checks or unmatched commands are not ignored.
+
+    """
+    if (not before.valid or not after.valid or
+            data["alignment"]["status"] != "complete"):
+        return []
+    expected = {"gui.project.rename.requested": 0,
+                "gui.project.rename.completed": 0,
+                "gui.sources.changes.found": 0}
+    for i, row in enumerate(data["operations"]):
+        move = row.get("relocation")
+        if not move or move["physical_rename_replayed"]:
+            continue
+        if move["original"]["provenance"] == "recorded":
+            expected["gui.project.rename.requested"] -= 1
+            expected["gui.project.rename.completed"] -= 1
+        a, b = before.operations[i], after.operations[i]
+        # A successful opening may be followed by a source check outside
+        # its command span. Only an explicitly empty diagnostic qualifies.
+        counts = []
+        for report, op in ((before, a), (after, b)):
+            end = (report.operations[i + 1].start_sequence
+                   if i + 1 < len(report.operations) else
+                   report.event_count + 1)
+            notices = [e for e in report.events if
+                       op.start_sequence <= e.sequence < end and
+                       e.event_type == "gui.sources.changes.found"]
+            if any(any(e.details.get(k) != [] for k in
+                       ("added", "changed", "deleted", "edited"))
+                   for e in notices):
+                return []
+            counts.append(len(notices))
+        expected["gui.sources.changes.found"] += counts[1] - counts[0]
+    old = data["original"]["event_counts"]
+    new = data["replayed"]["event_counts"]
+    return [kind for kind, delta in expected.items() if delta and
+            new.get(kind, 0) - old.get(kind, 0) == delta]

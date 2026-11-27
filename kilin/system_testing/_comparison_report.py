@@ -116,6 +116,10 @@ def markdown_report(data: dict) -> str:
         for warning in workspace["validation_warnings"]:
             lines.append(f"- Warning: {_cell(warning['message'])}")
         lines.append("")
+    for key, label in (("reference_publication", "Reference publication"),
+                       ("replay_execution", "Replay execution provenance")):
+        if key in data:
+            lines.extend((f"## {label}", "", _cell(data[key]), ""))
     inspection = data.get("inspection")
     if inspection is not None:
         lines.extend(("## Additional reference inspection", "",

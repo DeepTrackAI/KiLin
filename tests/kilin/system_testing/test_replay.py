@@ -163,6 +163,10 @@ class TestReplay(unittest.TestCase):
         row = next(op for op in comparison.data["operations"]
                    if "relocation" in op)
         self.assertFalse(row["relocation"]["physical_rename_replayed"])
+        self.assertIn("gui.project.rename.requested",
+                      comparison.data["expected_event_differences"])
+        self.assertIn("gui.project.rename.completed",
+                      comparison.data["expected_event_differences"])
         self.assertEqual(row["relocation"]["original"]["provenance"],
                          "recorded")
         self.assertIn("replay directory retained", comparison.markdown())

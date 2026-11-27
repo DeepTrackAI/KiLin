@@ -43,8 +43,12 @@ from ._comparison_metrics import (
     text_metrics, usage,
 )
 from ._comparison_report import markdown_report, save_reports
-from ._inspection import note_inspection
+from ._inspection import note_inspection, relocation_event_differences
 from .replay import _configuration_differences
+from .reference import inspect_receipt
+from .replay_management import (
+    execution_provenance, reference_execution_match,
+)
 from .timeline import TimelineOperation, one
 from .traces import Recording, read_recording
 from .validation import ValidationReport, validate_recording
@@ -836,6 +840,13 @@ def compare(experiment: Experiment, destination: str | Path | None = None,
                   for directory in ("sources", "templates", "outputs")},
     }
     data["inspection"] = note_inspection(data, before)
+    data["reference_publication"] = inspect_receipt(root, before)
+    data["replay_execution"] = execution_provenance(target, after)
+    if data["replay_execution"]["status"] == "recorded":
+        data["replay_execution"]["reference_match"] = (
+            reference_execution_match(data["replay_execution"], before))
+    data["expected_event_differences"] = relocation_event_differences(
+        data, before, after)
     issues: list[str] = []
     snapshot = _portable(data, "", issues)
     snapshot["report_issues"] = issues

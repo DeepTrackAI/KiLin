@@ -15,6 +15,8 @@ Module Structure
   structured diagnostics and rejection of invalid reference recordings.
 - ``ReplayResult``, ``ReplayDifference``, ``ReplayError``: replay outcomes.
 - ``Comparison``: structured observations and saved reports.
+- ``ManagedReplay``: retained or fresh replay outcome and provenance.
+- Reference receipt publication and inspection functions.
 
 Examples
 --------
@@ -26,6 +28,8 @@ Examples
 from .comparison import Comparison
 from .experiment import Experiment
 from .replay import ReplayDifference, ReplayError, ReplayResult
+from .reference import inspect_receipt, publish_receipt, receipt_path
+from .replay_management import ManagedReplay, execution_provenance
 from .timeline import TimelineOperation
 from .traces import TraceEvent, ValidationIssue
 from .validation import InvalidRecordingError, ValidationReport
@@ -41,4 +45,9 @@ __all__ = [
     "ReplayDifference",
     "ReplayError",
     "ReplayResult",
+    "ManagedReplay",
+    "receipt_path",
+    "publish_receipt",
+    "inspect_receipt",
+    "execution_provenance",
 ]

@@ -421,3 +421,67 @@ required durable effects were reproduced, not that regenerated model outputs
 are identical or correct. Comparison is a separate read-only operation and never executes replay.
 
 The [module map](module_map.md) lists the package modules and their tests.
+
+## Managed replay and reference publication
+
+The low-level `Experiment.replay()` still requires an absent destination.
+Use the managed API to make the policy for an existing replay explicit:
+
+```python
+from kilin.system_testing import Experiment
+
+experiment = Experiment("workspaces/010_original")
+action = experiment.run_replay(existing_replay="archive")
+print(action.status, action.archived_workspace, action.error)
+```
+
+`retain` (the default) leaves an existing replay unchanged; `archive` moves
+it into a unique directory under `_replay_archive` outside workspace
+discovery before creating a fresh replay; `error` refuses an existing replay.
+The original must validate before a previous replay is moved. An archive
+uses a same-filesystem rename, not copy-and-delete. A failed replay preserves
+both the previous archive and the partial new recording. No policy overwrites
+an original. A nonstandard archive directory must be separate from the
+workspace discovery directory, and only directories with the `_replay`
+suffix can be archived. Close both projects before invoking this API.
+
+A `ManagedReplay` distinguishes a completed execution, retained recording,
+and failed action. Only a successful fresh execution writes an exclusive
+`logs/system_testing_execution.json` receipt, containing the recorded input
+and output trace fingerprints, package content digest, available Git revision
+and dirty status, Python/platform information, and UTC execution bounds.
+Model identities and resolved revisions remain in the recorded trace model
+observations. A missing historical receipt is reported as unavailable; the
+inspection machine's environment is never attributed to a retained replay.
+Failure to publish provenance is reported separately from replay completion.
+Receipts are local integrity observations, not cryptographic attestations of
+which process executed the code or protection from a malicious editor.
+
+Generators can publish an optional sibling `<stem>_reference.json` receipt:
+
+```python
+from kilin.system_testing import publish_receipt, inspect_receipt
+
+report = experiment.validate()
+report.raise_for_errors()
+publish_receipt(experiment.workspace, report, coverage=[])
+print(inspect_receipt(experiment.workspace, report))
+```
+
+Publish only after the reference is complete and closed. The receipt records
+the original event prefix, command count, managed source/template/output
+hashes and generator coverage observations. It is never rewritten by an
+ordinary replay or inspection. Later closed GUI inspection may extend the
+trace without modifying the published prefix or managed files. Additional
+substantive commands are reported as an extension; changed prefix or file
+contents are reported separately. These observations do not override the
+recording validator or block intentionally extended valid references.
+Older or manually recorded references without receipts remain usable.
+
+Comparison reports include `reference_publication` and `replay_execution`
+observations, including whether the recorded input matches the current
+reference exactly or only a historical prefix. These receipts do not
+replace structural validation or strict
+command alignment. No historical environment is inferred when it was not
+recorded. The optional receipt does not fingerprint every workspace file or
+detect changes that have been restored before inspection.
