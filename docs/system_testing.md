@@ -485,3 +485,68 @@ replace structural validation or strict
 command alignment. No historical environment is inferred when it was not
 recorded. The optional receipt does not fingerprint every workspace file or
 detect changes that have been restored before inspection.
+
+
+## Scripted references and notebook batch workflows
+
+The optional workflow modules consolidate the former KiLinSystemTests
+Python helpers. The experimental repository owns the experiment recipes,
+local fixtures and results, not another copy of system-testing logic or
+notebook templates. Existing recordings and version-1 comparison reports
+retain their format and interpretation.
+
+- `kilin.system_testing.generation` provides `Recorder`,
+  `generate_reference`, `check_output` and `reference_overview`. Recipes
+  supply a trusted function receiving the recorder, explicit project
+  settings, the expected operation sequence, and a coverage callback.
+  Staging occurs in `_recordings/` beside `workspaces/`, outside normal GUI
+  discovery. Successful closed recordings are validated before publication
+  and receive a reference receipt. Failed staging recordings remain for
+  diagnosis. Existing originals, replays and receipts are protected.
+  Scripted interactions allow only explicitly approved local plans and
+  uniquely matching option labels. Recipe hints are coverage observations,
+  not scientific judgments. The adapter uses the ordinary engine and does
+  not change answer generation, retrieval, routing or tool behavior.
+- `kilin.system_testing.batch` provides `discover_originals`, `run_batch`,
+  `load_snapshot`, `collect_issues`, `group_issues` and `save_batch_summary`.
+  It manages replay through `Experiment.run_replay`, compares each pair
+  once, and supplies that same snapshot to generated comparison and answer
+  notebooks. The caller controls the replay policy, report overwrite,
+  notebook refresh and optional evaluation model. Templates are packaged
+  resources in `kilin/system_testing/_notebooks/`; only these templates
+  are executed automatically. Local template copies are not required or
+  consulted. Historical snapshots are explicitly
+  distinguished from current comparisons; failures do not silently fall
+  back to stale data.
+- `kilin.system_testing.analysis` presents comparison snapshots as escaped
+  HTML and Markdown. It includes answer and operation explorers, batch
+  summaries, event inventories, and optional exact local trace text
+  verified against its recorded hashes. Rendering does not load models or
+  revalidate a saved report.
+
+For example, in a separate experiment repository with `workspaces/` and
+one batch notebook:
+
+```python
+from pathlib import Path
+from kilin.system_testing.batch import discover_originals, run_batch
+from kilin.system_testing.analysis import batch_overview
+
+root = Path.cwd()
+reports, runs = run_batch(
+    discover_originals(root / "workspaces"), root,
+    run_replay=False, run_comparison=True, save_reports=True,
+    overwrite_reports=True, save_visual_analysis=True,
+    run_notebooks=False, refresh_notebooks=False,
+)
+html = batch_overview(reports, runs=runs)
+```
+
+The workflow modules do not add required installation dependencies. For
+notebook creation and execution, install JupyterLab (or the corresponding
+`nbformat`, `nbclient`, `jupyter_client` and `ipykernel` packages) in the
+same Python environment as KíLín. These dependencies are imported only at
+the notebook stages. `mistune` 3 is optional for formatted Markdown answers;
+without it, answer text remains escaped. Normal system-testing imports do
+not load Jupyter, a model backend or Qt. Generating and replaying actual
+experiments still requires the configured KíLín backend and models.

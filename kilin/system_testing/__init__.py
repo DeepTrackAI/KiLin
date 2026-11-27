@@ -6,6 +6,7 @@ Key Features
 - Model-independent, read-only checks of current-format recordings.
 - Independent reproduction of validated workspace histories.
 - Independent quantitative comparison of original and replayed workspaces.
+- Recipe-driven reference generation and reproducible batch reporting.
 
 Module Structure
 ----------------
@@ -17,6 +18,8 @@ Module Structure
 - ``Comparison``: structured observations and saved reports.
 - ``ManagedReplay``: retained or fresh replay outcome and provenance.
 - Reference receipt publication and inspection functions.
+- ``generation``, ``batch``, ``analysis``: optional system-testing
+  workflows, imported explicitly when needed.
 
 Examples
 --------

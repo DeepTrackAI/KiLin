@@ -229,6 +229,9 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/system_testing/reference.py`](../kilin/system_testing/reference.py) | Publish and inspect optional reference integrity receipts. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/replay_management.py`](../kilin/system_testing/replay_management.py) | Manage retained and fresh replays and record execution provenance. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/_comparison_report.py`](../kilin/system_testing/_comparison_report.py) | Render and publish sibling JSON and Markdown comparison reports. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/generation.py`](../kilin/system_testing/generation.py) | Record, validate and publish scripted reference experiments. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/batch.py`](../kilin/system_testing/batch.py) | Run managed experiments and execute independent report notebooks. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/analysis.py`](../kilin/system_testing/analysis.py) | Render saved comparison snapshots, diagnostics and visual reports. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/_trace_configuration.py`](../kilin/_trace_configuration.py) | Encode complete effective configurations and construct and verify compact references. | [Trace architecture](trace_architecture.md) | [Configuration trace tests](../tests/kilin/test_trace_logging__configuration.py) |
 | [`kilin/_trace_project.py`](../kilin/_trace_project.py) | Coordinate project-wide event numbering and shared trace publication. | [Trace architecture](trace_architecture.md) | [Project trace tests](../tests/kilin/test__trace_project.py) |
 | [`kilin/trace_logging.py`](../kilin/trace_logging.py) | Record structured execution events and resumable conversation state. | [Trace recording](trace_recording.md) | [Core tests](../tests/kilin/) |
@@ -250,13 +253,13 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Project workspaces | 6 |
 | Retrieval pipeline | 32 |
 | Source pipeline | 23 |
-| System testing | 16 |
+| System testing | 19 |
 | Tool extension contracts | 27 |
 | Tool packages | 2 |
 | Trace architecture | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 212.**
+**Total production Python modules: 215.**
 
 ## Non-Python resources and UI assets
 
