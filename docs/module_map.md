@@ -224,6 +224,8 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/system_testing/comparison.py`](../kilin/system_testing/comparison.py) | Compare independent workspaces and assemble quantitative observations. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/_comparison_alignment.py`](../kilin/system_testing/_comparison_alignment.py) | Align recorded operations and reconstruct persistent identity mappings. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/_comparison_metrics.py`](../kilin/system_testing/_comparison_metrics.py) | Measure text, retrieval, call, timing, and retained file observations. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/_comparison_diagnostics.py`](../kilin/system_testing/_comparison_diagnostics.py) | Compare mapped context and corroborated model-input metadata; inspect tool outcomes. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/_inspection.py`](../kilin/system_testing/_inspection.py) | Identify validated inspection-only extensions without changing strict alignment. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/_comparison_report.py`](../kilin/system_testing/_comparison_report.py) | Render and publish sibling JSON and Markdown comparison reports. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/_trace_configuration.py`](../kilin/_trace_configuration.py) | Encode complete effective configurations and construct and verify compact references. | [Trace architecture](trace_architecture.md) | [Configuration trace tests](../tests/kilin/test_trace_logging__configuration.py) |
 | [`kilin/_trace_project.py`](../kilin/_trace_project.py) | Coordinate project-wide event numbering and shared trace publication. | [Trace architecture](trace_architecture.md) | [Project trace tests](../tests/kilin/test__trace_project.py) |
@@ -246,13 +248,13 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Project workspaces | 6 |
 | Retrieval pipeline | 32 |
 | Source pipeline | 23 |
-| System testing | 12 |
+| System testing | 14 |
 | Tool extension contracts | 27 |
 | Tool packages | 2 |
 | Trace architecture | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 208.**
+**Total production Python modules: 210.**
 
 ## Non-Python resources and UI assets
 

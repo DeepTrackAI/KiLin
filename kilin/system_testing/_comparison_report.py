@@ -116,6 +116,45 @@ def markdown_report(data: dict) -> str:
         for warning in workspace["validation_warnings"]:
             lines.append(f"- Warning: {_cell(warning['message'])}")
         lines.append("")
+    inspection = data.get("inspection")
+    if inspection is not None:
+        lines.extend(("## Additional reference inspection", "",
+                      _cell(inspection["message"]), ""))
+    lines.extend(("## Independently observed saved questions", "",
+                  "Unverified text is not evidence of a valid recording.",
+                  "", "| Workspace | Saved questions | Validated |",
+                  "|---|---:|---:|"))
+    for side in ("original", "replayed"):
+        questions = data[side].get("saved_questions", [])
+        lines.append(_row(side, len(questions), sum(
+            q["validated"] for q in questions)))
+    lines.extend(("", "## Context, prompt and tool diagnostics", "",
+                  "| Measurement | Equal | Available | Total |",
+                  "|---|---:|---:|---:|"))
+    context = [item for op in data["operations"]
+               for item in op.get("context", [])]
+    calls = [call["text"] for op in data["operations"]
+             for call in op.get("model_calls") or []]
+    tools = [op["question"]["tool_comparison"] for op in data["operations"]
+             if "tool_comparison" in op.get("question", {})]
+    for label, values in (
+        ("Mapped context identity", [c["identity_equal"] for c in context]),
+        ("Structured model input", [c.get("structured_raw_equal")
+                                     for c in calls]),
+        ("Metadata-normalized model input", [c.get(
+            "structured_normalized_equal") for c in calls]),
+        ("Functional tool summary", [t["functional_equal"] for t in tools]),
+    ):
+        lines.append(_row(label, sum(v is True for v in values),
+                          sum(type(v) is bool for v in values), len(values)))
+    for side in ("original", "replayed"):
+        incomplete = [q["sequence"] for q in data[side].get(
+            "saved_questions", []) if q["tool_outcome"]["status"] ==
+            "incomplete"]
+        if incomplete:
+            lines.extend(("", f"{side.capitalize()} explicitly incomplete "
+                          f"saved outcomes: {_cell(incomplete)}."))
+    lines.append("")
     lines.extend(("## Question metrics", "",
                   "Each mean includes only available measurements. "
                   "An empty evidence union is not a similarity of zero.",

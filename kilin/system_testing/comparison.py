@@ -33,12 +33,17 @@ from typing import TYPE_CHECKING
 from kilin.conversation_memory.feedback import FeedbackStore
 
 from ._comparison_alignment import align, interaction_records
+from ._comparison_diagnostics import (
+    context_comparison, independent_questions, structured_prompt,
+    tool_comparison,
+)
 from ._comparison_metrics import (
     EmbeddingEvaluator, evidence_metrics, file_changes, inventory,
     model_calls, operation_duration, ranking_metrics, stage_metrics,
     text_metrics, usage,
 )
 from ._comparison_report import markdown_report, save_reports
+from ._inspection import note_inspection
 from .replay import _configuration_differences
 from .timeline import TimelineOperation, one
 from .traces import Recording, read_recording
@@ -248,14 +253,28 @@ def _workspace(recording: Recording, report: ValidationReport) -> dict:
                                  "conversation.title.generated"],
         },
         "traced_chat_usage": _traced_usage(report),
+        "event_counts": dict(sorted(Counter(e.event_type for e in
+                                            report.events).items())),
+        "saved_questions": independent_questions(recording, report),
         "conversations": None, "turn_count": None, "usage": None,
         "feedback": None, "configuration": None,
     }
     if report.valid:
         turns = _saved_turns(recording)
+        names = {}
+        for event in report.events:
+            if event.event_type in ("gui.conversation.renamed",
+                                    "conversation.title.generated"):
+                uid = event.details.get("conversation_id")
+                if isinstance(uid, str):
+                    names[uid] = ("explicit" if event.event_type ==
+                                  "gui.conversation.renamed" else "generated")
+        catalog = _catalog(recording)
+        for item in catalog:
+            item["name_origin"] = names.get(item["id"], "unclassified")
         feedback = FeedbackStore(recording.root).load()
         counts = [usage(turn) for turn in turns.values()]
-        result.update(conversations=_catalog(recording), turn_count=len(turns),
+        result.update(conversations=catalog, turn_count=len(turns),
                       usage={key: {
                           "recorded_total": (sum(v[key] for v in counts
                                                  if v[key] is not None)
@@ -335,7 +354,7 @@ def _call_rows(op: TimelineOperation) -> list[dict]:
 
 
 def _call_comparison(original: TimelineOperation,
-                     replayed: TimelineOperation) -> list[dict]:
+                     replayed: TimelineOperation, maps: tuple) -> list[dict]:
     """Compare available exact model texts by stage and occurrence.
 
     Parameters
@@ -344,6 +363,8 @@ def _call_comparison(original: TimelineOperation,
         Original operation.
     replayed: TimelineOperation
         Corresponding replay operation.
+    maps: tuple
+        Original-to-replay conversation and turn identity maps.
 
     Returns
     -------
@@ -352,10 +373,17 @@ def _call_comparison(original: TimelineOperation,
         artifacts exist, and text hashes instead of duplicated prompts.
 
     """
+    conversations, turns = maps
+    namespaces = (({k: k for k in turns}, {k: k for k in conversations}),
+                  ({v: k for k, v in turns.items()},
+                   {v: k for k, v in conversations.items()}))
     groups = []
-    for op in (original, replayed):
+    for op, namespace in zip((original, replayed), namespaces, strict=True):
         values = {}
+        inputs = {e.sequence: e for e in op.matching("llm.call.input")}
         for row in _call_rows(op):
+            row["structured_prompt"] = structured_prompt(
+                inputs.get(row["input_sequence"]), op, *namespace)
             values.setdefault(row["stage"], []).append(row)
         groups.append(values)
     first, second = groups
@@ -366,6 +394,19 @@ def _call_comparison(original: TimelineOperation,
             old = a[i] if i < len(a) else None
             new = b[i] if i < len(b) else None
             metrics = {}
+            structures = [row.pop("structured_prompt", None) if row else None
+                          for row in (old, new)]
+            for key in ("raw", "normalized"):
+                a_text, b_text = [entry.get(key) if entry else None
+                                  for entry in structures]
+                metrics["structured_" + key + "_equal"] = (
+                    a_text == b_text if a_text is not None and
+                    b_text is not None else None)
+            for row, structure in zip((old, new), structures, strict=True):
+                if row is not None:
+                    row["prompt_metadata"] = (
+                        {k: structure[k] for k in ("headers", "issue")}
+                        if structure is not None else None)
             for key in ("prompt", "answer"):
                 left = old.pop(key, None) if old else None
                 right = new.pop(key, None) if new else None
@@ -498,7 +539,8 @@ def _question(original: TimelineOperation, replayed: TimelineOperation,
 
 def _operation(original: TimelineOperation, replayed: TimelineOperation,
                old_turns: dict[str, dict], new_turns: dict[str, dict],
-               evaluator: EmbeddingEvaluator) -> dict:
+               evaluator: EmbeddingEvaluator, catalogs: tuple,
+               maps: tuple) -> dict:
     """Measure a matched command and its observed intermediate stages.
 
     Parameters
@@ -513,6 +555,10 @@ def _operation(original: TimelineOperation, replayed: TimelineOperation,
         Unique replay committed turns.
     evaluator: EmbeddingEvaluator
         Shared optional evaluation model.
+    catalogs: tuple
+        Original and replayed conversation turn-prefix maps.
+    maps: tuple
+        Original-to-replay conversation and turn maps.
 
     Returns
     -------
@@ -533,8 +579,9 @@ def _operation(original: TimelineOperation, replayed: TimelineOperation,
            "observations": {"original": _observations(original),
                             "replayed": _observations(replayed)},
            "rankings": ranking_metrics(original, replayed), "issues": []}
+    row["context"] = context_comparison(original, replayed, catalogs, maps)
     try:
-        row["model_calls"] = _call_comparison(original, replayed)
+        row["model_calls"] = _call_comparison(original, replayed, maps)
     except (ValueError, TypeError, KeyError, AttributeError) as error:
         row["model_calls"] = None
         row["issues"].append(f"Model call metrics unavailable: {error}")
@@ -565,6 +612,9 @@ def _operation(original: TimelineOperation, replayed: TimelineOperation,
         }
         row["question"] = _question(original, replayed, old_turns, new_turns,
                                     evaluator)
+        question = row["question"]
+        question["tool_comparison"] = tool_comparison(
+            question["tool"], question["completion"])
     return row
 
 
@@ -601,6 +651,8 @@ def _state_pairs(left: dict, right: dict, conversations: dict[str, str],
         result["conversations"].append({
             "original_id": old, "replayed_id": new,
             "name_equal": first["name"] == second["name"],
+            "name_origin": {"original": first["name_origin"],
+                            "replayed": second["name_origin"]},
             "archival_equal": first["archived"] == second["archived"],
             "lineage_equal": (first["origin_turn_count"] ==
                               second["origin_turn_count"] and
@@ -752,9 +804,13 @@ def compare(experiment: Experiment, destination: str | Path | None = None,
     if before.valid and after.valid:
         matched = align(before.operations, after.operations)
         old_turns, new_turns = _saved_turns(old), _saved_turns(new)
+        catalogs = tuple({c["id"]: c["turn_uuids"] for c in _catalog(r)}
+                         for r in (old, new))
+        maps = matched.conversations, matched.turns
         try:
             for a, b in matched.pairs:
-                rows.append(_operation(a, b, old_turns, new_turns, evaluator))
+                rows.append(_operation(a, b, old_turns, new_turns, evaluator,
+                                       catalogs, maps))
         finally:
             evaluator.close()
         status = "complete" if matched.reason is None else "diverged"
@@ -779,6 +835,7 @@ def compare(experiment: Experiment, destination: str | Path | None = None,
                                           inventory(target, directory))
                   for directory in ("sources", "templates", "outputs")},
     }
+    data["inspection"] = note_inspection(data, before)
     issues: list[str] = []
     snapshot = _portable(data, "", issues)
     snapshot["report_issues"] = issues

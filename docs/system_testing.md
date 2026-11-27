@@ -329,6 +329,35 @@ zero. Malformed optional diagnostic numbers are reported as unavailable.
 No composite quality score, pass threshold, LLM judge, or correctness verdict
 is computed.
 
+### Context, tool coverage and independent inspection
+
+Each side's independent event inventory and saved-question observations are
+retained even without alignment. Unverified saved text from an invalid
+recording is labeled as such; unmatched questions do not contribute to paired
+metrics. Aligned history selections resolve branch-local turn numbers through
+validated saved prefixes and the reconstructed identity map. Memory inventories
+compare mapped turn/role identities and origins without regard to inventory
+order; retrieval order, content fingerprints, priorities and scores remain
+separate. Missing observations and unknown identities are unavailable, not
+empty selections.
+
+In addition to raw rendered prompts, structured-input comparisons normalize
+only corroborated memory headers in the final user message. Their recorded
+labels, roles, UUIDs and origins must agree with the preceding selected-memory
+record. The diagnostic maps these identities and masks the timestamp, not
+ordinary question text or memory content. Ambiguous headers are unavailable.
+Neither model input nor trace data are changed.
+
+Functional tool-summary comparisons separate known elapsed-time and plan-time
+fields. Explicit incomplete or invalid outcomes remain visible even when
+both sides fail identically. Unreported completion is not proof of success.
+
+Closed GUI inspection after replay can append open, select and close commands.
+A validated suffix consisting solely of such sessions without source changes
+is annotated as inspection-only if the replay matches the preceding prefix.
+Strict alignment remains divergent; substantive changes and failed commands
+never qualify. A fresh replay reproduces the entire valid history.
+
 ### Optional embedding evaluation
 
 For semantic answer comparison, explicitly choose a local or already cached

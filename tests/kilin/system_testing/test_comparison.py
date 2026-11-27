@@ -138,6 +138,36 @@ class TestComparison(unittest.TestCase):
         self.assertFalse(result.data["replayed"]["valid"])
         self.assertIsNone(result.data["files"]["sources"]["changes"])
 
+    def test_independent_questions_without_replay(self):
+        self.fixture.fixture._ask("Original only")
+        self.engine.close()
+        before = experiment_tests._snapshot(self.experiment.workspace)
+        report = self.experiment.compare().data
+        self.assertEqual(report["summary"]["questions"], 0)
+        rows = report["original"]["saved_questions"]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["validated"])
+        self.assertEqual(rows[0]["question"], "Original only")
+        self.assertEqual(report["replayed"]["saved_questions"], [])
+        self.assertEqual(before, experiment_tests._snapshot(
+            self.experiment.workspace))
+
+    def test_inspection_extension_remains_strictly_divergent(self):
+        self._pair()
+        root = self.experiment.workspace
+        self.engine.resume_project(str(root))
+        self.engine.close()
+        result = self.experiment.compare()
+        self.assertFalse(result.complete)
+        self.assertEqual(result.data["inspection"]["status"],
+                         "inspection_only")
+        self.engine.resume_project(str(root))
+        self.fixture.fixture._ask("Substantive addition")
+        self.engine.close()
+        result = self.experiment.compare()
+        self.assertIsNone(result.data["inspection"])
+        self.assertEqual(len(result.data["original"]["saved_questions"]), 2)
+
     def test_valid_but_different_questions_only_align_common_prefix(self):
         self.fixture.fixture._ask("First")
         self.engine.close()
