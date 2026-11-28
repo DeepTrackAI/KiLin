@@ -61,7 +61,7 @@ from kilin.atomic_writes import atomic_write_text
 from kilin.project import open_project
 from kilin.project_type import ProjectTypeId, project_type
 from kilin.tools import ToolUse
-from kilin.tools._registry import registered_tools
+from kilin.tools._registry import _parse_settings, registered_tools
 from kilin.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = [
@@ -167,7 +167,8 @@ def save_tool_settings(
         )
     values = _json_values(settings)
     for use in uses.values():
-        registered_tools()[name].parse_settings(
+        _parse_settings(
+            registered_tools()[name],
             {**_json_values(asdict(use.settings)), **values}, name
         )
     changed = {
@@ -234,7 +235,8 @@ def with_project_settings(root: Path, use: ToolUse) -> ToolUse:
         return use
     return ToolUse(
         use.name,
-        registered_tools()[use.name].parse_settings(
+        _parse_settings(
+            registered_tools()[use.name],
             {**_json_values(asdict(use.settings)), **saved},
             f"profile.ini [{TOOL_SECTION_PREFIX}{use.name}]",
         ),

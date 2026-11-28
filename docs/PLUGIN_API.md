@@ -10,9 +10,8 @@ of the wrong type or an unsupported generation are rejected. An incompatible
 contract change requires a new API generation. Additions must preserve
 existing documented behavior within a generation.
 
-The current registry automatically discovers only bundled tool packages.
-Defining a descriptor outside the distribution does not install or activate it. User-folder discovery and installation are
-not yet supported. Each bundled descriptor declares its individual version and API explicitly.
+The runtime discovers distribution and user-level tool packages. Each
+bundled descriptor declares its individual version and API explicitly.
 New descriptors should do the same. Project types have a separate JSON
 `schema_version` and a runtime catalog retaining missing-tool diagnostics;
 see [Creating a project type](extension_interfaces.md#creating-a-project-type).
@@ -71,8 +70,9 @@ PLUGIN = Tool(
 )
 ```
 
-Place this example in `kilin/tools/repeat_question/__init__.py` to include it
-in a development distribution. Discovery requires no central registry edit.
+Save this example as `tools/repeat_question/__init__.py` under the user
+plugin directory described below. Discovery requires no central registry
+edit, build metadata, package installer or Python distribution.
 The descriptor name must match the package directory and match
 `[a-z][a-z0-9_]*`. Declare the API generation the code implements as a literal
 integer, not the current host constant: otherwise an incompatible future host
@@ -104,7 +104,8 @@ validates those defaults with the parser and checks dataclass/JSON compatibility
 Required settings without declared defaults are validated when configured.
 An absent model-call policy inherits the active session; a supplied policy
 must be valid. Missing help returns an empty mapping. Malformed supplied help
-is rejected by the metadata interface, not by tool execution. See
+is rejected by the metadata interface for bundled tools; for user plugins
+it produces a nonfatal warning and empty metadata. See
 [tool packages](tool_packages.md) and [configuration](configuration.md).
 
 ## Execution context and data records
@@ -161,6 +162,7 @@ coverage and evidence. A card is not original source evidence.
 Return `ToolResult(answer, evidence, summary, streamed=False)`. The Markdown
 answer uses one-based `[n]` citations corresponding to `evidence` records:
 `citation`, `path`, `start_line`, `end_line`, `symbol`, `text`, and `cell`.
+Use a source-relative `pathlib.Path` for `path`; the host serializes it.
 Evidence text must match original source lines. `summary` contains JSON-safe
 facts saved with the turn. Use an empty evidence tuple when no evidence is
 cited. Do not manufacture evidence from model responses or diagnostic data.
@@ -219,13 +221,14 @@ require a registered descriptor. The core validates and copies declared
 tool definitions. `kilin.tools.tool_choices()` returns available identifiers
 in their established order. `kilin.project_type_ids()` returns the project
 catalog's identifiers. Catalog queries initialize the needed definitions on
-first use; ordinary contract imports do not. The bundled registry is created
-once per process after successful descriptor and defaults checks. Public
-package directories with `__init__.py` are discovered automatically; private
+first use; ordinary contract imports do not. The runtime tool registry is created once per process. Public package
+directories with `__init__.py` are discovered automatically; private
 packages are excluded. Existing iteration and chooser orderings are retained,
-with additional bundled names appended alphabetically. A failed initialization
-is not published; recursive initialization fails explicitly. Project-type
-validation remains strict and uses the existing cached directory loader.
+with additional bundled names and then user names appended alphabetically.
+An invalid bundled descriptor prevents publication; invalid user packages
+are reported individually. Recursive initialization fails explicitly.
+Project types are discovered after tools and retain individual diagnostics.
+Explicit directory validation remains strict.
 
 `ToolName` is an open `str` alias; it is not authorization to import arbitrary
 Python paths. `parse_tool(where, data)` resolves a configured ID and validates
@@ -237,6 +240,135 @@ mutable for compatibility; do not mutate it from plugins. Use the explicit
 read-only accessor for new code. Likewise, importing a legacy tool-specific
 convenience export loads the corresponding executable package. Do not rely on
 those exports or private modules when implementing independent plugins.
+
+## User storage, discovery and validation
+
+`kilin.plugins.plugin_directory()` returns the captured absolute location:
+
+| Platform | Default user plugin directory |
+| --- | --- |
+| macOS | `~/Library/Application Support/kilin/plugins` |
+| Linux | `$XDG_DATA_HOME/kilin/plugins`, or `~/.local/share/kilin/plugins` |
+| Windows | `%LOCALAPPDATA%/kilin/plugins`, or `~/AppData/Local/kilin/plugins` |
+
+An absolute `KILIN_PLUGINS_DIR` overrides this location. Set it before the
+first catalog query or `plugin_directory()` call. No directories are created
+by discovery. There is no workspace-level plugin store, registry database,
+package installer or dependency installer. A missing directory is normal.
+Create the following layout manually while all KíLín processes and notebook
+kernels using the directory are closed:
+
+```text
+plugins/
+    tools/
+        repeat_question/
+            __init__.py
+    project_types/
+        repetition.json
+```
+
+A tool package may also contain its own Python modules, `defaults.json`,
+`settings_info.json` and resources. Use relative imports for package-local
+code. The loader imports a user package in its own namespace, without
+adding its directory to `sys.path`, and uses source rather than cached
+bytecode. A package must consist of regular files and directories (no
+symlinks, except ignored cache files). Dependencies must already be
+available in KíLín's Python environment. Do not import other plugins.
+
+Project types refer to tool IDs, not Python module paths. For example,
+`repetition.json` can use the minimal tool above:
+
+```json
+{
+  "schema_version": 1,
+  "display_name": "Repetition",
+  "description": "Repeat a question using a deterministic tool.",
+  "extensions": [".txt", ".md"],
+  "max_file_bytes": 4096,
+  "retrieval_instruction": "Find relevant information.",
+  "system_prompt": "Use the configured repetition tool.",
+  "history": {"exclude_disliked_answers": true},
+  "conversation_memory": {
+    "enabled": false,
+    "questions": "all",
+    "answers": "selected",
+    "max_hits": 4,
+    "max_tokens": 2000
+  },
+  "intents": {
+    "repeat": {
+      "description": "Repeat a question.",
+      "tool": {"name": "repeat_question", "count": 2}
+    }
+  }
+}
+```
+
+Copying code into the tools directory is an explicit trust decision: the
+next runtime will import it with the user's permissions. Review generated
+code, particularly file access, network operations and dependencies, before
+copying or enabling trusted validation. Do not change the directory contents
+while a runtime is active: a plugin may read resources or import modules
+lazily. Restart after manual changes; managed staging and activation are
+not implemented yet. Bundled IDs take precedence over user IDs; conflicts
+are visible as rejected candidates. An unavailable tool makes only types
+that require it unavailable. A missing optional help file is harmless;
+invalid user help is reported as a warning and omitted from settings help.
+
+The headless inspection and validation interface is `kilin.plugins`:
+
+```python
+from pathlib import Path
+from kilin import plugins
+
+for info in plugins.list_tools():
+    print(info.name, info.origin, info.available, info.error, info.warnings)
+for info in plugins.list_project_types():
+    print(info.type_id, info.origin, info.available, info.error)
+
+candidate = Path("drafts/repeat_question").resolve()
+structure = plugins.validate_tool(candidate)
+print(structure.error, structure.sha256, structure.runtime_checked)
+# Only after inspecting and trusting the code:
+checked = plugins.validate_tool(candidate, trusted=True)
+print(checked.available, checked.error)
+
+kind = plugins.validate_project_type(Path("drafts/repetition.json"),
+                                     bind_tools=False)
+print(kind.error, kind.required_tools, kind.bound)
+```
+
+The default tool validation checks directory layout, source syntax and
+JSON, without executing candidate code. Trusted validation imports the
+candidate in a fresh interpreter, with a bounded 30-second worker timeout.
+It checks the descriptor, version, defaults and optional help, without
+replacing an already loaded plugin. It does not execute the tool runner or
+prove its safety, and the worker is **not a security sandbox**. Structural
+success is reported as `error is None` with `runtime_checked=False`; only
+successfully runtime-checked candidates have `available=True`. Similarly,
+project-type validation with `bind_tools=False` checks structure without
+resolving tool references; `bound=False` means it is not execution-ready.
+The default (`bind_tools=True`) resolves required tools against the current
+catalog and validates their settings. It may initialize trusted installed
+plugins. Validation is not installation and never activates the candidate.
+
+The host validates settings dataclasses and JSON-compatible result data at
+configuration and execution boundaries, but cannot prove semantic accuracy
+or resource use in advance. Use deterministic unit tests for those behaviors.
+
+## Execution identity
+
+The immutable discovery records retain an origin, version (tool version and
+API generation, or project-type schema version), and SHA-256 digest. Tool
+identity hashes sorted relative file names and contents, excluding bytecode
+and `__pycache__`; JSON identity hashes the captured definition bytes.
+These portable identities do not include absolute user paths. The trace's
+`turn.settings.snapshot` includes `project_type_plugin`, and the selected
+`tool.run` span includes `plugin`. Persisted turn parameters include the
+selected identities as `project_type_plugin` and `tool_plugin` when known.
+These describe the package bytes captured during registration, not a proof
+of the behavior of arbitrary code or external dependencies. Historical
+records need not contain them. Replay/comparison integration is separate.
 
 ## Verification
 

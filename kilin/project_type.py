@@ -193,6 +193,7 @@ from collections.abc import Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from hashlib import sha256
 import json
 from math import isfinite
 from pathlib import Path
@@ -206,6 +207,7 @@ from kilin.defaults import (
     require_default_int,
     require_default_nonnegative_int,
 )
+from kilin.plugins._paths import _runtime_directory
 from kilin.retrievals.evidence_budget import (
     COVERAGE_MODES, EvidenceLimits,
 )
@@ -1478,14 +1480,17 @@ class ProjectTypeInfo:
         Resolved source of the captured definition, or its absolute path
         when resolution itself failed.
     origin: str
-        Distribution or user-level source. Only distribution discovery is
-        enabled by the runtime at present.
+        Distribution or user-level source of the definition.
     schema_version: int | None
         Declared schema version, if readable and an integer.
     required_tools: tuple[str, ...]
         Tool IDs from the structurally valid definition, in sorted order.
     error: str | None
         Diagnostic if the type is unavailable; otherwise None.
+    sha256: str | None
+        Digest of the captured JSON bytes, if readable.
+    bound: bool
+        False for structural-only validation without tool resolution.
 
     """
 
@@ -1495,12 +1500,22 @@ class ProjectTypeInfo:
     schema_version: int | None
     required_tools: tuple[str, ...]
     error: str | None
+    sha256: str | None = None
+    bound: bool = True
 
     @property
     def available(self) -> bool:
         """Report whether the definition can be selected for execution."""
 
-        return self.error is None
+        return self.error is None and self.bound
+
+    def identity(self) -> dict[str, object]:
+        """Return portable provenance without an absolute user path."""
+
+        return {
+            "type_id": self.type_id, "origin": self.origin,
+            "schema_version": self.schema_version, "sha256": self.sha256,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -1517,13 +1532,15 @@ class _ProjectTypeRecord:
     definition: ProjectType | None
 
 
-def _read_type_json(path: Path) -> dict:
+def _read_type_json(path: Path, content: bytes | None = None) -> dict:
     """Read one JSON object with duplicate-key validation.
 
     Parameters
     ----------
     path: pathlib.Path
         Project-type definition file.
+    content: bytes | None, optional
+        Captured bytes, if already read by the catalog builder.
 
     Returns
     -------
@@ -1534,7 +1551,9 @@ def _read_type_json(path: Path) -> dict:
 
     try:
         value = json.loads(
-            path.read_text(encoding="utf-8"), object_pairs_hook=_unique_keys,
+            (path.read_bytes() if content is None else content).decode(
+                "utf-8"
+            ), object_pairs_hook=_unique_keys,
         )
     except (UnicodeError, json.JSONDecodeError) as error:
         raise ValueError(f"{path} is not valid JSON: {error}") from error
@@ -1580,8 +1599,65 @@ def _bind_tools(definition: ProjectType) -> ProjectType:
     return replace(definition, intents=intents)
 
 
+def _type_record(
+    path: Path, origin: str, *, bind_tools: bool = True,
+) -> _ProjectTypeRecord:
+    """Capture and validate one definition independently of other files.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Candidate JSON file; its stem is the project type ID.
+    origin: str
+        Storage scope of the candidate.
+    bind_tools: bool, optional
+        Resolve tool references and settings after structural validation.
+
+    Returns
+    -------
+    _ProjectTypeRecord
+        Captured definition, raw JSON and individual diagnostic.
+
+    """
+
+    raw = None
+    definition = None
+    version = None
+    required = ()
+    error = None
+    digest = None
+    source = path.absolute()
+    try:
+        if origin == "user" and (path.is_symlink() or not path.is_file()):
+            raise ValueError(f"Expected a regular JSON file: {path}.")
+        if path.suffix != ".json":
+            raise ValueError(f"Expected a .json project type: {path}.")
+        source = path.resolve()
+        content = source.read_bytes()
+        digest = sha256(content).hexdigest()
+        raw = _read_type_json(source, content)
+        declared = raw.get("schema_version", 1)
+        if type(declared) is int:
+            version = declared
+        structure = _parse_project_type(path.stem, raw, bind_tools=False)
+        required = tuple(sorted({
+            intent.tool.name for intent in structure.intents.values()
+            if intent.tool is not None
+        }))
+        if bind_tools:
+            definition = _bind_tools(structure)
+    except (Exception, SystemExit) as failure:
+        error = str(failure) or type(failure).__name__
+    info = ProjectTypeInfo(
+        path.stem, source, origin, version, required, error, digest,
+        bind_tools,
+    )
+    return _ProjectTypeRecord(info, raw, definition)
+
+
 def _build_project_type_catalog(
-    directory: Path, origin: str = "distribution",
+    directory: Path, origin: str = "distribution", *,
+    reserved: frozenset[str] = frozenset(),
 ) -> dict[str, _ProjectTypeRecord]:
     """Discover each definition independently and capture diagnostics.
 
@@ -1591,6 +1667,8 @@ def _build_project_type_catalog(
         Folder containing JSON definitions.
     origin: str, optional
         Storage scope of discovered definitions.
+    reserved: frozenset[str], optional
+        IDs already owned by the distribution. Do not bind duplicates.
 
     Returns
     -------
@@ -1602,51 +1680,63 @@ def _build_project_type_catalog(
     registered_tools()
     records = {}
     for path in sorted(Path(directory).glob("*.json")):
-        raw = None
-        definition = None
-        version = None
-        required = ()
-        error = None
-        source = path.absolute()
-        try:
-            source = path.resolve()
-            raw = _read_type_json(source)
-            declared = raw.get("schema_version", 1)
-            if type(declared) is int:
-                version = declared
-            structure = _parse_project_type(
-                path.stem, raw, bind_tools=False,
+        if path.stem in reserved:
+            info = ProjectTypeInfo(
+                path.stem, path.absolute(), origin, None, (),
+                f"Project type ID {path.stem!r} is already registered.",
             )
-            required = tuple(sorted({
-                intent.tool.name for intent in structure.intents.values()
-                if intent.tool is not None
-            }))
-            definition = _bind_tools(structure)
-        except (OSError, ValueError, TypeError, RuntimeError) as failure:
-            error = str(failure)
-        info = ProjectTypeInfo(
-            path.stem, source, origin, version, required, error,
-        )
-        records[path.stem] = _ProjectTypeRecord(info, raw, definition)
+            record = _ProjectTypeRecord(info, None, None)
+        else:
+            record = _type_record(path, origin)
+        records[path.stem] = record
     return records
 
 
 _catalog: dict[str, _ProjectTypeRecord] | None = None
 _catalog_lock = RLock()
 _catalog_initializing = False
+_rejected_types: tuple[ProjectTypeInfo, ...] = ()
 
 
 def _runtime_catalog() -> dict[str, _ProjectTypeRecord]:
     """Initialize exactly one process-local catalog, on first use."""
 
-    global _catalog, _catalog_initializing
+    global _catalog, _catalog_initializing, _rejected_types
+    # Tool discovery precedes type discovery, including lock acquisition.
+    registered_tools()
     with _catalog_lock:
         if _catalog is None:
             if _catalog_initializing:
                 raise RuntimeError("Recursive project-type initialization.")
             _catalog_initializing = True
             try:
-                _catalog = _build_project_type_catalog(PROJECT_TYPES_DIR)
+                records = _build_project_type_catalog(PROJECT_TYPES_DIR)
+                user_dir = _runtime_directory() / "project_types"
+                rejected = []
+                try:
+                    if user_dir.is_symlink():
+                        raise ValueError("Linked project types directory.")
+                    # No directory is created by discovery. Access failures
+                    # remain inspectable rather than hiding other types.
+                    if user_dir.exists():
+                        if not user_dir.is_dir():
+                            raise ValueError("Expected a directory.")
+                        list(user_dir.iterdir())
+                        user_records = _build_project_type_catalog(
+                            user_dir, "user", reserved=frozenset(records),
+                        )
+                        for name, record in user_records.items():
+                            if name in records:
+                                rejected.append(record.info)
+                            else:
+                                records[name] = record
+                except (OSError, ValueError) as error:
+                    rejected.append(ProjectTypeInfo(
+                        "<project types directory>", user_dir, "user",
+                        None, (), str(error),
+                    ))
+                _rejected_types = tuple(rejected)
+                _catalog = records
             finally:
                 _catalog_initializing = False
         return _catalog
@@ -1665,6 +1755,33 @@ def project_type_catalog() -> Mapping[str, ProjectTypeInfo]:
     return MappingProxyType({
         key: record.info for key, record in _runtime_catalog().items()
     })
+
+
+def _project_type_infos() -> tuple[ProjectTypeInfo, ...]:
+    """Return discovered entries and rejected ID conflicts for inspection."""
+
+    return tuple(record.info for record in _runtime_catalog().values()) + (
+        _rejected_types
+    )
+
+
+def _project_type_identity(type_id: str) -> dict[str, object] | None:
+    """Return the captured project-type identity, if present.
+
+    Parameters
+    ----------
+    type_id: str
+        Selected project type identifier.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Portable provenance from the catalog, or None for unknown types.
+
+    """
+
+    record = _runtime_catalog().get(type_id)
+    return record.info.identity() if record is not None else None
 
 
 def _available_record(type_id: ProjectTypeId) -> _ProjectTypeRecord:

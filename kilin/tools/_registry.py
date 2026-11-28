@@ -9,7 +9,7 @@ The registry is constructed on first access, not during module import.
 A tool may also declare resources to install in newly created projects;
 the core resolves and copies them, not the GUI.
 
-Each bundled tool is a package exposing a ``PLUGIN`` descriptor with
+Each distributed or user tool exposes a ``PLUGIN`` descriptor with
 its own settings parser and runner (see ``kilin.tools._contract``).
 Discovery binds the descriptor to the package actually loaded. A tool
 marked ``follows_up`` works on an earlier answer, so routing relates a
@@ -26,7 +26,8 @@ Key Features
 - **Registry**
 
     Discover each public package, validate its descriptor and bind its
-    observed package root before publishing the registry.
+    observed package root before publishing the registry. User failures
+    remain individually inspectable; bundled failures are fatal.
 
 - **Configuration**
 
@@ -98,6 +99,11 @@ from threading import RLock
 from types import MappingProxyType, ModuleType
 from typing import Final
 
+from kilin.plugins._discovery import (
+    ToolPluginInfo, _check_defaults, _check_package, _discard_user_package,
+    _load_user_package, _package_digest,
+)
+from kilin.plugins._paths import _runtime_directory
 from kilin.tools._defaults import load_tool_defaults, require_section
 from kilin.tools._contract import (
     PLUGIN_API_VERSION,
@@ -197,6 +203,7 @@ _BUILTIN_REGISTRY_ORDER: Final[tuple[ToolName, ...]] = (
 _REGISTRY_LOCK = RLock()
 _registry: dict[ToolName, Tool] | None = None
 _initializing = False
+_rejected_tools: tuple[ToolPluginInfo, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,10 +215,14 @@ class _RegisteredTool(Tool):
     _package_root: pathlib.Path
         Resolved directory of the imported package. It is not supplied
         by the descriptor and is retained when replacing test callbacks.
+    _info: ToolPluginInfo | None
+        Captured identity and nonfatal diagnostics of the loaded package.
 
     """
 
     _package_root: Path = field(kw_only=True, repr=False)
+    _info: ToolPluginInfo | None = field(default=None, kw_only=True,
+                                         repr=False)
 
     @property
     def resource_root(self) -> Path:
@@ -275,7 +286,71 @@ def _validate_descriptor(name: str, tool: object) -> None:
             raise ValueError(f"Tool {name!r} has invalid {key}.")
 
 
-def _register_tool(module: ModuleType, directory: Path) -> Tool:
+def _parse_settings(tool: Tool, data: dict, where: str) -> object:
+    """Validate settings returned by the tool at every configuration boundary.
+
+    Parameters
+    ----------
+    tool: Tool
+        Descriptor providing the settings parser.
+    data: dict
+        Raw settings supplied to the parser.
+    where: str
+        Diagnostic location of the settings.
+
+    Returns
+    -------
+    object
+        Settings dataclass with JSON-compatible fields.
+
+    """
+
+    try:
+        settings = tool.parse_settings(data, where)
+    except SystemExit as error:
+        raise ValueError(
+            f"Tool {tool.name!r} settings parser attempted to exit: {error}"
+        ) from error
+    if not is_dataclass(settings) or isinstance(settings, type):
+        raise ValueError(f"Tool {tool.name!r} settings must be a dataclass.")
+    try:
+        _check_json(asdict(settings))
+    except (TypeError, ValueError, RecursionError) as error:
+        raise ValueError(
+            f"Tool {tool.name!r} settings must be JSON-compatible."
+        ) from error
+    return settings
+
+
+def _check_json(value: object) -> None:
+    """Require strict JSON data, permitting tuples as array representations.
+
+    Parameters
+    ----------
+    value: object
+        Settings or result payload to validate.
+
+    """
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError("JSON object keys must be strings.")
+            _check_json(item)
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            _check_json(item)
+    elif value is not None and not isinstance(value, (str, int, float)):
+        raise TypeError("Unsupported JSON value.")
+    # Reject NaN and infinity without serializing every nested object again.
+    if isinstance(value, float):
+        json.dumps(value, allow_nan=False)
+
+
+def _register_tool(
+    module: ModuleType, directory: Path, *, origin: str = "distribution",
+    digest: str | None = None,
+) -> Tool:
     """Bind and validate a descriptor from an already imported package.
 
     Parameters
@@ -284,6 +359,10 @@ def _register_tool(module: ModuleType, directory: Path) -> Tool:
         Imported trusted Python package exposing ``PLUGIN``.
     directory: pathlib.Path
         Candidate package directory selected by the loader, not the plugin.
+    origin: str, optional
+        Distribution or user-level source of the package.
+    digest: str | None, optional
+        Digest captured before importing user code.
 
     Returns
     -------
@@ -307,14 +386,10 @@ def _register_tool(module: ModuleType, directory: Path) -> Tool:
     descriptor = getattr(module, "PLUGIN", None)
     _validate_descriptor(name, descriptor)
     # Copy only authoring fields, never ownership supplied by a descriptor.
-    tool = _RegisteredTool(
-        **{
-            item.name: getattr(descriptor, item.name) for item in fields(Tool)
-        },
-        _package_root=directory,
-    )
-    # Validate only declared defaults. A tool with required settings need
-    # not accept an empty mapping before a project type configures it.
+    values = {
+        item.name: getattr(descriptor, item.name) for item in fields(Tool)
+    }
+    tool = _RegisteredTool(**values, _package_root=directory)
     path = directory / "defaults.json"
     if path.exists():
         defaults = load_tool_defaults(path)
@@ -323,31 +398,144 @@ def _register_tool(module: ModuleType, directory: Path) -> Tool:
             normalized = {key.lower(): value for key, value in data.items()}
             if len(normalized) != len(data):
                 raise ValueError(f"Tool {name!r} has duplicate settings.")
-            settings = tool.parse_settings(normalized, f"{name}.defaults")
-            if not is_dataclass(settings) or isinstance(settings, type):
-                raise ValueError(
-                    f"Tool {name!r} settings must be a dataclass."
-                )
-            try:
-                json.dumps(asdict(settings), allow_nan=False)
-            except (TypeError, ValueError) as error:
-                raise ValueError(
-                    f"Tool {name!r} settings must be JSON-compatible."
-                ) from error
-    # Validate supplied model policies at registration, without requiring
-    # a policy or help file for deterministic, settings-free plugins.
+            _parse_settings(tool, normalized, f"{name}.defaults")
+    # An absent policy inherits the session. A supplied policy must be valid.
     _ = tool.model_calls
-    return tool
+    warnings = ()
+    if origin == "user":
+        from kilin.settings_info import _read_tool_info
+
+        try:
+            _read_tool_info(name, directory)
+        except (OSError, ValueError, TypeError) as error:
+            warnings = (f"Settings help: {error}",)
+    current_digest = _package_digest(directory)
+    if digest is not None and current_digest != digest:
+        raise ValueError(f"Tool {name!r} changed during registration.")
+    info = ToolPluginInfo(
+        name, directory, origin, tool.version, tool.api_version,
+        current_digest, warnings=warnings,
+    )
+    return _RegisteredTool(**values, _package_root=directory, _info=info)
+
+
+def _register_user_tool(directory: Path) -> Tool:
+    """Import and bind a trusted user plugin, cleaning failures from cache.
+
+    Parameters
+    ----------
+    directory: pathlib.Path
+        Candidate source package folder.
+
+    Returns
+    -------
+    Tool
+        Registered descriptor with captured user identity.
+
+    """
+
+    directory = _check_package(directory)
+    digest = _package_digest(directory)
+    _check_defaults(directory)
+    module = _load_user_package(directory)
+    try:
+        return _register_tool(module, directory, origin="user", digest=digest)
+    except BaseException:
+        _discard_user_package(directory.name)
+        raise
+
+
+def _discover_user_tools(
+    entries: dict[ToolName, Tool], directory: Path,
+) -> tuple[ToolPluginInfo, ...]:
+    """Extend the bundled registry and retain rejected user candidates.
+
+    Parameters
+    ----------
+    entries: dict[ToolName, Tool]
+        Registry under construction; distribution names have precedence.
+    directory: pathlib.Path
+        User tools directory, which may be absent.
+
+    Returns
+    -------
+    tuple[ToolPluginInfo, ...]
+        Unavailable candidates with individual diagnostic messages.
+
+    """
+
+    rejected = []
+    try:
+        if directory.is_symlink():
+            raise ValueError("Linked tools directory.")
+        candidates = sorted(directory.iterdir())
+    except FileNotFoundError:
+        return ()
+    except (OSError, ValueError) as error:
+        return (ToolPluginInfo(
+            "<tools directory>", directory, "user", error=str(error),
+            runtime_checked=False,
+        ),)
+    for path in candidates:
+        name = path.name
+        if name.startswith(("_", ".")):
+            continue
+        try:
+            if not (path.is_dir() or path.is_symlink()):
+                continue
+            if name in entries:
+                rejected.append(ToolPluginInfo(
+                    name, path.absolute(), "user",
+                    error=f"Tool ID {name!r} is already registered.",
+                    runtime_checked=False,
+                ))
+                continue
+            entries[name] = _register_user_tool(path)
+        except (Exception, SystemExit) as error:
+            rejected.append(ToolPluginInfo(
+                name, path.absolute(), "user",
+                error=f"{type(error).__name__}: {error}",
+            ))
+    return tuple(rejected)
+
+
+def _tool_plugin_infos() -> tuple[ToolPluginInfo, ...]:
+    """Inspect registered and rejected tool candidates without reimporting."""
+
+    entries = _tool_registry()
+    return tuple(
+        tool._info for tool in entries.values()
+        if isinstance(tool, _RegisteredTool) and tool._info is not None
+    ) + _rejected_tools
+
+
+def _tool_identity(name: str) -> dict[str, object] | None:
+    """Return captured tool provenance, if available for this entry.
+
+    Parameters
+    ----------
+    name: str
+        Registered tool identifier.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Portable identity, or None for a synthetic test descriptor.
+
+    """
+
+    info = getattr(_tool_registry().get(name), "_info", None)
+    return info.identity() if info is not None else None
 
 
 def _build_tool_registry() -> dict[ToolName, Tool]:
-    """Discover the bundled tool packages and register their descriptors.
+    """Discover bundled and trusted user packages and register descriptors.
 
     Returns
     -------
     dict[ToolName, Tool]
         Tool definitions in their established registration order, followed
-        by newly distributed packages in alphabetical order.
+        by newly distributed and then user packages in alphabetical order.
 
     Raises
     ------
@@ -356,6 +544,7 @@ def _build_tool_registry() -> dict[ToolName, Tool]:
 
     """
 
+    global _rejected_tools
     entries = {}
     for directory in sorted(Path(__file__).parent.iterdir()):
         name = directory.name
@@ -366,7 +555,11 @@ def _build_tool_registry() -> dict[ToolName, Tool]:
         module = import_module(f"kilin.tools.{name}")
         entries[name] = _register_tool(module, directory)
     order = (*_BUILTIN_REGISTRY_ORDER, *entries)
-    return {name: entries[name] for name in order if name in entries}
+    entries = {name: entries[name] for name in order if name in entries}
+    _rejected_tools = _discover_user_tools(
+        entries, _runtime_directory() / "tools",
+    )
+    return entries
 
 
 def _tool_registry() -> dict[ToolName, Tool]:
@@ -494,7 +687,7 @@ def parse_tool(where: str, data: object) -> ToolUse:
 
     settings = {key: value for key, value in data.items() if key != "name"}
     return ToolUse(
-        name, entries[name].parse_settings(settings, f"{where}.tool")
+        name, _parse_settings(entries[name], settings, f"{where}.tool")
     )
 
 
@@ -519,4 +712,34 @@ def run_tool(
 
     """
 
-    return _tool_registry()[use.name].run(use.settings, request, context)
+    tool = _tool_registry()[use.name]
+    try:
+        result = tool.run(use.settings, request, context)
+    except SystemExit as error:
+        raise RuntimeError(
+            f"Tool {tool.name!r} attempted to exit: {error}"
+        ) from error
+    if not isinstance(result, ToolResult):
+        raise ValueError(f"Tool {use.name!r} must return ToolResult.")
+    if (
+        not isinstance(result.answer, str)
+        or not isinstance(result.evidence, tuple)
+        or any(not isinstance(item, dict) for item in result.evidence)
+        or not isinstance(result.summary, dict)
+        or type(result.streamed) is not bool
+    ):
+        raise ValueError(f"Tool {use.name!r} returned an invalid ToolResult.")
+    try:
+        # Evidence uses real pathlib paths until conversation persistence.
+        # Only the summary and the serialized evidence representation are
+        # JSON data; do not reject existing tools for returning Path values.
+        for item in result.evidence:
+            if not isinstance(item.get("path"), Path):
+                raise ValueError("Tool evidence requires a pathlib path.")
+            _check_json({**item, "path": item["path"].as_posix()})
+        _check_json(result.summary)
+    except (TypeError, ValueError, RecursionError) as error:
+        raise ValueError(
+            f"Tool {use.name!r} result must be JSON-compatible."
+        ) from error
+    return result

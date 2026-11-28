@@ -7,15 +7,17 @@ loading arbitrary Python code mentioned in a project JSON. A new reader,
 project type or registered tool must preserve provenance, settings and
 workspace ownership and must not require Qt in the core. This document
 explains the implemented extension points and where modification is needed;
-bundled tool packages are discovered automatically through their descriptors.
-User-directory discovery and installation are not yet supported.
+distribution and trusted user tool packages are discovered automatically
+through their descriptors, and project types through JSON definitions.
+See the [plugin API](PLUGIN_API.md#user-storage-discovery-and-validation)
+for storage, trust, and validation. Managed installation is not yet supported.
 
 | Extension | Registration / owner | Main invariant |
 | --- | --- | --- |
-| Project type | `kilin/project_types/<type_id>.json` read by `project_type.py` | Validate all intents, tools, sources and prompts before use. |
+| Project type | Distribution and user `project_types/<type_id>.json` | Validate all intents, tools, sources and prompts before use. |
 | New source format | `sources/extensions/sources_<suffix>.py`, dispatched by `sources.py` | Return well-formed `SourceFile` / `SourceUnit` records with exact provenance. |
 | Code graph language | `retrievals/code_graph/extensions/` | Extract structural hints without executing source code. |
-| Built-in tool | `tools/<name>/__init__.py` exposing `PLUGIN` | Validate settings; honor `ToolRequest`, `ToolContext`, `ToolResult`. |
+| Tool plugin | Distribution and user `tools/<name>/__init__.py` exposing `PLUGIN` | Validate settings; honor `ToolRequest`, `ToolContext`, `ToolResult`. |
 | Tool workspace asset | Tool's `workspace_resources(settings)` and `project_layout.py` | Declare safe relative destinations, install in core, preserve user edits. |
 | Model backend | `chat.py`, `embeddings.py`, `runtime.py` | Maintain validated session, tokenizer and vector/generation contracts; not a JSON-only extension. |
 | Retrieval strategy | `retrievals/strategies/` and `rag.py` integration | Preserve chunk alignment, ranking and evidence coordinates; not dynamically registered today. |
@@ -72,7 +74,10 @@ Restart to activate changes. `load_project_types(directory)` remains a
 strict, separately cached validation operation: it rejects empty folders
 and any invalid definition and does not register them. Clearing its cache
 refreshes explicit validation, not the runtime catalog. Automatic discovery
-is still distribution-level only.
+loads distribution definitions first and then user definitions in filename
+order. Distribution IDs take precedence. `kilin.plugins.list_project_types()`
+also includes rejected duplicate candidates; `validate_project_type()` can
+check a user JSON candidate without adding it to the runtime catalog.
 
 The GUI selects the first available type for new-project defaults. Saved
 workspaces whose type is missing or unavailable remain listed with their

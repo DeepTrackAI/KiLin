@@ -168,33 +168,23 @@ def _core_info() -> dict[str, object]:
 
 
 @lru_cache(maxsize=None)
-def _tool_info(name: str) -> dict[str, object]:
-    """Load one tool's descriptions and check its declared settings.
+def _read_tool_info(name: str, package: Path) -> dict[str, object]:
+    """Validate optional settings help from a specific package location.
 
     Parameters
     ----------
     name: str
-        Registered tool name.
+        Candidate tool identifier.
+    package: pathlib.Path
+        Observed package directory, independent of registry state.
 
     Returns
     -------
     dict[str, object]
-        Cached metadata keyed by normalized tool setting names, or an
-        empty mapping when the tool supplies no help file.
-
-    Raises
-    ------
-    ValueError
-        If the tool is unknown or its metadata disagrees with defaults.
+        Validated descriptions, or an empty mapping when absent.
 
     """
 
-    from kilin.tools._registry import registered_tools
-
-    tools = registered_tools()
-    if name not in tools:
-        raise ValueError(f"Unknown KíLín tool: {name}.")
-    package = tools[name].resource_root
     if not (package / "settings_info.json").exists():
         return {}
     settings = _load_resource(package, "settings_info.json")
@@ -218,6 +208,35 @@ def _tool_info(name: str) -> dict[str, object]:
             f"unexpected {sorted(set(settings) - expected)}."
         )
     return settings
+
+
+
+@lru_cache(maxsize=None)
+def _tool_info(name: str) -> dict[str, object]:
+    """Resolve metadata from the registered package.
+
+    Parameters
+    ----------
+    name: str
+        Registered tool identifier.
+
+    Returns
+    -------
+    dict[str, object]
+        Descriptions, empty for absent or rejected optional user help.
+
+    """
+
+    from kilin.tools._registry import registered_tools
+
+    tools = registered_tools()
+    if name not in tools:
+        raise ValueError(f"Unknown KíLín tool: {name}.")
+    tool = tools[name]
+    info = getattr(tool, "_info", None)
+    if info is not None and info.origin == "user" and info.warnings:
+        return {}
+    return _read_tool_info(name, tool.resource_root)
 
 
 def get_tool_settings_info(name: str) -> dict[str, dict[str, str]]:

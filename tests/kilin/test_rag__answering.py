@@ -17,6 +17,7 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch, sentinel
 from kilin import rag
 from kilin.answering import RouteDecision
+from kilin.plugins import list_tools
 from kilin.project_type import (
     HISTORY_POLICY_NONE,
     RETRIEVAL_MODE_DOCUMENT,
@@ -1339,11 +1340,22 @@ class TestRAGRoutingAndTools(unittest.TestCase):
                 )
         ran = runner.call_args.args[0]
         self.assertEqual(ran.settings.max_listed, 7)
+        identity = next(
+            info.identity() for info in list_tools()
+            if info.name == use.name and info.available
+        )
+        self.assertEqual(identity["name"], "project_inventory")
+        self.assertEqual(identity["origin"], "distribution")
+        self.assertEqual(identity["version"], TOOL_REGISTRY[use.name].version)
+        self.assertEqual(identity["api_version"],
+                         TOOL_REGISTRY[use.name].api_version)
+        self.assertRegex(identity["sha256"], r"^[0-9a-f]{64}$")
         trace.span.assert_any_call(
             "tool.run",
             component="tool",
             data={
                 "name": "project_inventory",
+                "plugin": identity,
                 "settings": asdict(ran.settings),
                 # The tool's own fixed values, from its defaults.json.
                 "internal": {"MODEL_CALLS": {"THINKING": "inherit"}},

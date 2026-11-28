@@ -2,8 +2,9 @@
 
 ## Ownership and boundaries
 
-KíLín's registered tools are Python subpackages under `kilin/tools/`.
-The registry (`kilin/tools/_registry.py`) discovers bundled packages exposing
+KíLín's bundled tools are Python subpackages under `kilin/tools/`.
+The registry (`kilin/tools/_registry.py`) discovers distribution and user
+packages exposing
 a `PLUGIN` descriptor, validates their contracts and binds each descriptor
 to its observed package root. The descriptor connects a stable tool identifier
 to `parse_settings`, `run` and optional hooks such as `workspace_resources`. Project-type JSON may
@@ -50,7 +51,10 @@ to the tool as a callback. The tool does not import the GUI, and it
 saves validated Markdown even without a PDF backend. Other tools can add private
 modules as needed.
 All registered built-in tools use packages, not flat `.py` modules. New
-bundled packages are discovered without editing a central implementation list.
+packages are discovered without editing a central implementation list.
+User packages follow the same descriptor contract; see the
+[plugin API](PLUGIN_API.md#user-storage-discovery-and-validation) for their
+storage, validation, trust boundary and restart requirements.
 Use relative imports for package-local modules. The
 [public plugin API](PLUGIN_API.md) defines the descriptor and optional files. Use
 their documented package exports; obsolete flat-file import paths have no
