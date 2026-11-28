@@ -144,7 +144,9 @@ from kilin.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
-from kilin.project_type import ProjectTypeId, load_project_types
+from kilin.project_type import (
+    ProjectTypeId, load_project_types, project_type,
+)
 from kilin.project_layout import (
     CORE_PROJECT_FOLDERS,
     ensure_project_folders,
@@ -342,12 +344,12 @@ def _default_profile_text(
 
 
 def project_type_ids() -> tuple[ProjectTypeId, ...]:
-    """Return registered project identifiers without an import-time snapshot.
+    """Return available project identifiers without an import-time snapshot.
 
     Returns
     -------
     tuple[ProjectTypeId, ...]
-        The project-type catalog's identifiers in its established order.
+        Available project-type identifiers in catalog order.
 
     """
 
@@ -379,6 +381,31 @@ def __getattr__(name: str) -> object:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def _require_project_type(type_id: ProjectTypeId, field: str) -> None:
+    """Reject unknown or unavailable types before touching a workspace.
+
+    Parameters
+    ----------
+    type_id: ProjectTypeId
+        Type requested for creation or read from a saved profile.
+    field: str
+        Setting name used for validation diagnostics.
+
+    """
+
+    available = project_type_ids()
+    if type_id in available:
+        return
+    try:
+        project_type(type_id)
+    except ValueError as error:
+        raise ValueError(
+            f"{field} must be one of: {', '.join(available) or '<none>'}. "
+            f"{error}"
+        ) from error
+    raise ValueError(f"{field} is not available: {type_id!r}.")
+
+
 def default_project_profile(type_id: ProjectTypeId) -> ProjectProfile:
     """Return the default profile for one registered project type.
 
@@ -404,10 +431,7 @@ def default_project_profile(type_id: ProjectTypeId) -> ProjectProfile:
 
     """
 
-    if type_id not in project_type_ids():
-        raise ValueError(
-            f"type_id must be one of: {', '.join(project_type_ids())}."
-        )
+    _require_project_type(type_id, "type_id")
     extensions = ", ".join(load_project_types()[type_id].extensions)
     parser = ConfigParser()
     parser.read_string(
@@ -753,10 +777,7 @@ def initialize_project(
 
     """
 
-    if type_id not in project_type_ids():
-        raise ValueError(
-            f"type_id must be one of: {', '.join(project_type_ids())}."
-        )
+    _require_project_type(type_id, "type_id")
     root = destination_path(directory)
     return _initialize_profile(root, type_id)
 
@@ -1008,10 +1029,7 @@ def prepare_project_workspace(
 
     """
 
-    if type_id not in project_type_ids():
-        raise ValueError(
-            f"type_id must be one of: {', '.join(project_type_ids())}."
-        )
+    _require_project_type(type_id, "type_id")
     source = Path(source_directory).expanduser().resolve(strict=True)
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
@@ -1475,11 +1493,7 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
     """
 
     type_id_value = _required(parser, "project", "type_id")
-    if type_id_value not in project_type_ids():
-        raise ValueError(
-            "project.type_id must be one of: "
-            f"{', '.join(project_type_ids())}."
-        )
+    _require_project_type(type_id_value, "project.type_id")
     type_id = cast("ProjectTypeId", type_id_value)
 
     extensions = tuple(

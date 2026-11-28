@@ -13,7 +13,9 @@ existing documented behavior within a generation.
 The current registry automatically discovers only bundled tool packages.
 Defining a descriptor outside the distribution does not install or activate it. User-folder discovery and installation are
 not yet supported. Each bundled descriptor declares its individual version and API explicitly.
-New descriptors should do the same.
+New descriptors should do the same. Project types have a separate JSON
+`schema_version` and a runtime catalog retaining missing-tool diagnostics;
+see [Creating a project type](extension_interfaces.md#creating-a-project-type).
 
 Tool Python code is trusted, in-process code. An API check establishes
 compatibility, not safety. The supplied services and filesystem helpers

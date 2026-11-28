@@ -227,7 +227,8 @@ class TestPackagedProjectTypes(unittest.TestCase):
                 definition = types[path.stem]
                 self.assertIsInstance(definition, ProjectType)
                 self.assertEqual(definition.id, path.stem)
-                self.assertIs(project_type(path.stem), definition)
+                self.assertEqual(project_type(path.stem), definition)
+                self.assertIsNot(project_type(path.stem), definition)
                 self.assertEqual(definition.label, definition.display_name)
                 self.assertEqual(
                     definition.extensions,

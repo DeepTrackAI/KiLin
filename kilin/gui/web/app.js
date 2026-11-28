@@ -236,7 +236,7 @@ function setQuestionDraft(text) {
  * @param types Project types sent by the engine.
  */
 function renderProjectTypes(types) {
-  if (!Array.isArray(types) || !types.length) return;
+  if (!Array.isArray(types)) return;
   projectTypes = Object.fromEntries(types.map((item) => [item.type_id, item]));
   if (savedProjects.length) renderSavedProjects(savedProjects);
   if (openProjectPath) renderSidebarProjects(savedProjects, openProjectPath);
@@ -249,7 +249,8 @@ function renderProjectTypes(types) {
     return option;
   }));
   // The first type in registry filename order is the initial default.
-  select.value = projectTypes[current] ? current : types[0].type_id;
+  select.value = Object.hasOwn(projectTypes, current) ? current : (types[0]?.type_id || "");
+  select.disabled = !types.length;
   activeProjectTypeId = ready ? activeProjectTypeId : select.value;
 }
 
@@ -359,6 +360,7 @@ function renderSavedProjects(projects) {
   // jump a scrolled list back to the top.
   const shown = JSON.stringify(projects.map((project) => [
     project.project, project.name, projectTypes[project.type_id]?.label || project.type_id,
+    project.available, project.unavailable_reason,
   ]));
   if (host.dataset.shown === shown) {
     host.classList.toggle("hidden", !host.children.length);
@@ -387,10 +389,14 @@ function renderSavedProjects(projects) {
       typeLabel.className = "saved-project-type";
       // The type's own name, or its ID until the types have arrived.
       typeLabel.textContent = projectTypes[project.type_id]?.label || project.type_id;
+      const unavailable = project.available === false;
+      if (unavailable) typeLabel.textContent += " (unavailable)";
       button.append(name, typeLabel);
-      button.title = `Open ${project.type_id} project from ${project.project}`;
+      button.title = unavailable ? project.unavailable_reason
+        : `Open ${project.type_id} project from ${project.project}`;
       button.addEventListener("click", () => {
         if (busy) return;
+        if (unavailable) return showError(project.unavailable_reason);
         setBusy(true, "Opening project…");
         bridge.resumeProject(project.project);
       });
@@ -554,14 +560,17 @@ function renderSidebarProjects(projects, current) {
     const type = document.createElement("span");
     type.className = "project-item-type";
     type.textContent = projectTypes[project.type_id]?.label || project.type_id || "";
+    const unavailable = project.available === false;
+    if (unavailable) type.textContent += " (unavailable)";
     button.append(name, type);
-    button.title = project.project;
+    button.title = unavailable ? project.unavailable_reason : project.project;
     const active = project.project === current;
     button.classList.toggle("active", active);
     if (active) button.setAttribute("aria-current", "true");
     button.disabled = busy;
     const open = () => {
       if (busy || active) return;
+      if (unavailable) return showError(project.unavailable_reason);
       setBusy(true, `Opening ${project.name}…`);
       bridge.resumeProject(project.project);
     };
@@ -579,7 +588,7 @@ function renderSidebarProjects(projects, current) {
       event.preventDefault();
       showWorkspaceMenu(event.clientX, event.clientY, active
         ? [["Rename", () => renameProjectInSidebar(button, project)], ["Settings", openModels]]
-        : [["Open", open]]);
+        : [[unavailable ? "Why unavailable?" : "Open", open]]);
     });
     row.append(button);
     if (active) row.append(settings);
@@ -709,7 +718,7 @@ function projectFileTypes() {
  * Request a backend metadata scan for the current source selection.
  */
 function previewSources() {
-  if (bridge && selectedSources.length) {
+  if (bridge && profile && selectedSources.length) {
     setBusy(true, "Scanning selected sources…");
     bridge.previewSources(
       JSON.stringify(selectedSources), JSON.stringify(projectFileTypes()),
@@ -3103,6 +3112,17 @@ function showModelFields() {
  *   metadata.
  */
 function showSettings(data) {
+  if (data.project_type_error) {
+    // There is no creation profile; keep saved workspaces visible.
+    if (!ready) profile = null;
+    renderProjectTypes(data.project_types);
+    showError(data.project_type_error);
+    // A stale creation selection can now choose from the available types.
+    if (!ready && data.project_types.length) {
+      bridge?.requestSettings(byId("type-id").value, "");
+    }
+    return;
+  }
   if (!data.selection_reason_codes
       || typeof data.selection_reason_codes.FILE_TOO_LARGE !== "string") {
     throw new Error("Missing file-selection codes in GUI settings.");
@@ -8127,6 +8147,7 @@ byId("cancel-model-download").addEventListener("click", () => {
 byId("project-form").addEventListener("submit", (event) => {
   event.preventDefault();
   if (busy || !bridge || needsNewProjectSetup()) return;
+  if (!byId("type-id").value) return showError("No project types are available.");
   if (!profile) return showError("Settings are still loading. Try again in a moment.");
   if (!installedBackends[activeBackend]) {
     openModels();

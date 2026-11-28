@@ -57,12 +57,12 @@ from typing import Final
 from kilin.atomic_writes import atomic_write_text
 from kilin.project import open_project
 from kilin.project_type import (
-    PROJECT_TYPES_DIR,
     Intent,
     ProjectType,
     _parse_project_type,
     _unique_keys,
     project_type,
+    project_type_raw,
 )
 from kilin.trace_logging import NullTraceLogger, TraceSink
 
@@ -501,9 +501,7 @@ def _resolved(root: Path, type_id: str) -> tuple[ProjectType, str]:
         "global", "intents", "capabilities", "memory"
     )):
         return project_type(type_id), revision
-    path = PROJECT_TYPES_DIR / f"{type_id}.json"
-    raw = json.loads(path.read_text(encoding="utf-8"),
-                     object_pairs_hook=_unique_keys)
+    raw = project_type_raw(type_id)
     return _parse_project_type(
         type_id, _merge(raw, _merged_overrides(saved))
     ), revision
@@ -706,9 +704,7 @@ def save_project_behavior(
             "Choose a global, indexing, memory, or intent editor."
         )
     _check_override_shape(saved, defaults)
-    path = PROJECT_TYPES_DIR / f"{defaults.id}.json"
-    raw = json.loads(path.read_text(encoding="utf-8"),
-                     object_pairs_hook=_unique_keys)
+    raw = project_type_raw(defaults.id)
     _parse_project_type(defaults.id, _merge(raw, _merged_overrides(saved)))
     state = {
         "format": _FORMAT,

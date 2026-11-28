@@ -139,7 +139,7 @@ from typing import (
 
 from kilin._project_creation import check_available, destination_path
 from kilin.project import (
-    project_type_ids,
+    _require_project_type,
     ProjectTypeId,
     QAProject,
     _preparing_project,
@@ -655,10 +655,7 @@ def _prepare_sources_workspace(
     owned_creation = False
     if isinstance(trace, TraceConfig) and trace.output_path is not None:
         raise ValueError("Workspace creation allocates its own trace path.")
-    if type_id not in project_type_ids():
-        raise ValueError(
-            f"type_id must be one of: {', '.join(project_type_ids())}."
-        )
+    _require_project_type(type_id, "type_id")
     if not isinstance(source_paths, (list, tuple)):
         raise ValueError("Choose source files or folders.")
     if type(replace_existing) is not bool:

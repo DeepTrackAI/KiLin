@@ -27,9 +27,11 @@ Packaged JSON files serve as examples. A new type is a
 `extensions`, `max_file_bytes`, `retrieval_instruction`, `system_prompt`,
 optional `answer_guidance`, `capabilities`, history settings, optional
 `generation` defaults, a valid `default_intent`, an `intents` object and
-optional empty-chat prompts. The
-loader derives the type ID from the filename, rejects duplicate JSON keys,
-and validates **all** type files on load.
+optional empty-chat prompts. The loader derives the type ID from the
+filename and rejects duplicate JSON keys. `schema_version` is independent of
+both the Python plugin API and the KíLín release: the supported version is
+integer `1`, also assumed when the field is omitted. New definitions should
+declare it explicitly.
 
 `capabilities` accepts `code_graph` (`true`, `false` or `"auto"`) and
 `document_headers` (`true` or `false`, default `false`). With
@@ -39,14 +41,52 @@ policy controls whether eligible scientific papers receive card
 summaries and stored vectors; it is not implied by `document_headers`.
 See [Retrieval pipeline](retrieval_pipeline.md).
 
-The registry requires at least one valid definition, with no mandatory
-type ID. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
-is the filename-derived identifier. The GUI takes its initial selection
-from the first registry entry and derives labels and welcome content from
-each definition. Adding a packaged type needs no built-in-specific branch
-or public Python constant.
-External directories accepted by `load_project_types(directory)` are for
-explicit validation; they are not automatically registered or hot-loaded.
+The runtime catalog captures the raw JSON and validated definition once per
+process, in filename order. Structural validation precedes resolution of
+required tools and validation of their settings. A malformed definition or
+unavailable required tool makes only that type unavailable. A missing or
+empty catalog does not prevent saved-workspace inspection. There is no
+mandatory type ID. `ProjectTypeId` is a string alias; IDs must start with a
+lowercase letter, contain only lowercase letters, digits, hyphens or
+underscores, and be at most 32 characters long.
+
+Use the core API to inspect the catalog:
+
+```python
+import kilin
+
+for type_id, info in kilin.project_type_catalog().items():
+    print(type_id, info.origin, info.schema_version, info.available)
+    if not info.available:
+        print(info.error)
+```
+
+Each immutable information record includes its source path, origin,
+required tool IDs (after successful structural validation), schema version
+and diagnostic. `kilin.project_type_ids()` and `load_project_types()` list
+only available types. `kilin.project_type(type_id)` and
+`kilin.project_type_raw(type_id)` return defensive copies; neither editing
+those copies nor changing the original files affects the runtime snapshot.
+Project-local behavior overrides use the same captured raw definition.
+Restart to activate changes. `load_project_types(directory)` remains a
+strict, separately cached validation operation: it rejects empty folders
+and any invalid definition and does not register them. Clearing its cache
+refreshes explicit validation, not the runtime catalog. Automatic discovery
+is still distribution-level only.
+
+The GUI selects the first available type for new-project defaults. Saved
+workspaces whose type is missing or unavailable remain listed with their
+original type ID and diagnostic; neither automatic selection nor opening
+substitutes another type. Opening such a workspace fails before models are
+loaded, its files are modified, or the previous active session is released.
+The `projects` event adds `available` (boolean) and `unavailable_reason`
+(string or null) to each saved-project record. When no type is available,
+`settings` returns `profile: null`, `project_types: []`, and a
+`project_type_error` message rather than constructing a creation profile.
+An obsolete new-project selection similarly returns the available list and
+an error, allowing the GUI to request fresh defaults for a valid selection.
+Reinstall or correct the definition or its required tools and restart to
+restore availability; saved workspaces require no migration.
 
 A project type does not name the source folder: every new project uses
 `sources/`. See

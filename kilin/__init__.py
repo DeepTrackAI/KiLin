@@ -147,10 +147,14 @@ from .project_type import (
     MemoryIndexingPolicy,
     MemoryQuestionPolicy,
     ProjectType,
+    ProjectTypeInfo,
+    PROJECT_TYPE_SCHEMA_VERSION,
     RetrievalMode,
     RetrievalStrategy,
     load_project_types,
     project_type,
+    project_type_catalog,
+    project_type_raw,
 )
 from .tools import (
     CONFIRMATION_ALWAYS,
@@ -483,12 +487,16 @@ __all__ = [
     "MemoryIndexingPolicy",
     "MemoryQuestionPolicy",
     "ProjectType",
+    "ProjectTypeInfo",
+    "PROJECT_TYPE_SCHEMA_VERSION",
     "RetrievalMode",
     "RetrievalStrategy",
     "load_project_types",
     "project_behavior_settings",
     "save_project_behavior",
     "project_type",
+    "project_type_catalog",
+    "project_type_raw",
 ]
 
 
