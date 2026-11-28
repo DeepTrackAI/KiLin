@@ -5,6 +5,7 @@ Key Features
 - Decode only the diagnostic hierarchy, including compact span completions.
 - Inspect active and archived conversations without silent discovery skips.
 - Preserve raw event identity and report malformed records without repair.
+- Expand verified configuration references for downstream consumers.
 
 Module Structure
 ----------------
@@ -22,13 +23,18 @@ Examples
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 import json
 import math
 import os
 from pathlib import Path, PureWindowsPath
 
+from kilin._trace_configuration import (
+    CONFIGURATION_EVENT,
+    CONFIGURATION_REFERENCE,
+    resolve_configuration_reference,
+)
 from kilin._trace_project import TRACE_FORMAT_VERSION
 from kilin.conversation_format import conversation_state
 from kilin.conversations import _validated_metadata
@@ -73,7 +79,8 @@ class TraceEvent:
     metadata: dict
         Original event metadata, not the readable span summary.
     details: dict
-        Input, result, or sampled progress payload.
+        Input, result, or sampled progress payload. Valid compact project
+        configuration observations expose their full resolved payload.
     exact_content: dict
         Separately retained artifact contents, if present.
 
@@ -476,6 +483,63 @@ def _trace_paths(recording: Recording) -> list[str]:
     return sorted(paths)
 
 
+def _resolve_configurations(recording: Recording) -> None:
+    """Expand compact configuration observations in chronological order.
+
+    Parameters
+    ----------
+    recording: Recording
+        Decoded recording sorted by project-wide sequence number. Invalid
+        references contribute blocking issues; original files stay untouched.
+
+    Notes
+    -----
+    Track the most recent full project configuration, not the most recent
+    reference. Legacy full observations pass through unchanged. A reference
+    must belong to the same project trace and cannot target a later event,
+    a different event type, an earlier superseded snapshot, or another
+    reference.
+
+    """
+
+    latest = None
+    for index, event in enumerate(recording.events):
+        if event.event_type != CONFIGURATION_EVENT:
+            continue
+        # A duplicate allocation cannot identify a unique reference target.
+        duplicate = (
+            (index > 0
+             and recording.events[index - 1].sequence == event.sequence)
+            or (index + 1 < len(recording.events)
+                and recording.events[index + 1].sequence == event.sequence)
+        )
+        try:
+            if CONFIGURATION_REFERENCE not in event.details:
+                if event.path == "logs/traces/project.json":
+                    if (not duplicate
+                            and event.metadata.get("status") == "completed"
+                            and "turn_id" not in event.metadata):
+                        latest = (event.sequence, event.details)
+                    else:
+                        latest = None
+                continue
+            if duplicate:
+                raise ValueError("Ambiguous configuration event sequence.")
+            if (event.path != "logs/traces/project.json"
+                    or event.metadata.get("status") != "completed"
+                    or "turn_id" in event.metadata):
+                raise ValueError(
+                    "Reference is not a completed project observation."
+                )
+            details = resolve_configuration_reference(
+                event.details, event.sequence, latest
+            )
+            recording.events[index] = replace(event, details=details)
+        except (ValueError, TypeError, RecursionError) as error:
+            recording.issue("configuration.reference", str(error),
+                            event.path, event.sequence)
+
+
 def read_recording(root: Path) -> Recording:
     """Read the project counter and all trace documents independently.
 
@@ -519,4 +583,5 @@ def read_recording(root: Path) -> Recording:
         except (OSError, ValueError, TypeError, RecursionError) as error:
             recording.issue("trace.invalid", str(error), path)
     recording.events.sort(key=lambda event: event.sequence)
+    _resolve_configurations(recording)
     return recording

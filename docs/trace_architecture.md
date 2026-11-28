@@ -154,12 +154,13 @@ lease. A failed publication releases the project lease before applying the
 existing recording-health and warning/raise policy. The two files are not a
 multi-file atomic transaction. Do not mix older and newer concurrent writers.
 
-Recording consumers must resolve compact references in global sequence
-order, check the digest and latest-full-snapshot identity, and reject
-invalid references rather than use current configuration settings.
-Existing complete snapshots remain valid; readers of the compact
-representation must support reference resolution. The trace hierarchy
-and counter format remain unchanged.
+System-testing inspection resolves references in global sequence order,
+checks their digest and latest-full-snapshot identity, and supplies independent
+copies of the complete payload to validation, timeline reconstruction, replay
+and comparison. Invalid references are blocking recording issues. Original
+files are not rewritten. Existing full-snapshot recordings remain readable
+without migration; older readers need the updated inspector to interpret new
+compact recordings. The trace hierarchy and counter format remain unchanged.
 `gui.project.closed` records the selected conversation when the GUI releases
 the project. A standalone RAG session similarly records its initialization and
 closure in its project sink; switching its conversation does not change that
