@@ -20,7 +20,7 @@ from kilin import rag
 from kilin._model_completion import IncompleteModelResponse
 from kilin.answering import RouteDecision
 from kilin.project_type import RETRIEVAL_MODE_NONE
-from kilin.tools import ToolResult, ToolUse
+from kilin.tools import ToolResult, ToolUse, registered_tools
 from kilin.tools._model_calls import ModelCallSettings
 from kilin.tools._shared.model_results import partial_result
 from tests.kilin.test_answering import _FakeChat
@@ -110,7 +110,7 @@ class TestToolRecovery(unittest.TestCase):
             ("<think>finished</think>Next", "stop"),
         ], thinking=False, ceiling=256)
         with patch.object(
-            type(rag.TOOL_REGISTRY["reference_check"]), "model_calls",
+            type(registered_tools()["reference_check"]), "model_calls",
             new_callable=PropertyMock,
             return_value=ModelCallSettings(thinking="on"),
         ):

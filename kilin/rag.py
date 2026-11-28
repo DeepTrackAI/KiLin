@@ -343,7 +343,6 @@ from kilin.sources.extensions.sources_json import (
 )
 from kilin.sources.extensions.sources_pdf import PDF_TEXT_EXTRACTOR
 from kilin.tools import (
-    TOOL_REGISTRY,
     EarlierTurn,
     ToolContext,
     ToolPlan,
@@ -352,6 +351,7 @@ from kilin.tools import (
     ToolUse,
     run_tool,
 )
+from kilin.tools._registry import registered_tools
 from kilin.tools._shared.model_results import incomplete_notice
 from kilin.tools._shared.planning import _record_choice
 from kilin.tools._shared.choose_document import document_scope
@@ -5330,7 +5330,7 @@ class RAGSession:
         )
 
         tool_thoughts: list[str] = []
-        model_policy = TOOL_REGISTRY[use.name].model_calls
+        model_policy = registered_tools()[use.name].model_calls
         model_calls: list[dict[str, object]] = []
 
         def ask_model(system: str, prompt: str, tokens: int | None) -> str:
@@ -5543,7 +5543,7 @@ class RAGSession:
                     if is_dataclass(use.settings)
                     else repr(use.settings)
                 ),
-                "internal": TOOL_REGISTRY[use.name].internal_defaults,
+                "internal": registered_tools()[use.name].internal_defaults,
             },
             turn_id=trace_turn_id,
         ):

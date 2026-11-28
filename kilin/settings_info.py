@@ -184,9 +184,9 @@ def _tool_info(name: str) -> dict[str, object]:
 
     """
 
-    from kilin.tools._registry import TOOL_CHOICES
+    from kilin.tools._registry import tool_choices
 
-    if name not in TOOL_CHOICES:
+    if name not in tool_choices():
         raise ValueError(f"Unknown KíLín tool: {name}.")
     package = f"kilin.tools.{name}"
     settings = _load_resource(package, "settings_info.json")
@@ -242,10 +242,10 @@ def _combined_info() -> dict[str, object]:
 
     """
 
-    from kilin.tools._registry import TOOL_CHOICES
+    from kilin.tools._registry import tool_choices
 
     settings = dict(_core_info())
-    for name in TOOL_CHOICES:
+    for name in tool_choices():
         for key, info in _tool_info(name).items():
             settings[f"tools.{name}.{key}"] = info
     return {"format": _FORMAT, "settings": settings}
@@ -296,9 +296,9 @@ def get_setting_info(key: str) -> dict[str, str] | None:
         parts = key.split(".")
         if len(parts) != 3:
             return None
-        from kilin.tools._registry import TOOL_CHOICES
+        from kilin.tools._registry import tool_choices
 
-        if parts[1] not in TOOL_CHOICES:
+        if parts[1] not in tool_choices():
             return None
         value = _tool_info(parts[1]).get(parts[2])
     else:

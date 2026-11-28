@@ -181,7 +181,7 @@ from kilin.conversations import ConversationInfo, ConversationStore
 from kilin.huggingface import download_model
 from kilin.project_type import load_project_types, project_type
 from kilin.project import (
-    PROJECT_TYPE_IDS,
+    project_type_ids,
     ProjectAlreadyExistsError,
     WorkspaceOccupiedError,
     QAProject,
@@ -1181,7 +1181,7 @@ class ChatEngine:
 
         """
 
-        if type_id is not None and type_id not in PROJECT_TYPE_IDS:
+        if type_id is not None and type_id not in project_type_ids():
             return []
         if workspace.strip():
             folders = [Path(workspace).expanduser()]
@@ -1202,7 +1202,7 @@ class ChatEngine:
                 parser.read(profile_path, encoding="utf-8")
                 saved_type_id = parser.get("project", "type_id")
                 source_text = parser.get("project", "source")
-                if saved_type_id not in PROJECT_TYPE_IDS:
+                if saved_type_id not in project_type_ids():
                     continue
                 if type_id is not None and saved_type_id != type_id:
                     continue
@@ -2005,7 +2005,7 @@ class ChatEngine:
 
         switched = False
         try:
-            if type_id not in PROJECT_TYPE_IDS:
+            if type_id not in project_type_ids():
                 raise ValueError("Choose a project type.")
             settings = dict(settings or {})
             full_snapshot = settings.pop("_gui_full_snapshot", False)

@@ -72,7 +72,7 @@ import shutil
 from typing import Final
 
 from kilin.project_type import project_type
-from kilin.tools._registry import TOOL_REGISTRY
+from kilin.tools._registry import registered_tools
 from kilin.workspace_resources import (
     OUTPUTS_FOLDER,
     PROJECT_SOURCES_DIRECTORY,
@@ -240,7 +240,7 @@ def plan_project_layout(type_id: str) -> ProjectLayout:
         use = intent.tool
         if use is None:
             continue
-        declaration = TOOL_REGISTRY[use.name].workspace_resources
+        declaration = registered_tools()[use.name].workspace_resources
         if declaration is None:
             continue
         for resource in declaration(use.settings):

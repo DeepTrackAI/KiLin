@@ -181,7 +181,7 @@ from kilin.project_type import (
     HistoryPolicy,
     ProjectType,
 )
-from kilin.tools._registry import TOOL_REGISTRY
+from kilin.tools._registry import registered_tools
 
 __all__ = [
     "HISTORY_CITATION_MARKER",
@@ -1437,7 +1437,7 @@ def _unmeant_intents(project: ProjectType, question: str) -> dict[str, str]:
         elif (
             new_about_file
             and intent.tool is not None
-            and TOOL_REGISTRY[intent.tool.name].follows_up
+            and registered_tools()[intent.tool.name].follows_up
         ):
             excluded[intent_id] = (
                 "the question names a file and no earlier answer"
@@ -1548,7 +1548,7 @@ def _tool_follows_up(name: str, question: str) -> bool:
 
     """
 
-    tool = TOOL_REGISTRY[name]
+    tool = registered_tools()[name]
     return tool.follows_up or (
         tool.follows_up_when is not None and tool.follows_up_when(question)
     )

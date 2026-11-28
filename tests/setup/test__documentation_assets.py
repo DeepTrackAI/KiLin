@@ -448,7 +448,16 @@ class TestDocumentationContracts(unittest.TestCase):
         """Check registry keys, package defaults and documentation together."""
 
         path = ROOT / "kilin/tools/_registry.py"
-        registry = _assignment(path, "TOOL_REGISTRY")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        builder = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_build_tool_registry"
+        )
+        returns = [node for node in builder.body
+                   if isinstance(node, ast.Return)]
+        self.assertEqual(len(returns), 1)
+        registry = returns[0].value
         self.assertIsInstance(registry, ast.Dict)
         document = (DOCS / "module_map.md").read_text(encoding="utf-8")
         names = set()

@@ -196,8 +196,8 @@ from kilin.retrievals.evidence_budget import (
     COVERAGE_MODES, EvidenceLimits,
 )
 from kilin.repository import normalize_extensions
-from kilin.tools._contract import reject_unknown
-from kilin.tools._registry import TOOL_REGISTRY, ToolUse, parse_tool
+from kilin.tools._contract import ToolUse, reject_unknown
+from kilin.tools._registry import parse_tool, registered_tools
 
 __all__ = [
     "CODE_GRAPH_AUTO",
@@ -1479,7 +1479,7 @@ def with_project_routing(config: ProjectType, root: Path) -> ProjectType:
     intents: dict[str, Intent] = {}
     changed = False
     for intent_id, intent in config.intents.items():
-        tool = TOOL_REGISTRY[intent.tool.name] if intent.tool else None
+        tool = registered_tools()[intent.tool.name] if intent.tool else None
         routing = None
         if tool is not None and tool.routing is not None:
             others = tuple(
