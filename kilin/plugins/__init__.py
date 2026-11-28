@@ -139,3 +139,32 @@ def validate_project_type(
             error=f"Project type ID {path.stem!r} is already registered.",
         )
     return _type_record(path, "user", bind_tools=bind_tools).info
+
+
+def _project_plugin_snapshot(type_id: str) -> dict:
+    """Capture the identities of a type and its configured tool packages.
+
+    Parameters
+    ----------
+    type_id: str
+        Selected project type in the current runtime.
+
+    Returns
+    -------
+    dict
+        Portable project-type identity and tool identities keyed by ID.
+        Unknown identities are None, including synthetic test descriptors.
+        No source files are rehashed and no absolute paths are recorded.
+
+    """
+
+    from kilin.project_type import project_type_catalog
+    from kilin.tools._registry import _tool_identity
+
+    info = project_type_catalog().get(type_id)
+    if info is None or not info.available:
+        return {"project_type": None, "tools": {}}
+    return {
+        "project_type": info.identity(),
+        "tools": {name: _tool_identity(name) for name in info.required_tools},
+    }

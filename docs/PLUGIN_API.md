@@ -368,7 +368,51 @@ These portable identities do not include absolute user paths. The trace's
 selected identities as `project_type_plugin` and `tool_plugin` when known.
 These describe the package bytes captured during registration, not a proof
 of the behavior of arbitrary code or external dependencies. Historical
-records need not contain them. Replay/comparison integration is separate.
+records need not contain them.
+
+## System-testing provenance and replay
+
+Every `gui.project.configuration.effective` observation also records
+`plugins`, with the captured `project_type` identity and a mapping `tools`
+from configured tool IDs to their identities. This includes tools that have
+not yet executed. The existing compact configuration-reference digest covers
+this field; equal snapshots can be referenced, while changed plugin bytes
+produce a new full observation. No new trace format or workspace manifest is
+required. The tool execution span and saved turn parameters still record the
+selected implementation, not just the set of available plugins.
+
+[System testing](system_testing.md) separates historical inspection from
+fresh execution. Validation, comparison, and retained-replay receipt reading
+use the recorded identities without importing installed plugin packages or
+requiring the original project type to exist. The saved profile still must
+satisfy its syntax, value, filesystem and recorded-state contracts. Missing
+older identities are explicitly `unknown`; a malformed supplied identity is
+a recording diagnostic. A difference in identity alone is not a change to
+persistent workspace settings and does not invalidate a recording.
+
+Fresh replay preflight resolves the current project type and all tools
+required by its definition, the historical configuration, or historical
+execution. Missing or unavailable requirements fail before creating a
+workspace, loading models, or archiving a previous managed replay. Replaying
+uses the current compatible implementation, not a reconstruction of old
+code. The managed execution receipt's `environment.plugins` records the
+portable identities checked at preflight, alongside the existing KíLín
+package/environment fingerprint. No unrelated installed plugins or absolute
+plugin locations are included in this receipt field.
+
+Comparison JSON contains per-workspace and per-aligned-operation
+`plugin_provenance` observations. Markdown and notebook reports distinguish
+known changes, unknown older identities and one-sided observations (for
+example, a different routed tool); only known changes become plugin identity
+differences in `ReplayResult.differences`. Batch reports flag these as
+environment changes for review, not answer-quality verdicts. A missing
+identity never becomes the current installed identity. These observations
+identify captured package bytes, not a complete fingerprint of third-party
+libraries, model weights, or arbitrary runtime effects. The normal
+system-testing restrictions on persistent configuration changes remain in
+force. See the [plugin provenance tests](../tests/kilin/system_testing/test__plugin_provenance.py)
+for deterministic external-plugin execution, replay and offline inspection.
+
 
 ## Verification
 

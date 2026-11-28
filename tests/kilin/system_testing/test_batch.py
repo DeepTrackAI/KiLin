@@ -38,7 +38,12 @@ class TestReplayPolicy(unittest.TestCase):
         self.experiment = Mock()
         event = SimpleNamespace(sequence=1, path="trace.json", metadata={},
                                 details={}, exact_content={})
-        operation = SimpleNamespace(kind="close_project", end_sequence=1)
+        # Preflight uses the validated recording's creation request, not
+        # the currently saved workspace or a model-dependent fixture.
+        operation = SimpleNamespace(
+            kind="create_project", end_sequence=1, events=(),
+            request={"source_batch": {"type_id": "writing"}},
+        )
         report = Mock(workspace=self.original.resolve(), valid=True,
                       event_count=1, events=(event,), operations=(operation,))
         self.experiment.validate.return_value = report

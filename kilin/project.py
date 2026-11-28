@@ -145,7 +145,7 @@ from kilin.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
 from kilin.project_type import (
-    ProjectTypeId, load_project_types, project_type,
+    _ID_PATTERN, ProjectTypeId, load_project_types, project_type,
 )
 from kilin.project_layout import (
     CORE_PROJECT_FOLDERS,
@@ -1290,6 +1290,31 @@ def open_project(directory: str | Path) -> QAProject:
 
     """
 
+    return _read_project(directory, require_registered_type=True)
+
+
+def _read_project(
+    directory: str | Path, *, require_registered_type: bool,
+) -> QAProject:
+    """Inspect a project with an explicit execution-eligibility policy.
+
+    Parameters
+    ----------
+    directory: str | pathlib.Path
+        Existing workspace containing a saved profile.
+    require_registered_type: bool
+        Require the current runtime's available project type. False is
+        reserved for historical recording inspection; it still validates
+        the identifier syntax, settings and filesystem layout, but must
+        not initialize the current plugin catalogs.
+
+    Returns
+    -------
+    QAProject
+        Resolved paths and validated saved profile, not an active session.
+
+    """
+
     root = Path(directory).expanduser().resolve(strict=True)
     if not root.is_dir():
         raise NotADirectoryError(f"Choose a project folder: {root}")
@@ -1304,7 +1329,9 @@ def open_project(directory: str | Path) -> QAProject:
 
     parser = ConfigParser()
     parser.read(profile_path, encoding="utf-8")
-    profile = _read_profile(parser)
+    profile = _read_profile(
+        parser, require_registered_type=require_registered_type,
+    )
     source = Path(profile.source).expanduser()
     if not source.is_absolute():
         source = root / source
@@ -1465,13 +1492,18 @@ def _remove_empty_directories(root: Path) -> None:
             pass
 
 
-def _read_profile(parser: ConfigParser) -> ProjectProfile:
+def _read_profile(
+    parser: ConfigParser, *, require_registered_type: bool = True,
+) -> ProjectProfile:
     """Read and validate every supported project setting.
 
     Parameters
     ----------
     parser: ConfigParser
         ConfigParser containing the profile sections and values.
+    require_registered_type: bool, optional
+        Validate against the live catalog (default). False checks only the
+        identifier grammar, for offline historical inspection.
 
     Returns
     -------
@@ -1493,7 +1525,10 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
     """
 
     type_id_value = _required(parser, "project", "type_id")
-    _require_project_type(type_id_value, "project.type_id")
+    if require_registered_type:
+        _require_project_type(type_id_value, "project.type_id")
+    elif not _ID_PATTERN.fullmatch(type_id_value):
+        raise ValueError("Invalid project.type_id in saved profile.")
     type_id = cast("ProjectTypeId", type_id_value)
 
     extensions = tuple(

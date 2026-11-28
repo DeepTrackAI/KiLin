@@ -573,6 +573,9 @@ def collect_issues(data: dict | None, row: dict) -> list[dict]:
             add("critical", "operation.issue", issue, seq)
         for diff in op.get("settings_differences", []):
             add("review", "settings.difference", diff, seq)
+        for pair in op.get("plugin_provenance", []):
+            if pair["status"] == "changed":
+                add("review", "plugin.environment.difference", pair, seq)
         for stage in op.get("stages", []):
             for side in ("original", "replayed"):
                 statuses = (stage.get(side) or {}).get("statuses", {})
@@ -784,6 +787,8 @@ def group_issues(issues, data):
                  issue["message"].startswith("replayed:"))):
             key = ("critical", "recording.original" if original_invalid else
                    "recording.replayed", None)
+        elif code == "plugin.environment.difference":
+            key = (issue["severity"], "environment.plugins", seq)
         elif code.endswith(".environment.difference"):
             key = (issue["severity"], "environment.inspection", None)
         elif paired and code in (

@@ -152,6 +152,7 @@ from kilin.workspace import (
     sync_project_sources,
 )
 from kilin.tool_settings import project_tool_settings, save_tool_settings
+from kilin.plugins import _project_plugin_snapshot
 from kilin.settings_info import get_settings_info
 from kilin.project_behavior import (
     PROJECT_BEHAVIOR_FILE,
@@ -2282,6 +2283,9 @@ class ChatEngine:
                     ),
                     "behavior": project_behavior_settings(project.root),
                     "tools": project_tool_settings(project.root),
+                    "plugins": _project_plugin_snapshot(
+                        project.profile.type_id
+                    ),
                 }
             except (OSError, ValueError, TypeError, KeyError) as error:
                 self.project_trace.exception(

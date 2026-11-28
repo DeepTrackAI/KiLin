@@ -38,10 +38,11 @@ from kilin.conversation_memory.models import (
     MessageFeedback,
     require_turn_uuid,
 )
-from kilin.project import open_project
+from kilin.project import _read_project
 from kilin.repository import _manifest_files
 from kilin.workspace import _read_records
 
+from ._plugin_provenance import plugin_observations
 from .timeline import TimelineOperation, build_timeline, one
 from .traces import (
     Recording, TraceEvent, ValidationIssue, read_json, safe_path,
@@ -1276,7 +1277,10 @@ def _configuration_checks(recording: Recording,
                     _require(profile == current,
                              "Effective profile changed between openings.")
                 profile = current
-                fixed = {k: v for k, v in data.items() if k != "profile"}
+                # Plugin implementation identity may change between
+                # closed runtimes without changing persistent settings.
+                fixed = {k: v for k, v in data.items()
+                         if k not in ("profile", "plugins")}
                 if isinstance(fixed.get("behavior"), dict):
                     fixed["behavior"] = {k: v for k, v in
                                          fixed["behavior"].items()
@@ -1320,7 +1324,9 @@ def _configuration_checks(recording: Recording,
             parser.read_file(stream)
         _require(parser.get("project", "source") == "sources",
                  "Reference must use its managed source directory.")
-        project = open_project(recording.root)
+        project = _read_project(
+            recording.root, require_registered_type=False,
+        )
         _require(project.profile.source == "sources" and
                  project.source == recording.root / "sources",
                  "Reference must use its managed source directory.")
@@ -1530,6 +1536,10 @@ def validate_recording(recording: Recording) -> ValidationReport:
                         title.path, title.sequence)
     history.finish()
     _configuration_checks(recording, operations)
+    for observation in plugin_observations(tuple(recording.events)):
+        if observation["status"] == "invalid":
+            recording.issue("plugin.provenance", observation["error"],
+                            sequence=observation["sequence"])
     warnings = [ValidationIssue(
         "recording.limit", "Validation requires a closed, unchanged reference "
         "workspace. Unrecorded actions and edits restored before observation "

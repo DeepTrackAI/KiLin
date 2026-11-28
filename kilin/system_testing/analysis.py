@@ -773,6 +773,15 @@ def _state(data):
     body += _section("Recorded environments and model identities", _pair(
         *[_raw({k: data[s].get(k) for k in ("environments", "models")})
           for s in SIDES]))
+    if any("plugin_provenance" in data[s] for s in SIDES):
+        body += _section("Recorded plugin identities", _pair(
+            *[_raw(data[s].get("plugin_provenance")) for s in SIDES]))
+        changes = [(op.get("original_sequence"), pair)
+                   for op in data["operations"]
+                   for pair in _list(op.get("plugin_provenance"))
+                   if pair.get("status") != "equal"]
+        body += _section("Plugin identity differences and unknowns",
+                         _table(("Sequence", "Observation"), changes))
     return body
 
 

@@ -120,6 +120,31 @@ def markdown_report(data: dict) -> str:
                        ("replay_execution", "Replay execution provenance")):
         if key in data:
             lines.extend((f"## {label}", "", _cell(data[key]), ""))
+    if any("plugin_provenance" in side for side in (a, b)):
+        lines.extend(("## Recorded plugin provenance", "",
+                      "Unknown identities are not inferred from installed "
+                      "plugins. Changed identities describe an environment "
+                      "difference, not answer quality.", "",
+                      "| Workspace | Recorded | Unknown | Invalid |",
+                      "|---|---:|---:|---:|"))
+        for label, workspace in (("Original", a), ("Replayed", b)):
+            observations = workspace.get("plugin_provenance", [])
+            lines.append(_row(label, *(sum(item["status"] == status
+                                         for item in observations)
+                                       for status in ("recorded", "unknown",
+                                                      "invalid"))))
+        lines.extend(("", "| Original seq. | Scope | Plugin | Status | "
+                      "Original identity | Replayed identity |",
+                      "|---:|---|---|---|---|---|"))
+        for op in data["operations"]:
+            for pair in op.get("plugin_provenance", []):
+                if pair["status"] != "equal":
+                    lines.append(_row(op["original_sequence"], pair["scope"],
+                                      pair["name"], pair["status"],
+                                      (pair["original"] or {}).get("identity"),
+                                      (pair["replayed"] or {}).get(
+                                          "identity")))
+        lines.append("")
     inspection = data.get("inspection")
     if inspection is not None:
         lines.extend(("## Additional reference inspection", "",
