@@ -10,6 +10,7 @@ Real project/index files are used, with mocked local model sessions.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -124,11 +125,98 @@ class TestEngineModelTransitions(unittest.TestCase):
         self.cached.start()
         self.addCleanup(self.cached.stop)
 
-    def trace_text(self):
-        """Return the active trace text for assertions."""
-        return self.engine.active_trace.readable_path.read_text(
+    def trace_text(self, *, project=False):
+        """Return the requested trace text for assertions."""
+        trace = (
+            self.engine.project_trace if project else self.engine.active_trace
+        )
+        return trace.readable_path.read_text(
             encoding="utf-8"
         )
+
+    def test_project_trace_records_creation_import_sync_and_reopen(self):
+        """Keep project events when switching conversations."""
+        folder = self.root / "library"
+        folder.mkdir()
+        (folder / "one.txt").write_text("First file.", encoding="utf-8")
+        (folder / "two.txt").write_text("Second file.", encoding="utf-8")
+        root = self.root / "recorded"
+        self.engine.settings("literature", "")
+        defaults = self.engine._creation_defaults[1]
+        temperature = 0.42
+        self.engine.open_project(
+            [str(folder)], "literature", str(root),
+            selected_files={str(folder): ["one.txt"]},
+            settings={
+                "_gui_full_snapshot": True, "temperature": temperature,
+                "target_tokens": defaults["target_tokens"],
+            },
+        )
+        self.assertEqual(self.engine.session.project.root, root, self.events)
+        self.assertFalse((root / "sources/library/two.txt").exists())
+        self.engine.create_conversation()
+        extra = self.root / "extra"
+        extra.mkdir()
+        (extra / "one.txt").write_text("Extra text.", encoding="utf-8")
+        (extra / "two.txt").write_text("Omitted text.", encoding="utf-8")
+        self.engine.add_project_sources(
+            [str(extra)], selected_files={str(extra): ["one.txt"]},
+        )
+        self.engine.sync_sources({"sources/library/two.txt": "import"})
+        self.assertTrue((root / "sources/library/two.txt").is_file())
+        self.assertFalse((root / "sources/extra/two.txt").exists())
+        self.engine.close()
+        self.engine.resume_project(str(root))
+        self.assertIsNotNone(self.engine.session, self.events)
+        self.engine.close()
+        traces = root / "logs/traces"
+        project = json.loads(
+            (traces / "project.json").read_text(encoding="utf-8")
+        )
+        operations = [
+            node for session in project["sessions"].values()
+            for node in session.get("operations", {}).values()
+        ]
+
+        def details(event):
+            """Read the details of matching project operations in order."""
+            return [node.get("details", {}) for node in sorted(
+                operations, key=lambda node: node["event"]["sequence"]
+            ) if node["event"]["event_type"] == event]
+
+        self.assertEqual([entry["operation"] for entry in details(
+            "workspace.prepare.started"
+        )], ["create", "import"])
+        creation = details("gui.project.creation.settings")[0]
+        self.assertEqual(creation["explicit_settings"], {
+            "temperature": temperature,
+        })
+        self.assertEqual(creation["provenance"], "displayed_defaults")
+        self.assertEqual(creation["displayed_defaults"], defaults)
+        configurations = details("gui.project.configuration.effective")
+        self.assertEqual(len(configurations), 2)
+        self.assertEqual(configurations[0]["profile"]["temperature"],
+                         temperature)
+        self.assertEqual([entry["reason"] for entry in details(
+            "gui.project.open.started"
+        )], ["create", "resume"])
+        self.assertEqual(len(details("gui.project.closed")), 2)
+        self.assertEqual(details("workspace.sync.file")[0]["path"],
+                         "sources/library/two.txt")
+        manifests = details("index.check.completed")
+        self.assertEqual(set(manifests[0]["source_manifest"]["files"]),
+                         {"library/one.txt"})
+        self.assertEqual(
+            set(manifests[-1]["source_manifest"]["files"]),
+            {"library/one.txt", "library/two.txt", "extra/one.txt"},
+        )
+        self.assertTrue(details("index.reused"))
+        self.assertNotIn("resume_state", json.dumps(project))
+        for path in traces.glob("conversation_*.json"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("workspace.source.copied", text)
+            self.assertNotIn("index.check.completed", text)
+            self.assertNotIn("gui.project.open.started", text)
 
     def test_source_card_settings_save_without_rebuilding_indexes(self):
         """Persist card settings without changing chunk or answer models."""
@@ -234,7 +322,10 @@ class TestEngineModelTransitions(unittest.TestCase):
             open_project(self.project.root).profile.chat_model(self.backend),
             "example/new-chat",
         )
-        self.assertIn("gui_models_change_applied", self.trace_text())
+        self.assertIn(
+            "gui_models_change_applied", self.trace_text(project=True)
+        )
+        self.assertNotIn("gui_models_change_applied", self.trace_text())
         self.assertIn("chat_model_switched", self.trace_text())
 
     def test_embedding_change_forces_rebuild_and_keeps_chat(self):
@@ -248,8 +339,11 @@ class TestEngineModelTransitions(unittest.TestCase):
         self.assertEqual(
             self.engine.active_conversation.conversation_id, conversation
         )
-        self.assertIn("example/new-embedding", self.trace_text())
-        self.assertIn("gui_models_change_confirmed", self.trace_text())
+        self.assertIn("example/new-embedding", self.trace_text(project=True))
+        self.assertIn(
+            "gui_models_change_confirmed", self.trace_text(project=True)
+        )
+        self.assertNotIn("gui_models_change_confirmed", self.trace_text())
 
     def test_download_requires_consent_and_persists_custom_slot(self):
         """Require download confirmation before persisting model edits."""
@@ -270,7 +364,10 @@ class TestEngineModelTransitions(unittest.TestCase):
             read_effort_levels(self.project.root, self.backend)[0]["model"],
             "example/uncached",
         )
-        self.assertIn("gui_model_download_completed", self.trace_text())
+        self.assertIn(
+            "gui_model_download_completed", self.trace_text(project=True)
+        )
+        self.assertNotIn("gui_model_download_completed", self.trace_text())
 
     def test_failed_model_load_keeps_profile_and_session(self):
         """Keep the original session and profile after a failed switch."""
@@ -319,8 +416,10 @@ class TestEngineModelTransitions(unittest.TestCase):
         ):
             if chunk.identifier in original_vector:
                 self.assertEqual(vector, original_vector[chunk.identifier])
-        self.assertIn("workspace_source_copied", self.trace_text())
-        self.assertIn("index_incremental_plan", self.trace_text())
+        self.assertIn("workspace_source_copied", self.trace_text(project=True))
+        self.assertNotIn("workspace_source_copied", self.trace_text())
+        self.assertIn("index_incremental_plan", self.trace_text(project=True))
+        self.assertNotIn("index_incremental_plan", self.trace_text())
         self.embedded.clear()
         new_file.write_text(
             "Updated document about feature elimination.", encoding="utf-8"
@@ -394,7 +493,10 @@ class TestEngineModelTransitions(unittest.TestCase):
             Path("new.txt"),
             {chunk.path for chunk in self.engine.session.chunks},
         )
-        self.assertIn("gui_sources_remove_requested", self.trace_text())
+        self.assertIn(
+            "gui_sources_remove_requested", self.trace_text(project=True)
+        )
+        self.assertNotIn("gui_sources_remove_requested", self.trace_text())
 
     def test_check_lists_files_to_add_and_left_out(self):
         """The check before adding copies nothing and explains the rest."""

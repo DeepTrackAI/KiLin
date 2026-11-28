@@ -25,6 +25,9 @@ persistence. The session has side effects: initialization may create files,
 rebuild indexes, generate missing source cards with a separate model, and
 download missing model files according to the profile. ``trace=None``
 enables full tracing here, unlike the low-level chat and embedding classes.
+The shared project trace retains its activation and ownership through
+conversation switches. Failed initialization closes loaded models even when
+the final readiness diagnostics or progress callback raise.
 
 History and expanded evidence are not summarized automatically. Source-first
 intents enforce hard passage and estimated evidence-token budgets after
@@ -144,7 +147,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass, replace
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from functools import partial
 from hashlib import sha256
@@ -350,6 +353,7 @@ from kilin.tools import (
     run_tool,
 )
 from kilin.tools._shared.model_results import incomplete_notice
+from kilin.tools._shared.planning import _record_choice
 from kilin.tools._shared.choose_document import document_scope
 from kilin.tools._shared.enough_evidence import passages_answer
 from kilin.tool_settings import with_project_settings
@@ -361,6 +365,7 @@ from kilin.trace_logging import (
     TraceSink,
     TRACE_EVENT_ANSWER_ACTIVITY,
     create_trace_logger,
+    _project_trace_logger,
     trace_text_preview,
 )
 
@@ -1090,6 +1095,7 @@ class RAGSession:
         trace: TraceConfig | TraceSink | None = None,
         conversation_path: str | Path | None = None,
         router_model: str | None = None,
+        project_trace: TraceSink | None = None,
     ) -> None:
         """Open a project, its models, indexes, and saved conversation.
 
@@ -1117,6 +1123,9 @@ class RAGSession:
             loaded beside the answering model, or is shared with it when
             both are the same model. Defaults to ``None``, which uses the
             project's saved router model or the packaged router default.
+        project_trace: TraceSink | None, optional
+            Caller-owned shared project diagnostic sink. Defaults to None,
+            creating one when conversation tracing is enabled.
 
         Raises
         ------
@@ -1127,7 +1136,8 @@ class RAGSession:
         Notes
         -----
         Attempts to close partially constructed model sessions after a
-        preparation exception. Trace construction occurs before model loading.
+        preparation exception, including failed readiness notifications.
+        Trace construction occurs before model loading.
         Heavy dependencies and model downloads are governed by the selected
         profile.
 
@@ -1135,6 +1145,7 @@ class RAGSession:
 
         self._conversation_ownership: ConversationFileLock | None = None
         self._owns_trace = False
+        self._owns_project_trace = False
         try:
             self._initialize(
                 project_directory,
@@ -1142,6 +1153,7 @@ class RAGSession:
                 trace=trace,
                 conversation_path=conversation_path,
                 router_model=router_model,
+                project_trace=project_trace,
             )
         except BaseException as error:
             ownership = self._conversation_ownership
@@ -1154,6 +1166,13 @@ class RAGSession:
                             f"Trace cleanup failed: {cleanup_error!r}"
                         )
             finally:
+                if self._owns_project_trace:
+                    try:
+                        self.project_trace.close()
+                    except BaseException as cleanup_error:
+                        error.add_note(
+                            f"Project trace cleanup failed: {cleanup_error!r}"
+                        )
                 if ownership is not None:
                     try:
                         ownership.release()
@@ -1172,6 +1191,7 @@ class RAGSession:
         trace: TraceConfig | TraceSink | None,
         conversation_path: str | Path | None,
         router_model: str | None,
+        project_trace: TraceSink | None,
     ) -> None:
         """Prepare the owned trace, conversation history, indexes and models.
 
@@ -1187,12 +1207,15 @@ class RAGSession:
             Path of the conversation record, or None for a new one.
         router_model: str | None
             Optional separate model identifier used to route questions.
+        project_trace: TraceSink | None
+            Optional caller-owned shared project diagnostic sink.
 
         Notes
         -----
-        ``__init__`` is responsible for releasing the acquired conversation
-        ownership and an owned logger if any preparation step raises, even
-        before model construction begins.
+        Model cleanup includes final readiness diagnostics and callbacks.
+        ``__init__`` releases acquired conversation ownership and owned
+        loggers if any preparation step raises, including steps before
+        model construction begins.
 
         """
 
@@ -1215,7 +1238,29 @@ class RAGSession:
             ownership = ConversationFileLock(self.conversation_path)
             ownership.acquire()
             self._conversation_ownership = ownership
-        self.trace.emit(
+        if project_trace is not None:
+            if project_trace.enabled != self.trace.enabled:
+                raise ValueError(
+                    "Project and conversation tracing must agree."
+                )
+            if project_trace.enabled and (
+                not isinstance(project_trace, TraceLogger)
+                or project_trace.scope != "project"
+                or project_trace.output_path.resolve() != (
+                    self.project.logs / "traces" / "project.json"
+                ).resolve()
+            ):
+                raise ValueError("Invalid shared project trace.")
+            self.project_trace = project_trace
+        elif isinstance(self.trace, TraceLogger):
+            self.project_trace = _project_trace_logger(
+                replace(self.trace.config, output_path=None),
+                self.project.root,
+            )
+            self._owns_project_trace = True
+        elif isinstance(self.trace, NullTraceLogger):
+            self.project_trace = self.trace
+        self._project_diagnostics().emit(
             "session.started",
             component="rag",
             data={
@@ -1244,7 +1289,7 @@ class RAGSession:
             if router_model is not None
             else read_router_model(self.project.root, self.backend)
         )
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "backend.selected",
             component="rag",
             data={
@@ -1267,9 +1312,9 @@ class RAGSession:
                 embedding_model,
                 backend=self.backend,
                 allow_download=profile.allow_download,
-                trace=self.trace,
+                trace=self._project_diagnostics(),
             )
-            with self.trace.span(
+            with self._project_diagnostics().span(
                 "indexing",
                 component="rag",
                 data={"project_directory": str(self.project.root)},
@@ -1295,9 +1340,13 @@ class RAGSession:
                 max_new_tokens=profile.max_new_tokens,
                 system_prompt=self._behavior_config().system_prompt,
                 allow_download=profile.allow_download,
-                trace=self.trace,
+                trace=self._project_diagnostics(),
                 block_unrequested_cjk=profile.block_unrequested_cjk,
             )
+            # Initialization diagnostics belong to the project, but model
+            # calls made while answering belong to the active conversation.
+            chat_session.trace = self.trace
+            embedding_session.trace = self.trace
             self._emit_progress(
                 "loading_conversation",
                 97.0,
@@ -1311,6 +1360,9 @@ class RAGSession:
                 data={
                     "message_count": len(messages),
                     "turn_count": len(turns),
+                    "turn_uuids": [
+                        turn.conversation_turn_uuid for turn in turns
+                    ],
                     "path": str(self.conversation_path),
                     "checkpoint_id": checkpoint_id,
                 },
@@ -1330,9 +1382,42 @@ class RAGSession:
                         if key in previous
                     }
                 )
+            self.embedding_session = embedding_session
+            self.chat_session = chat_session
+            self.chunks = chunks
+            self.source_cards = source_cards
+            self.source_card_vectors = source_card_vectors
+            self.indexes = indexes
+            self.index_status = status
+            self.source_changes = source_changes
+            self.turns = turns
+            self.router_model = resolved_router_model
+            self._router_session: ChatSession | None = None
+            # Keep the pool with its passages and router model. A GUI read
+            # of saved words does not cache an empty fallback as a generated
+            # pool.
+            self._suggestion_pool: (
+                tuple[list[Chunk], str | None, SuggestionWords] | None
+            ) = None
+            self._closed = False
+            self._project_diagnostics().emit(
+                "session.ready",
+                component="rag",
+                data={
+                    "index_status": self.index_status,
+                    "chunk_count": len(self.chunks),
+                    "turn_count": len(self.turns),
+                },
+                duration_ms=(perf_counter() - session_started_at) * 1000,
+            )
+            self._emit_progress(
+                "ready",
+                100.0,
+                f"KíLín ready. Index {self.index_status}.",
+            )
         except BaseException as error:
             try:
-                self.trace.exception(
+                self._project_diagnostics().exception(
                     "session.open.failed",
                     error,
                     component="rag",
@@ -1355,38 +1440,45 @@ class RAGSession:
             # every construction failure, including this one.
             raise
 
-        self.embedding_session = embedding_session
-        self.chat_session = chat_session
-        self.chunks = chunks
-        self.source_cards = source_cards
-        self.source_card_vectors = source_card_vectors
-        self.indexes = indexes
-        self.index_status = status
-        self.source_changes = source_changes
-        self.turns = turns
-        self.router_model = resolved_router_model
-        self._router_session: ChatSession | None = None
-        # Keep the pool with its passages and router model. A GUI read of
-        # saved words does not cache an empty fallback as a generated pool.
-        self._suggestion_pool: (
-            tuple[list[Chunk], str | None, SuggestionWords] | None
-        ) = None
-        self._closed = False
-        self.trace.emit(
-            "session.ready",
-            component="rag",
-            data={
-                "index_status": self.index_status,
-                "chunk_count": len(self.chunks),
-                "turn_count": len(self.turns),
-            },
-            duration_ms=(perf_counter() - session_started_at) * 1000,
+    def _project_diagnostics(self: RAGSession) -> TraceSink:
+        """Return the shared project sink for preparation diagnostics.
+
+        Returns
+        -------
+        TraceSink
+            Project sink, or the session's conversation/no-op sink when
+            no separate project sink was installed.
+
+        """
+
+        return getattr(
+            self, "project_trace", getattr(self, "trace", NullTraceLogger())
         )
-        self._emit_progress(
-            "ready",
-            100.0,
-            f"KíLín ready. Index {self.index_status}.",
-        )
+
+    @contextmanager
+    def _project_embedding_diagnostics(self: RAGSession) -> Iterator[None]:
+        """Route shared embedding calls to the project during indexing.
+
+        Yields
+        ------
+        None
+            Index preparation can use the shared model without recording
+            its embedding calls in the active conversation.
+
+        Notes
+        -----
+        The command owner executes indexing and answering sequentially.
+        Restore the conversation sink even when preparation raises.
+
+        """
+
+        model = self.embedding_session
+        previous = getattr(model, "trace", self.trace)
+        model.trace = self._project_diagnostics()
+        try:
+            yield
+        finally:
+            model.trace = previous
 
     def _emit_progress(
         self: RAGSession,
@@ -1445,7 +1537,7 @@ class RAGSession:
             elapsed_seconds=elapsed_seconds,
             eta_seconds=eta_seconds,
         )
-        trace = getattr(self, "trace", NullTraceLogger())
+        trace = self._project_diagnostics()
         last_trace_percent = self._progress_last_trace_percent.get(stage)
         completed_count = (
             current is not None and total is not None and current == total
@@ -1802,6 +1894,13 @@ class RAGSession:
             "question_characters": len(question),
             "retrieval_count_override": retrieval_count,
             "generation_settings_override": generation_settings,
+            "answer_guidance_override": answer_guidance,
+            "retrieval_query_override": retrieval_query,
+            "reuse_evidence": reuse_evidence,
+            "use_router": use_router,
+            "confirm_callback_available": confirm_callback is not None,
+            "choice_callback_available": choice_callback is not None,
+            "pdf_writer_available": pdf_writer is not None,
             "conversation_state": conversation_state,
         }
         if trace.include_content:
@@ -1898,16 +1997,24 @@ class RAGSession:
 
                     """
 
-                    report_phase(
-                        ANSWER_PHASE_PROCESSING,
-                        message="Waiting for your choice",
-                        choice={
-                            "question": text,
-                            "options": list(options),
-                            "allow_cancel": False,
-                        },
+                    def notify() -> None:
+                        """Display the routing clarification before waiting."""
+                        report_phase(
+                            ANSWER_PHASE_PROCESSING,
+                            message="Waiting for your choice",
+                            choice={
+                                "question": text,
+                                "options": list(options),
+                                "allow_cancel": False,
+                            },
+                        )
+
+                    return _record_choice(
+                        text, options, choice_callback, notify,
+                        trace=trace, turn_id=turn_id,
+                        prefix="routing.choice", component="rag",
+                        allow_cancel=False,
                     )
-                    return choice_callback(text, options)
 
                 route_options["choose"] = ask_user
             decision = self._route(
@@ -2464,7 +2571,9 @@ class RAGSession:
                     ANSWER_PHASE_MEMORY_RETRIEVING,
                     message="Retrieving conversation memories",
                 )
-                memory_index = self.sync_conversation_memory()
+                memory_index = self.sync_conversation_memory(
+                    trace_turn_id=turn_id
+                )
                 memory_recall_checked = historical_topic is not None
                 previously_shown = frozenset(
                     self.turns[number - 1].conversation_turn_uuid
@@ -2866,6 +2975,7 @@ class RAGSession:
         trace: TraceSink
             Caller-owned trace sink associated with the target conversation.
             When enabled, its output path must be the target conversation path.
+            Its enabled state must match the session's shared project sink.
 
         Returns
         -------
@@ -2877,8 +2987,8 @@ class RAGSession:
         RuntimeError
             If the session has already been closed.
         ValueError
-            If the path, saved state, restored history, or saved generation
-            settings are invalid.
+            If tracing activation differs, or the path, saved state, restored
+            history, or saved generation settings are invalid.
         OSError
             If saved state or trace writes cannot be accessed.
 
@@ -2889,11 +2999,20 @@ class RAGSession:
         A failed acquisition or JSON read leaves the active session unchanged.
         Later model/history reconfiguration is not fully transactional.
         Generation settings come from the last saved turn or profile defaults.
+        Switching preserves the shared project sink and its ownership.
+        A tracing mismatch is rejected before resolving the target path
+        or changing conversation state or file ownership.
 
         """
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
+        project_trace = getattr(self, "project_trace", None)
+        if (
+            project_trace is not None
+            and project_trace.enabled != trace.enabled
+        ):
+            raise ValueError("Project and conversation tracing must agree.")
         target_path = self._resolve_conversation_path(conversation_path)
         _check_conversation_trace(trace, target_path)
         old_ownership = getattr(self, "_conversation_ownership", None)
@@ -2935,6 +3054,9 @@ class RAGSession:
         self._conversation_ownership = target_ownership
         self.chat_session.trace = trace
         self.embedding_session.trace = trace
+        router = getattr(self, "_router_session", None)
+        if router is not None:
+            router.trace = trace
         self.conversation_path = target_path
         self.chat_session.reset()
         if messages:
@@ -2961,6 +3083,7 @@ class RAGSession:
             data={
                 "message_count": len(messages),
                 "turn_count": len(turns),
+                "turn_uuids": [turn.conversation_turn_uuid for turn in turns],
                 "path": str(self.conversation_path),
                 "checkpoint_id": checkpoint_id,
                 "models_reused": True,
@@ -2990,19 +3113,31 @@ class RAGSession:
         turns/checkpoint identity, and resets the chat history to its system
         instruction. An enabled trace then discards conversation-specific
         retained state before recording the reset in a fresh active file.
-        Loaded models, indexes, and non-conversation trace context are reused.
+        Project-numbered events remain only in the archived trace; standalone
+        traces retain their earlier non-conversation context. Loaded models
+        and indexes are reused.
 
         """
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
         archived_checkpoint_id = getattr(self, "_checkpoint_id", None)
+        trace = getattr(self, "trace", NullTraceLogger())
+        if (
+            isinstance(trace, TraceLogger)
+            and trace.sequence_scope == "project"
+        ):
+            trace.flush()
         archived_path = self._archive_conversation()
         self.chat_session.reset()
         self.turns = []
         self._checkpoint_id = None
-        trace = getattr(self, "trace", NullTraceLogger())
-        trace.reset_conversation_state()
+        if isinstance(trace, TraceLogger):
+            trace.reset_conversation_state(
+                archived=archived_path is not None
+            )
+        else:
+            trace.reset_conversation_state()
         trace.emit(
             "conversation.reset",
             component="rag",
@@ -3073,17 +3208,18 @@ class RAGSession:
             return
         self._closed = True
         trace = getattr(self, "trace", NullTraceLogger())
+        project_trace = self._project_diagnostics()
         errors = self._close_model_sessions()
         try:
             if errors:
-                trace.emit(
+                project_trace.emit(
                     "session.closed",
                     component="rag",
                     status="failed",
                     data={"model_cleanup_errors": len(errors)},
                 )
             else:
-                trace.emit("session.closed", component="rag")
+                project_trace.emit("session.closed", component="rag")
         except BaseException as error:
             errors.append(error)
         try:
@@ -3092,6 +3228,11 @@ class RAGSession:
         except BaseException as error:
             errors.append(error)
         finally:
+            if getattr(self, "_owns_project_trace", False):
+                try:
+                    project_trace.close()
+                except BaseException as error:
+                    errors.append(error)
             ownership = getattr(self, "_conversation_ownership", None)
             if ownership is not None:
                 self._conversation_ownership = None
@@ -3125,19 +3266,19 @@ class RAGSession:
         """
 
         self.project = project
-        with self.trace.span(
-            "indexing",
-            component="rag",
-            data={"project_directory": str(project.root), "refresh": True},
-        ):
-            chunks, indexes, status, source_changes = self._prepare_retrieval(
-                self.embedding_session
+        self._progress_last_trace_percent.clear()
+        with self._project_embedding_diagnostics():
+            with self._project_diagnostics().span(
+                "indexing",
+                component="rag",
+                data={"project_directory": str(project.root), "refresh": True},
+            ):
+                chunks, indexes, status, source_changes = (
+                    self._prepare_retrieval(self.embedding_session)
+                )
+            cards, vectors = self._prepare_source_cards(
+                chunks, indexes, self.embedding_session,
             )
-        cards, vectors = self._prepare_source_cards(
-            chunks,
-            indexes,
-            self.embedding_session,
-        )
         self.chunks = chunks
         self.indexes = indexes
         self.index_status = status
@@ -3168,12 +3309,16 @@ class RAGSession:
         )
         if not policy.enabled:
             raise RuntimeError("Enable source cards before regenerating.")
-        cards, vectors = self._prepare_source_cards(
-            self.chunks,
-            self.indexes,
-            self.embedding_session,
-            force_regenerate=True,
-        )
+        with (
+            self._project_embedding_diagnostics(),
+            self._project_diagnostics().span(
+                "project.source_cards.regenerate", component="rag"
+            ),
+        ):
+            cards, vectors = self._prepare_source_cards(
+                self.chunks, self.indexes, self.embedding_session,
+                force_regenerate=True,
+            )
         self.source_cards = cards
         self.source_card_vectors = vectors
 
@@ -3194,11 +3339,10 @@ class RAGSession:
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
-        cards, vectors = self._prepare_source_cards(
-            self.chunks,
-            self.indexes,
-            self.embedding_session,
-        )
+        with self._project_embedding_diagnostics():
+            cards, vectors = self._prepare_source_cards(
+                self.chunks, self.indexes, self.embedding_session,
+            )
         self.source_cards = cards
         self.source_card_vectors = vectors
 
@@ -3266,11 +3410,18 @@ class RAGSession:
                 "Reopen the project."
             ) from release_error
         try:
-            self.trace.emit("source_cards.chat.released", component="rag")
+            self._project_diagnostics().emit(
+                "source_cards.chat.released", component="rag"
+            )
             yield
         finally:
             try:
-                restored = self._new_chat_session(previous.model_id, **options)
+                restored = self._new_chat_session(
+                    previous.model_id,
+                    trace=self._project_diagnostics(),
+                    **options,
+                )
+                restored.trace = self.trace
                 try:
                     restored.restore_history(messages)
                     restored.input_token_total = totals[0]
@@ -3279,7 +3430,9 @@ class RAGSession:
                     restored.close()
                     raise
                 self.chat_session = restored
-                self.trace.emit("source_cards.chat.restored", component="rag")
+                self._project_diagnostics().emit(
+                    "source_cards.chat.restored", component="rag"
+                )
             except BaseException as error:
                 self.chat_session = None
                 try:
@@ -3724,7 +3877,7 @@ class RAGSession:
             selected_count,
             reading_started,
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "source.read",
             component="rag",
             data={"selected_file_count": selected_count},
@@ -3766,7 +3919,7 @@ class RAGSession:
             for name in selected
             if name in reused or name in read
         ]
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "source.read.summary",
             component="rag",
             data={
@@ -3796,7 +3949,7 @@ class RAGSession:
             source_file_count,
             extracting_started,
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "source.extract",
             component="rag",
             data={"file_count": source_file_count},
@@ -3841,7 +3994,7 @@ class RAGSession:
             "max_tokens": profile.max_tokens,
             "overlap_tokens": profile.overlap_tokens,
         }
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "source.chunk",
             component="rag",
             data={"unit_count": unit_count, **chunk_settings},
@@ -3876,7 +4029,7 @@ class RAGSession:
                 Path(name), fresh_by_path.get(Path(name), [])
             )
         ]
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "source.chunk.summary",
             component="rag",
             data={
@@ -3897,7 +4050,7 @@ class RAGSession:
             current=len(chunks),
             total=len(chunks),
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "index.code_graph.build",
             component="rag",
             data={"chunk_count": len(chunks)},
@@ -3984,7 +4137,7 @@ class RAGSession:
             "selected_files": report.get("selected_files", []),
             "entries": report.get("entries", []),
         }
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "source.scan.completed",
             component="rag",
             data=report_data,
@@ -4055,13 +4208,14 @@ class RAGSession:
 
         configuration_changed = saved_metadata != expected_metadata
         changes["configuration_changed"] = configuration_changed
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "index.check.completed",
             component="rag",
             data={
                 "index_path": str(index_path),
                 "metadata_path": str(metadata_path),
                 "manifest_path": str(manifest_path),
+                "source_manifest": current_manifest,
                 "expected_metadata": expected_metadata,
                 "saved_metadata": saved_metadata,
                 "changes": changes,
@@ -4093,7 +4247,7 @@ class RAGSession:
                     32.0,
                     "Source unchanged; loading the saved retrieval index...",
                 )
-                with self.trace.span(
+                with self._project_diagnostics().span(
                     "index.load",
                     component="rag",
                     data={"index_path": str(index_path)},
@@ -4103,7 +4257,7 @@ class RAGSession:
                         raise ValueError(
                             "Saved index embedding model identity differs."
                         )
-                self.trace.emit(
+                self._project_diagnostics().emit(
                     "index.reused",
                     component="rag",
                     data={
@@ -4130,7 +4284,7 @@ class RAGSession:
                 ValueError,
                 json.JSONDecodeError,
             ) as error:
-                self.trace.exception(
+                self._project_diagnostics().exception(
                     "index.load.failed",
                     error,
                     component="rag",
@@ -4195,7 +4349,7 @@ class RAGSession:
         ]
         embedding_started = perf_counter()
         chunk_count = len(pending_chunks)
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "index.incremental.plan",
             component="rag",
             data={
@@ -4216,7 +4370,7 @@ class RAGSession:
             chunk_count,
             embedding_started,
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "index.semantic.build",
             component="rag",
             data={
@@ -4285,7 +4439,7 @@ class RAGSession:
             current=len(chunks),
             total=len(chunks),
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "index.lexical.build",
             component="rag",
             data={"chunk_count": len(chunks)},
@@ -4308,7 +4462,7 @@ class RAGSession:
             82.0,
             "Saving retrieval index and manifests...",
         )
-        with self.trace.span(
+        with self._project_diagnostics().span(
             "index.save",
             component="rag",
             data={
@@ -4320,7 +4474,7 @@ class RAGSession:
             save_indexes(indexes, index_path)
             _write_json(metadata_path, expected_metadata)
             _write_json(manifest_path, current_manifest)
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "index.rebuilt",
             component="rag",
             data={
@@ -4375,10 +4529,13 @@ class RAGSession:
             lexical=LexicalIndex((), (), {}),
             code_graph=CodeGraph((), ()),
         )
-        self.trace.emit(
+        self._project_diagnostics().emit(
             "index.empty",
             component="rag",
-            data={"chunk_count": 0, "changes": changes},
+            data={
+                "chunk_count": 0, "changes": changes,
+                "source_manifest": manifest,
+            },
         )
         self._emit_progress(
             "index_ready",
@@ -5907,8 +6064,17 @@ class RAGSession:
         )
         return selection
 
-    def sync_conversation_memory(self: RAGSession) -> MemoryIndex:
+    def sync_conversation_memory(
+        self: RAGSession, *, trace_turn_id: str | None = None
+    ) -> MemoryIndex:
         """Synchronize derived project conversation memory on demand.
+
+        Parameters
+        ----------
+        trace_turn_id: str | None, optional
+            Turn correlation ID for automatic synchronization during an
+            answer. None denotes an explicit update outside an answer.
+            Defaults to None.
 
         Returns
         -------
@@ -5922,24 +6088,63 @@ class RAGSession:
         The next memory search catches up after conversation commits,
         archiving, feedback edits, or project policy changes. A GUI may call
         this method during idle time without changing those guarantees.
+        Explicit updates use project diagnostics; automatic updates retain
+        their turn correlation. The index is never copied into the trace.
 
         """
 
-        config = self._behavior_config()
-        if not config.conversation_memory.enabled:
-            return MemoryIndex("", (), {})
-        identity = getattr(self.indexes, "embedding_model_identity", None)
-        if not identity:
-            identity = (
-                f"{self.embedding_session.model_id}@"
-                f"{self.embedding_session.model_source}"
-            )
-        return synchronize_memory(
-            self.project.root,
-            config,
-            self.embedding_session,
-            model_identity=identity,
+        manual = trace_turn_id is None
+        trace = self._project_diagnostics() if manual else self.trace
+        prefix = "project.memory.sync" if manual else "memory.sync"
+        diagnostics = (
+            self._project_embedding_diagnostics() if manual else nullcontext()
         )
+        with diagnostics, trace.span(
+            prefix, component="rag", turn_id=trace_turn_id,
+            data={"trigger": "manual" if manual else "answer"},
+        ):
+            config = self._behavior_config()
+            enabled = config.conversation_memory.enabled
+            if enabled:
+                identity = getattr(
+                    self.indexes, "embedding_model_identity", None
+                )
+                if not identity:
+                    identity = (
+                        f"{self.embedding_session.model_id}@"
+                        f"{self.embedding_session.model_source}"
+                    )
+                index = synchronize_memory(
+                    self.project.root, config, self.embedding_session,
+                    model_identity=identity,
+                )
+            else:
+                index = MemoryIndex("", (), {})
+            if trace.enabled:
+                trace.emit(
+                    f"{prefix}.result", component="rag",
+                    turn_id=trace_turn_id,
+                    data={
+                        "enabled": enabled,
+                        "model_identity": index.model_identity,
+                        "embedded_count": index.embedded_count,
+                        "changed": index.changed,
+                        "vector_count": len(index.vectors),
+                        "records": [
+                            {
+                                "turn_uuid": record.turn_uuid,
+                                "role": record.role,
+                                "fingerprint": record.fingerprint,
+                                "priority": record.priority,
+                                "origins": [
+                                    asdict(origin) for origin in record.origins
+                                ],
+                            }
+                            for record in index.records
+                        ],
+                    },
+                )
+            return index
 
     def _format_memory_query(self: RAGSession, question: str) -> str:
         """Format an embedding query for remembered discussions.
@@ -6330,7 +6535,8 @@ class RAGSession:
         )
 
     def _new_chat_session(
-        self: RAGSession, model_id: str, **settings: object
+        self: RAGSession, model_id: str, *, trace: TraceSink | None = None,
+        **settings: object,
     ) -> ChatSession:
         """Load a chat model with this project's system prompt and trace.
 
@@ -6338,6 +6544,8 @@ class RAGSession:
         ----------
         model_id: str
             Hugging Face model ID or local model directory.
+        trace: TraceSink | None, optional
+            Sink for model initialization. Defaults to the conversation.
         **settings: object
             Optional ``thinking``, ``temperature``, and ``max_new_tokens``
             passed to ``ChatSession``.
@@ -6354,7 +6562,7 @@ class RAGSession:
             backend=self.backend,
             system_prompt=self._system_prompt(),
             allow_download=self.project.profile.allow_download,
-            trace=self.trace,
+            trace=self.trace if trace is None else trace,
             block_unrequested_cjk=(self.project.profile.block_unrequested_cjk),
             **settings,
         )
@@ -6626,7 +6834,7 @@ class RAGSession:
                 and indexes.semantic.embeddings
                 else None
             ),
-            trace=self.trace,
+            trace=self._project_diagnostics(),
             progress=report,
             force_regenerate=force_regenerate,
             generation_guard=(
@@ -6856,6 +7064,10 @@ class RAGSession:
                 "immutable_state_saved": True,
                 "conversation_path": str(path),
                 "turn_count": len(turns),
+                "conversation_turn_uuid": (
+                    pending_turn.conversation_turn_uuid
+                    if pending_turn is not None else None
+                ),
                 "index_fingerprint": self.indexes.fingerprint,
             },
             turn_id=trace_turn_id,

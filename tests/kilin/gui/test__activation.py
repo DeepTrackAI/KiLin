@@ -117,7 +117,15 @@ class TestLaunchGate(unittest.TestCase):
         with patch.dict(sys.modules, modules), patch.object(
             _activation, "ask_passkey", return_value=accepted
         ):
-            return app.main(["kilin"]), window
+            code = app.main(["kilin"])
+        connect = qt.QApplication.return_value.aboutToQuit.connect
+        if accepted:
+            connect.assert_called_once_with(
+                window.return_value._shutdown_engine
+            )
+        else:
+            connect.assert_not_called()
+        return code, window
 
     def test_quitting_the_dialog_opens_no_window(self) -> None:
         code, window = self._main(accepted=False)

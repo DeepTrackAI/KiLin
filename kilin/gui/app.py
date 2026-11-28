@@ -82,5 +82,6 @@ def main(arguments: Sequence[str] | None = None) -> int:
     if not ask_passkey():
         return 0
     window = ChatWindow()
+    app.aboutToQuit.connect(window._shutdown_engine)
     window.show()
     return app.exec()

@@ -49,6 +49,7 @@ responsibility, not authority over the source implementation.
 | [Conversation ownership](conversation_ownership.md) | Writer leases, atomic files, switching, archival and cleanup guarantees. |
 | [Conversation memory](conversation_memory.md) | Turn UUIDs, authoritative feedback, active branch origins, independent indexing and separate prompt provenance. |
 | [Trace recording](trace_recording.md) | Diagnostic activation/content, trace metadata, event versus checkpoint failure policy. |
+| [Trace architecture](trace_architecture.md) | Shared project numbering, trace ownership and chronological event identity. |
 | [Security](security.md) | Trust boundaries, sensitive data, deployment responsibilities and explicit non-guarantees. |
 | [Performance](performance.md) | Trace-derived measurements, reproducible workloads and limits of timing evidence. |
 | [Development](development.md) | Coding/documentation process, test runners, packaging and PR verification. |

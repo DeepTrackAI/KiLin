@@ -76,11 +76,14 @@ reported fields and which conflicts can be resumed. Filesystem reservation
 and rollback belong to [Project workspaces](project_workspaces.md), not Qt.
 
 Creation and profile/resource preparation finish before the engine closes
-its current session or opens the new project's conversation and trace files.
+its current session or opens the new project's conversation files. The
+core opens the initial project trace after exclusive destination reservation,
+and includes its files in creation rollback.
 A conflict leaves the current session and protected destination unchanged,
 including trace bytes. Failures before switching are displayed without
 writing an error to the previous project's trace. After creation, ordinary
-session activation loads models and tracing; a model-load failure does not
+session activation opens the shared project and conversation sinks and loads
+models; a model-load failure does not
 delete the valid newly created project.
 
 Saved projects are listed and resumed without recopying their original
@@ -162,9 +165,11 @@ interrupted generation. The [Stop and restart protocol](gui_protocol.md#errors-s
 owns the command, terminal events, grace period and exact resume-ID behavior.
 
 The UI may show a remembered partial answer after Stop, but such display
-state does not imply a committed `ConversationTurn`. Closing the desktop
-window also terminates its owned child; ordinary closing is not a separate
-multi-file transaction. The detailed process and error events belong to
+state does not imply a committed `ConversationTurn`. Normal desktop window
+closure or application exit ends the child's command input and allows the
+engine to close its active project and trace loggers. An unresponsive child
+is still killed after a bounded wait; closure is not a separate multi-file
+transaction. The detailed process and error events belong to
 [GUI protocol](gui_protocol.md).
 
 ## PDF and native capabilities

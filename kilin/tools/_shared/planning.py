@@ -102,11 +102,14 @@ True
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from kilin.tools._contract import ToolContext
+    from kilin.trace_logging import TraceSink
 
 __all__ = [
     "CONFIRMATION_ALWAYS",
@@ -283,28 +286,47 @@ def confirm_plan(
     """
 
     trace = context.trace
-    trace.emit(
-        "tool.plan.proposed",
-        component="tool",
-        data=plan.to_dict(),
-        turn_id=context.trace_turn_id,
-    )
-
+    interaction_id = uuid4().hex
     asked = context.confirm is not None and needs_confirmation(
         policy, plan, large_batches
     )
+    trace.emit(
+        "tool.plan.proposed",
+        component="tool",
+        data={
+            **plan.to_dict(), "interaction_id": interaction_id,
+            "choices": list(PLAN_CHOICE_CHOICES), "asked": asked,
+            "policy": policy,
+        },
+        turn_id=context.trace_turn_id,
+    )
     choice: PlanChoice = PLAN_CHOICE_CONTINUE
+    answer = None
     if asked:
-        context.progress(_WAITING_FOR_CHOICE, plan=plan.to_dict())
-        answer = context.confirm(plan)
-        choice = (
-            answer if answer in PLAN_CHOICE_CHOICES else PLAN_CHOICE_CANCEL
-        )
+        try:
+            context.progress(_WAITING_FOR_CHOICE, plan=plan.to_dict())
+            answer = context.confirm(plan)
+            choice = (
+                answer if answer in PLAN_CHOICE_CHOICES else PLAN_CHOICE_CANCEL
+            )
+        except BaseException as error:
+            trace.emit(
+                "tool.plan.failed", component="tool", status="failed",
+                data={"interaction_id": interaction_id,
+                      "error_type": type(error).__name__,
+                      "message": str(error)},
+                turn_id=context.trace_turn_id,
+            )
+            raise
 
     trace.emit(
         "tool.plan.decided",
         component="tool",
-        data={"choice": choice, "asked": asked, "policy": policy},
+        data={
+            "interaction_id": interaction_id,
+            "choice": choice, "asked": asked, "policy": policy,
+            "response": answer,
+        },
         turn_id=context.trace_turn_id,
     )
 
@@ -335,29 +357,103 @@ def ask_choice(
 
     """
 
-    trace = context.trace
-    trace.emit(
-        "tool.choice.proposed",
-        component="tool",
-        data={"question": question, "options": list(options)},
-        turn_id=context.trace_turn_id,
-    )
-
-    index = None
-    if context.choose is not None and options:
+    def notify() -> None:
+        """Display the question and options before waiting for the choice."""
         context.progress(
             _WAITING_FOR_CHOICE,
             choice={"question": question, "options": list(options)},
         )
-        answer = context.choose(question, options)
-        if type(answer) is int and 0 <= answer < len(options):
-            index = answer
 
-    trace.emit(
-        "tool.choice.decided",
-        component="tool",
-        data={"index": index, "asked": context.choose is not None},
-        turn_id=context.trace_turn_id,
+    return _record_choice(
+        question, options, context.choose, notify,
+        trace=context.trace, turn_id=context.trace_turn_id,
+        prefix="tool.choice", component="tool", allow_cancel=True,
     )
 
+
+def _record_choice(
+    question: str,
+    options: tuple[str, ...],
+    choose: Callable[[str, tuple[str, ...]], int | None] | None,
+    notify: Callable[[], None],
+    *,
+    trace: TraceSink,
+    turn_id: str | None,
+    prefix: str,
+    component: str,
+    allow_cancel: bool,
+) -> int | None:
+    """Record one routing or tool choice at the actual callback boundary.
+
+    Parameters
+    ----------
+    question: str
+        Prompt shown to the caller.
+    options: tuple[str, ...]
+        Ordered option labels shown to the caller.
+    choose: Callable | None
+        Existing user-choice callback, or None for automatic behavior.
+    notify: Callable[[], None]
+        Existing presentation callback invoked before the choice.
+    trace: TraceSink
+        Owning conversation trace.
+    turn_id: str | None
+        Correlation identifier of the active turn.
+    prefix: str
+        Event namespace for routing or tool choices.
+    component: str
+        Emitting subsystem.
+    allow_cancel: bool
+        Whether the displayed prompt offers an explicit cancellation option.
+
+    Returns
+    -------
+    int | None
+        Valid selected index, or None when no option was selected.
+
+    Notes
+    -----
+    Store the label as well as the position; replay must match the meaning,
+    not reuse the original position. A proposal without a terminal record
+    is incomplete. Automatic fallbacks are not user responses.
+
+    """
+
+    interaction_id = uuid4().hex
+    asked = choose is not None and bool(options)
+    trace.emit(
+        f"{prefix}.proposed", component=component,
+        data={
+            "interaction_id": interaction_id, "question": question,
+            "options": list(options), "asked": asked,
+            "allow_cancel": allow_cancel,
+        },
+        turn_id=turn_id,
+    )
+    index = None
+    answer = None
+    if asked:
+        try:
+            notify()
+            answer = choose(question, options)
+            if type(answer) is int and 0 <= answer < len(options):
+                index = answer
+        except BaseException as error:
+            trace.emit(
+                f"{prefix}.failed", component=component, status="failed",
+                data={"interaction_id": interaction_id,
+                      "error_type": type(error).__name__,
+                      "message": str(error)},
+                turn_id=turn_id,
+            )
+            raise
+    trace.emit(
+        f"{prefix}.decided", component=component,
+        data={
+            "interaction_id": interaction_id, "index": index,
+            "asked": asked, "response": answer,
+            "selected_option": options[index] if index is not None else None,
+        },
+        turn_id=turn_id,
+    )
     return index

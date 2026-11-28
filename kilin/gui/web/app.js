@@ -3172,6 +3172,7 @@ function collectSettings() {
   saveModelFields();
   return {
     ...newProjectAnswerSettings(),
+    _gui_full_snapshot: true,
     backend: byId("backend").value,
     _gui_effort_levels: { [activeBackend]: cloneLevels(currentLevels()) },
     _gui_search_depth: [...currentDepth()],

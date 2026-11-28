@@ -103,7 +103,11 @@ class TestSaveToolSettings(ToolSettingsFixture):
         trace.emit.assert_called_once_with(
             "project.tool_settings.saved",
             component="project",
-            data={"tool": "find_fact", "changed": {"part_tokens": 8000}},
+            data={
+                "tool": "find_fact", "changed": {"part_tokens": 8000},
+                "requested": {"part_tokens": 8000, "max_model_calls": 200},
+                "before": {}, "effective": tool["settings"],
+            },
         )
         # The rest of the profile still opens unchanged.
         self.assertEqual(

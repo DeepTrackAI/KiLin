@@ -643,6 +643,7 @@ def save_project_behavior(
     project = open_project(directory)
     defaults = project_type(project.profile.type_id)
     saved, revision = _state(project.root, defaults.id)
+    before = json.loads(json.dumps(saved))
     if expected_revision is not None and expected_revision != revision:
         raise ValueError(
             "Project behavior changed since it was loaded. Reload and "
@@ -725,7 +726,10 @@ def save_project_behavior(
     sink = trace if trace is not None else NullTraceLogger()
     sink.emit(
         "project.behavior.saved", component="project",
-        data={"scope": scope, "intent": intent_id,
-              "revision": updated["revision"]},
+        data={
+            "scope": scope, "intent": intent_id,
+            "revision": updated["revision"], "previous_revision": revision,
+            "requested": values, "before": before, "saved": state,
+        },
     )
     return updated

@@ -893,6 +893,86 @@ class TestRAGSessionConstruction(unittest.TestCase):
         mocks.chat.return_value.close.assert_called_once()
         mocks.trace.close.assert_called_once()
 
+    def test_ready_callback_failure_closes_models_and_releases_lease(
+        self,
+    ) -> None:
+        """Clean up loaded resources when the final observer rejects ready."""
+
+        from kilin.conversation_ownership import ConversationFileLock
+
+        path = self.root / "logs/traces/conversation_ready.json"
+        primary = RuntimeError("ready callback failed")
+
+        def notify(event: rag.ProgressEvent) -> None:
+            """Fail only after model loading and history restoration."""
+
+            if event.stage == "ready":
+                raise primary
+
+        with self._construction_patches() as mocks:
+            with self.assertRaisesRegex(
+                RuntimeError, "ready callback failed"
+            ) as caught:
+                rag.RAGSession(
+                    self.root, conversation_path=path,
+                    progress_callback=notify,
+                )
+        self.assertIs(caught.exception, primary)
+        mocks.chat.return_value.close.assert_called_once()
+        mocks.embeddings.return_value.close.assert_called_once()
+        mocks.trace.close.assert_called_once()
+        mocks.trace.exception.assert_called_once()
+        self.assertEqual(
+            mocks.trace.exception.call_args.args[0], "session.open.failed"
+        )
+        with ConversationFileLock(path):
+            pass
+
+    def test_ready_trace_failure_keeps_error_through_cleanup_failures(
+        self,
+    ) -> None:
+        """Close both models while retaining the late diagnostic failure."""
+
+        from kilin.conversation_ownership import ConversationFileLock
+
+        path = self.root / "logs/traces/conversation_ready_trace.json"
+        primary = RuntimeError("ready trace failed")
+
+        def emit(event_type: str, **kwargs: object) -> None:
+            """Inject the diagnostic failure after initialization finishes."""
+
+            if event_type == "session.ready":
+                raise primary
+
+        with self._construction_patches() as mocks:
+            mocks.trace.emit.side_effect = emit
+            mocks.chat.return_value.close.side_effect = OSError(
+                "chat cleanup failed"
+            )
+            mocks.embeddings.return_value.close.side_effect = OSError(
+                "embedding cleanup failed"
+            )
+            mocks.trace.exception.side_effect = RuntimeError(
+                "cannot trace failure"
+            )
+            mocks.trace.close.side_effect = OSError("trace close failed")
+            with self.assertRaisesRegex(
+                RuntimeError, "ready trace failed"
+            ) as caught:
+                rag.RAGSession(self.root, conversation_path=path)
+        self.assertIs(caught.exception, primary)
+        mocks.chat.return_value.close.assert_called_once()
+        mocks.embeddings.return_value.close.assert_called_once()
+        mocks.trace.close.assert_called_once()
+        mocks.trace.exception.assert_called_once()
+        notes = " ".join(caught.exception.__notes__)
+        self.assertIn("chat cleanup failed", notes)
+        self.assertIn("embedding cleanup failed", notes)
+        self.assertIn("trace close failed", notes)
+        self.assertIn("cannot trace failure", notes)
+        with ConversationFileLock(path):
+            pass
+
     def test_constructor_keeps_primary_error_when_cleanup_fails(
         self,
     ) -> None:

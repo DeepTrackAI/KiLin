@@ -13,9 +13,10 @@ and other sensitive information.
 Artifacts returned by this implementation are inline JSON records rather than
 separately stored artifact files.
 
-Event writes are serialized within one logger. A stable companion-file lock
-excludes simultaneous writers in the current or another process; this is not
-a multi-file transaction or protection against nonparticipating programs.
+Event writes are serialized within one logger. Conversation traces retain
+an exclusive companion-file lock. Project traces and the shared numbering
+counter take short write leases instead. These locks are not a multi-file
+transaction or protection against nonparticipating programs.
 I/O failure handling applies to event writes according to the configuration.
 Direct conversation-state updates propagate write failures and restore their
 previous in-memory state, preventing later events from committing an aborted
@@ -27,7 +28,8 @@ number, including gaps in the existing numbering. Numbering is fixed for the
 lifetime of each logger, so rewriting its accumulated events does not append
 duplicate records. Turn identifiers group events within a logger run; reusing
 an identifier in a later run creates a separate readable turn rather than
-modifying a saved one. Event sequence numbers remain local to each run.
+modifying a saved one. Event sequence numbers are shared across managed
+project traces and remain local to a run for standalone loggers.
 
 Key Features
 ------------
@@ -81,7 +83,7 @@ Module Structure
 
 - ``TraceLogger``
 
-    Collect ordered events and write a grouped conversation-trace JSON file.
+    Collect ordered events and write grouped conversation or project traces.
 
 - ``TraceSink``
 
@@ -122,7 +124,7 @@ Protect trace directories as potentially sensitive project data.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import asdict, dataclass, is_dataclass
@@ -142,6 +144,16 @@ from uuid import uuid4
 import warnings
 
 from kilin.atomic_writes import atomic_write_text
+from kilin._trace_configuration import CONFIGURATION_EVENT
+from kilin._trace_project import (
+    TRACE_FORMAT_VERSION,
+    ProjectTracePublisher,
+    ProjectTraceSequence,
+    compact_project_configuration,
+    project_trace_directory,
+    project_trace_publication,
+    write_project_trace,
+)
 from kilin.conversation_ownership import ConversationFileLock
 from kilin.conversation_format import (
     CONVERSATION_RESUME_STATE_KEY,
@@ -295,12 +307,12 @@ class TraceConfig:
 
 
 class TraceLogger:
-    """Collect ordered events and write a grouped conversation-trace JSON file.
+    """Collect ordered events and write grouped diagnostic traces.
 
     Construction resolves the output path, creates its parent directory,
     optionally loads prior grouped state, and emits the initial event. Event
-    mutation is guarded by this instance's lock; different instances or
-    processes are excluded by an exclusive conversation-file lock.
+    mutation is guarded by this instance's lock. Conversation writers retain
+    exclusive ownership; shared project writers take short write leases.
 
     Parameters
     ----------
@@ -310,6 +322,11 @@ class TraceLogger:
     default_directory: str | pathlib.Path
         Fallback output directory when the configuration does not name an exact
         JSON file.
+    project_directory: str | pathlib.Path | None, optional
+        Workspace root, or None to infer it from the trace path.
+    scope: {"conversation", "project"}, optional
+        Conversation checkpoint or shared project diagnostics. Defaults to
+        "conversation".
 
     Attributes
     ----------
@@ -322,6 +339,10 @@ class TraceLogger:
         Alias of output_path; there is no separate readable-output file.
     trace_id: str
         Random correlation identifier for the current logger instance.
+    scope: str
+        Conversation or project trace role.
+    sequence_scope: str
+        Project-wide or standalone logger sequence namespace.
     enabled: bool
         True for this concrete sink; it does not reflect the private
         closed/failed flags.
@@ -352,6 +373,8 @@ class TraceLogger:
         Merge resumable conversation state into this same JSON document.
     reset_conversation_state()
         Clear retained conversation state and readable conversation records.
+    flush()
+        Publish pending diagnostic events without rewriting a clean trace.
     close(*, emit_event=True)
         Finish the logger and release exclusive file ownership.
 
@@ -369,12 +392,12 @@ class TraceLogger:
     Enabled tracing captures available detailed diagnostics, potentially
     including sensitive data. Artifacts are inline dictionaries.
     There is no append-only log or multi-file transaction. Opening a second
-    writer for the same canonical path raises ConversationLockedError.
+    conversation writer for the same path raises ConversationLockedError.
     Saved readable turns and conversation operations are retained;
     new records use numbers above the highest saved keys. Turn identifiers and
-    span identifiers group events only within one logger run. Event sequence
-    numbers and top-level event counts also describe the current run, not the
-    full lifetime of the conversation file.
+    span identifiers group events only within one logger run. Managed
+    workspaces share persistent event numbering across runs. Standalone
+    loggers use local numbering. Top-level counts describe the current run.
 
     """
 
@@ -388,6 +411,8 @@ class TraceLogger:
         config: TraceConfig,
         *,
         default_directory: str | Path,
+        project_directory: str | Path | None = None,
+        scope: Literal["conversation", "project"] = "conversation",
     ) -> None:
         """Create one trace file and record its first event.
 
@@ -399,6 +424,11 @@ class TraceLogger:
         default_directory: str | pathlib.Path
             Fallback output directory when the configuration does not name an
             exact JSON file.
+        project_directory: str | pathlib.Path | None, optional
+            Explicit project root; otherwise infer it from the trace path.
+        scope: {"conversation", "project"}, optional
+            Conversation checkpoint or shared project diagnostic trace.
+            Defaults to "conversation".
 
         Raises
         ------
@@ -413,15 +443,19 @@ class TraceLogger:
         The first event is written during construction. Exact JSON paths can be
         reused; output is not guaranteed to be a new file. Saved sessions
         provide a fixed numbering baseline before that first event is emitted.
-        Exclusive ownership is acquired before reading saved state or writing
-        the first event and released on construction failure. Resumable state
-        is copied separately so updates cannot modify the saved snapshot.
+        Conversation traces retain exclusive ownership for their lifetime.
+        Project traces instead take short write leases for each publication.
+        Resumable state is copied separately so updates cannot modify the
+        saved snapshot.
 
         """
 
         if not config.enabled:
             raise ValueError("TraceLogger requires an enabled TraceConfig.")
 
+        if scope not in ("conversation", "project"):
+            raise ValueError("trace scope must be conversation or project.")
+        self.scope = scope
         self.config = config
         self.trace_id = self.new_id("trace")
         self._started_at = perf_counter()
@@ -432,7 +466,9 @@ class TraceLogger:
         self._events: list[dict[str, object]] = []
         self._conversation: dict[str, object] = {}
         self._previous_sessions: dict[str, object] = {}
+        self._previous_incomplete = False
         self._last_readable_write = 0.0
+        self._pending_events = False
         self._active_span_id: ContextVar[str | None] = ContextVar(
             f"kilin_active_span_{id(self)}",
             default=None,
@@ -442,6 +478,28 @@ class TraceLogger:
             Path(default_directory),
             self.trace_id,
         )
+        directory = project_trace_directory(
+            self.output_path, project_directory
+        )
+        if scope == "project":
+            if (
+                directory is None
+                or self.output_path.resolve() != directory / "project.json"
+            ):
+                raise ValueError(
+                    "Project trace must use logs/traces/project.json."
+                )
+        elif (
+            directory is not None
+            and self.output_path.resolve() == directory / "project.json"
+        ):
+            raise ValueError("Project trace requires project scope.")
+        self._project_sequence = (
+            ProjectTraceSequence(directory) if directory is not None else None
+        )
+        self.sequence_scope = (
+            "project" if self._project_sequence is not None else "logger"
+        )
         self.output_path.parent.mkdir(
             parents=True,
             exist_ok=True,
@@ -449,9 +507,10 @@ class TraceLogger:
         )
         self.readable_path = self.output_path
         self._file_lock = ConversationFileLock(self.output_path)
-        self._file_lock.acquire()
+        if scope == "conversation":
+            self._file_lock.acquire()
         try:
-            if self.output_path.is_file():
+            if scope == "conversation" and self.output_path.is_file():
                 try:
                     existing = json.loads(
                         self.output_path.read_text(encoding="utf-8")
@@ -460,6 +519,18 @@ class TraceLogger:
                     # Never replace invalid records with empty state.
                     self._conversation = conversation_state(existing)
                     self._previous_sessions = existing["sessions"]
+                    self._previous_incomplete = bool(
+                        existing.get("trace_incomplete", False)
+                        or (
+                            self.sequence_scope == "project"
+                            and "event_count" in existing
+                            and (
+                                existing.get("sequence_scope") != "project"
+                                or existing.get("trace_format_version")
+                                != TRACE_FORMAT_VERSION
+                            )
+                        )
+                    )
                 except (
                     OSError, json.JSONDecodeError, TypeError, KeyError
                 ) as error:
@@ -481,13 +552,15 @@ class TraceLogger:
                 previous_conversation.get("operations"),
                 r"([0-9]+)_.+",
             )
-            _restrict_permissions(self.output_path, 0o600)
+            if scope == "conversation":
+                _restrict_permissions(self.output_path, 0o600)
             self.emit(
                 "trace.started",
                 component="trace",
                 data={
                     # Historical fixed marker, not a configurable setting.
                     "mode": "forensic",
+                    "scope": self.scope,
                     "output_path": str(self.output_path),
                     "include_embedding_vectors": (
                         config.include_embedding_vectors
@@ -620,8 +693,10 @@ class TraceLogger:
         Closed or failed loggers return before validation. Enabled tracing
         retains all supplied event types, including token diagnostics. Event
         sequencing is serialized within this logger. Progress and activity
-        updates can be throttled; other events trigger a refresh. Arbitrary
-        payload content is not automatically redacted.
+        updates can be throttled; other events trigger a refresh. Effective
+        project configuration observations may reference an unchanged
+        persisted full snapshot. Arbitrary payload content is not
+        automatically redacted.
 
         """
 
@@ -638,32 +713,59 @@ class TraceLogger:
                 return
             if span_id is None:
                 span_id = self._active_span_id.get()
-            self._sequence += 1
-            event: dict[str, object] = {
-                "sequence": self._sequence,
-                "timestamp_utc": _utc_timestamp(),
-                "elapsed_ms": _milliseconds(perf_counter() - self._started_at),
-                "trace_id": self.trace_id,
-                "event_id": self.new_id("event"),
-                "event_type": normalized_event_type,
-                "component": component.strip(),
-                "status": status,
-            }
-            if turn_id is not None:
-                event["turn_id"] = turn_id
-            if span_id is not None:
-                event["span_id"] = span_id
-            if parent_span_id is not None:
-                event["parent_span_id"] = parent_span_id
-            if started_elapsed_ms is not None:
-                event["started_elapsed_ms"] = round(
-                    float(started_elapsed_ms),
-                    3,
-                )
-            if duration_ms is not None:
-                event["duration_ms"] = round(float(duration_ms), 3)
-            event["data"] = _json_value(dict(data or {}))
-            self._write_event(event)
+            # Only configuration observations need publication ordering
+            # in addition to the ordinary project-wide allocation order.
+            publication = (
+                project_trace_publication(self.readable_path)
+                if self.scope == "project"
+                and normalized_event_type == CONFIGURATION_EVENT
+                and turn_id is None
+                else nullcontext(({}, None))
+            )
+            try:
+                with publication as (previous, publish):
+                    if self._project_sequence is None:
+                        self._sequence += 1
+                    else:
+                        self._sequence = self._project_sequence.next()
+                    event: dict[str, object] = {
+                        "sequence": self._sequence,
+                        "timestamp_utc": _utc_timestamp(),
+                        "elapsed_ms": _milliseconds(
+                            perf_counter() - self._started_at
+                        ),
+                        "trace_id": self.trace_id,
+                        "event_id": self.new_id("event"),
+                        "event_type": normalized_event_type,
+                        "component": component.strip(),
+                        "status": status,
+                    }
+                    if turn_id is not None:
+                        event["turn_id"] = turn_id
+                    if span_id is not None:
+                        event["span_id"] = span_id
+                    if parent_span_id is not None:
+                        event["parent_span_id"] = parent_span_id
+                    if started_elapsed_ms is not None:
+                        event["started_elapsed_ms"] = round(
+                            float(started_elapsed_ms),
+                            3,
+                        )
+                    if duration_ms is not None:
+                        event["duration_ms"] = round(float(duration_ms), 3)
+                    event["data"] = _json_value(dict(data or {}))
+                    if publish is not None:
+                        if status == "completed":
+                            event["data"] = compact_project_configuration(
+                                previous, event["data"], self._sequence
+                            )
+                        self._write_event(event, publish_project=publish)
+                    else:
+                        self._write_event(event)
+            except OSError as error:
+                # Release the publication lease before marking the recording
+                # incomplete or propagating the configured write failure.
+                self._handle_io_failure(error)
 
     def exception(
         self,
@@ -972,6 +1074,10 @@ class TraceLogger:
 
         """
 
+        if self.scope != "conversation":
+            raise ValueError(
+                "Project traces cannot store conversation state."
+            )
         changes = {
             str(key): _json_value(value) for key, value in data.items()
         }
@@ -986,8 +1092,14 @@ class TraceLogger:
                 self._conversation = previous
                 raise
 
-    def reset_conversation_state(self) -> None:
+    def reset_conversation_state(self, *, archived: bool = False) -> None:
         """Clear retained state for an archived conversation.
+
+        Parameters
+        ----------
+        archived: bool, optional
+            Whether the complete current trace was moved to an archive.
+            Defaults to False.
 
         Raises
         ------
@@ -999,7 +1111,9 @@ class TraceLogger:
         Removes resumable conversation state, saved readable turns and
         conversation-level operations, and conversation events accumulated by
         the current logger run. Non-conversation sessions and events remain so
-        a reset can continue using the same loaded models and project context.
+        a standalone reset can continue using the same loaded models and
+        project context. For project-numbered archives, all previously
+        recorded events remain in the archive rather than being duplicated.
 
         This method changes only in-memory logger state. It does not write,
         archive, delete, or recreate the output file. A subsequent event or
@@ -1011,15 +1125,43 @@ class TraceLogger:
         with self._lock:
             if self._closed:
                 raise RuntimeError("This trace logger is closed.")
+            if self.scope != "conversation":
+                raise ValueError(
+                    "Project traces cannot reset conversations."
+                )
             self._conversation = {}
-            self._previous_sessions.pop(CONVERSATION_SESSION_KEY, None)
-            self._events = [
-                event
-                for event in self._events
-                if not _is_conversation_event(event)
-            ]
+            if archived and self._project_sequence is not None:
+                # The archive already owns these numbered events.
+                self._previous_sessions = {}
+                self._events = []
+                self._pending_events = False
+                self._previous_incomplete = False
+            else:
+                self._previous_sessions.pop(CONVERSATION_SESSION_KEY, None)
+                self._events = [
+                    event
+                    for event in self._events
+                    if not _is_conversation_event(event)
+                ]
             self._turn_offset = 0
             self._conversation_operation_offset = 0
+
+    def flush(self) -> None:
+        """Publish pending diagnostics before moving the trace file.
+
+        Already published traces are left byte-for-byte unchanged. Optional
+        diagnostic failures follow the configured policy.
+
+        """
+
+        with self._lock:
+            if self._closed or self._failed or not self._pending_events:
+                return
+            try:
+                self._write_readable_trace()
+                self._last_readable_write = perf_counter()
+            except OSError as error:
+                self._handle_io_failure(error)
 
     def close(self, *, emit_event: bool = True) -> None:
         """Finish the logger and release exclusive conversation ownership.
@@ -1049,7 +1191,10 @@ class TraceLogger:
                 self._closed = True
             self._file_lock.release()
 
-    def _write_event(self, event: dict[str, object]) -> None:
+    def _write_event(
+        self, event: dict[str, object], *,
+        publish_project: ProjectTracePublisher | None = None,
+    ) -> None:
         """Append an event in memory and conditionally refresh the output file.
 
         Parameters
@@ -1057,34 +1202,47 @@ class TraceLogger:
         event: dict[str, object]
             Structured event dictionary used for storage or readable
             projection.
+        publish_project: ProjectTracePublisher or None, optional
+            Publisher for a configuration observation under an already held
+            project lease. Otherwise the ordinary write path is used.
 
         Notes
         -----
         Progress updates and answer-activity starts share one bounded
         rewrite interval; other events rewrite immediately. The checkpoint
-        flushes all queued events. OSError is passed to
-        _handle_io_failure. The event remains in memory when writing fails.
+        flushes all queued events. OSError propagates to emit, which applies
+        the configured failure policy. The event remains in memory when
+        writing fails.
 
         """
 
-        try:
-            self._events.append(event)
-            now = perf_counter()
-            event_type = str(event["event_type"])
-            if (
-                event_type not in (
-                    TRACE_EVENT_PROGRESS_UPDATED,
-                    TRACE_EVENT_ANSWER_ACTIVITY,
-                )
-                or now - self._last_readable_write >= 0.5
-            ):
+        self._events.append(event)
+        self._pending_events = True
+        now = perf_counter()
+        event_type = str(event["event_type"])
+        if (
+            event_type not in (
+                TRACE_EVENT_PROGRESS_UPDATED,
+                TRACE_EVENT_ANSWER_ACTIVITY,
+            )
+            or now - self._last_readable_write >= 0.5
+        ):
+            if publish_project is None:
                 self._write_readable_trace()
-                self._last_readable_write = now
-        except OSError as error:
-            self._handle_io_failure(error)
+            else:
+                self._write_readable_trace(publish_project=publish_project)
+            self._last_readable_write = now
 
-    def _write_readable_trace(self) -> None:
+    def _write_readable_trace(
+        self, *, publish_project: ProjectTracePublisher | None = None,
+    ) -> None:
         """Write a compact, named hierarchy for human inspection.
+
+        Parameters
+        ----------
+        publish_project: ProjectTracePublisher or None, optional
+            Publisher for a configuration observation whose project lease is
+            already held. Ordinary project writes acquire their own lease.
 
         Notes
         -----
@@ -1096,8 +1254,8 @@ class TraceLogger:
 
         A uniquely created temporary JSON file replaces the target while
         the exclusive companion-file lock is held. This is not an
-        immutable snapshot history or multi-file transaction. Other KíLín
-        writers cannot open this path until this logger releases ownership.
+        immutable snapshot history or multi-file transaction. Conversation
+        writers retain ownership; project writers publish under short leases.
 
         """
 
@@ -1114,6 +1272,27 @@ class TraceLogger:
             turn_offset=self._turn_offset,
             conversation_operation_offset=self._conversation_operation_offset,
         )
+        metadata = {
+            "trace_format_version": TRACE_FORMAT_VERSION,
+            "trace_scope": self.scope,
+            "sequence_scope": self.sequence_scope,
+            "trace_incomplete": self._previous_incomplete or self._failed,
+            "trace_id": self.trace_id,
+            "updated_at_utc": _utc_timestamp(),
+            "event_count": len(self._events),
+            "execution_event_count": len(execution_trace),
+            "progress_checkpoint_count": len(progress_checkpoints),
+        }
+        if self.scope == "project":
+            if publish_project is None:
+                write_project_trace(
+                    self.readable_path, self.trace_id, current_sessions,
+                    metadata,
+                )
+            else:
+                publish_project(self.trace_id, current_sessions, metadata)
+            self._pending_events = False
+            return
         sessions = deepcopy(self._previous_sessions)
         for key, value in current_sessions.items():
             if (
@@ -1163,16 +1342,10 @@ class TraceLogger:
                 ),
             )
         )
-        payload = {
-            "trace_id": self.trace_id,
-            "updated_at_utc": _utc_timestamp(),
-            "event_count": len(self._events),
-            "execution_event_count": len(execution_trace),
-            "progress_checkpoint_count": len(progress_checkpoints),
-            "sessions": sessions,
-        }
+        payload = {**metadata, "sessions": sessions}
         content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
         atomic_write_text(self.readable_path, content)
+        self._pending_events = False
 
     def _readable_event(
         self,
@@ -1291,6 +1464,13 @@ class TraceLogger:
         """
 
         self._failed = True
+        if self._project_sequence is not None:
+            try:
+                self._project_sequence.mark_incomplete()
+            except OSError:
+                # Preserve the original failure and never repair a corrupt
+                # or inaccessible counter silently.
+                pass
         if self.config.failure_policy == FAILURE_POLICY_RAISE:
             raise RuntimeError(
                 f"Could not write KíLín trace: {error}"
@@ -1651,6 +1831,44 @@ def create_trace_logger(
     )
 
 
+def _project_trace_logger(
+    config: TraceConfig, root: Path
+) -> TraceLogger | NullTraceLogger:
+    """Create the project diagnostic sink at its canonical workspace path.
+
+    Parameters
+    ----------
+    config: TraceConfig
+        Recording settings. An explicit path must be the project trace.
+    root: pathlib.Path
+        Opened or exclusively reserved workspace directory.
+
+    Returns
+    -------
+    TraceLogger | NullTraceLogger
+        Caller-owned sink; disabled configurations perform no I/O.
+
+    """
+
+    if not config.enabled:
+        return NullTraceLogger()
+    path = root / "logs" / "traces" / "project.json"
+    if config.output_path is not None and (
+        Path(config.output_path).expanduser().resolve() != path.resolve()
+    ):
+        raise ValueError("Project tracing requires logs/traces/project.json.")
+    return TraceLogger(
+        TraceConfig(
+            enabled=True, output_path=path,
+            include_embedding_vectors=config.include_embedding_vectors,
+            failure_policy=config.failure_policy,
+        ),
+        default_directory=path.parent,
+        project_directory=root,
+        scope="project",
+    )
+
+
 def _trace_path(
     configured: str | Path | None,
     default_directory: Path,
@@ -1797,11 +2015,7 @@ def _progress_checkpoint(event: Mapping[str, object]) -> dict[str, object]:
 
     data = event.get("data")
     details = dict(data) if isinstance(data, Mapping) else {}
-    return {
-        "sequence": event.get("sequence"),
-        "timestamp_utc": event.get("timestamp_utc"),
-        **details,
-    }
+    return {**details, **_event_metadata(event)}
 
 
 _SESSION_TITLES = {
@@ -2099,11 +2313,11 @@ def _append_readable_operation(
     event_type = str(event.get("event_type", "event"))
     span_id = event.get("span_id")
     lifecycle = event_type.rsplit(".", 1)[-1]
-    if isinstance(span_id, str) and lifecycle in {
-        "started",
-        "completed",
-        "failed",
-    }:
+    if (
+        isinstance(span_id, str)
+        and "started_elapsed_ms" in event
+        and lifecycle in {"started", "completed", "failed"}
+    ):
         base = event_type.rsplit(".", 1)[0]
         node = span_nodes.get(span_id)
         if lifecycle == "started" and node is None:
@@ -2111,15 +2325,20 @@ def _append_readable_operation(
             key = _unique_operation_key(operations, base, offset=offset)
             operations[key] = node
             span_nodes[span_id] = node
-        if lifecycle == "started" and node is not None:
-            summary = node.get("event")
-            if isinstance(summary, dict):
-                summary["status"] = "running"
+            summary = node["event"]
+            summary["started_status"] = summary["status"]
+            summary["status"] = "running"
             return
         summary = node.get("event") if isinstance(node, dict) else None
-        if node is not None and isinstance(summary, dict):
+        if (
+            lifecycle != "started"
+            and isinstance(summary, dict)
+            and summary.get("event_type") == f"{base}.started"
+            and "completion" not in node
+        ):
             summary["finished_at_utc"] = event.get("timestamp_utc")
             summary["status"] = lifecycle
+            node["completion"] = _event_metadata(event)
             if "duration_ms" in event:
                 timing = node.setdefault("timing", {})
                 if isinstance(timing, dict):
@@ -2133,8 +2352,31 @@ def _append_readable_operation(
     operations[key] = _compact_event(event)
 
 
+def _event_metadata(event: Mapping[str, object]) -> dict[str, object]:
+    """Retain the ordering, identity, and correlation fields of an event.
+
+    Parameters
+    ----------
+    event: mapping of str to object
+        Structured trace event.
+
+    Returns
+    -------
+    dict[str, object]
+        Metadata sufficient to identify and order the original event.
+
+    """
+
+    fields = (
+        "sequence", "timestamp_utc", "elapsed_ms", "trace_id", "event_id",
+        "event_type", "component", "status", "turn_id", "span_id",
+        "parent_span_id", "started_elapsed_ms", "duration_ms",
+    )
+    return {field: event[field] for field in fields if field in event}
+
+
 def _compact_event(event: Mapping[str, object]) -> dict[str, object]:
-    """Remove repeated transport metadata from a readable event.
+    """Retain event metadata within the readable hierarchy.
 
     Parameters
     ----------
@@ -2149,18 +2391,7 @@ def _compact_event(event: Mapping[str, object]) -> dict[str, object]:
 
     """
 
-    compact: dict[str, object] = {
-        "event": {
-            "status": event.get("status"),
-            "sequence": event.get("sequence"),
-            "timestamp_utc": event.get("timestamp_utc"),
-        },
-    }
-    summary = compact["event"]
-    if isinstance(summary, dict):
-        for field in ("span_id", "parent_span_id"):
-            if field in event:
-                summary[field] = event[field]
+    compact: dict[str, object] = {"event": _event_metadata(event)}
     timing: dict[str, object] = {}
     if "duration_ms" in event:
         timing["operation_duration_ms"] = event["duration_ms"]
@@ -2287,7 +2518,9 @@ def _event_session(event_type: str) -> str:
 
     """
 
-    if event_type.startswith(("project.", "workspace.", "gui.project")):
+    if event_type.startswith((
+        "project.", "workspace.", "gui.project", "gui.conversation."
+    )):
         return "project"
     if event_type.startswith(("source.", "document.")):
         return "sources"

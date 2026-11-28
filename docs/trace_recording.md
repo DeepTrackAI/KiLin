@@ -7,7 +7,8 @@ mode switch and no automatic redaction or sanitization.
 
 ## Enabling or disabling tracing
 
-A `RAGSession` creates an enabled trace when `trace=None` (the default):
+A `RAGSession` creates enabled project and conversation traces when
+`trace=None` (the default):
 
 ```python
 session = kilin.RAGSession(project_directory)
@@ -34,6 +35,11 @@ events. This **does not disable conversation persistence**. The session still
 holds exclusive ownership of its conversation path and saves checkpoints
 there; see [conversation-file ownership](conversation_ownership.md).
 
+Tracing activation is fixed for a RAG session. `switch_conversation()` requires
+the new conversation sink to agree with the shared project sink's `enabled`
+value and rejects a mismatch before changing the active session. Close and
+reopen the RAG session to change tracing activation.
+
 `TraceConfig.include_embedding_vectors=True` is an independent opt-in for
 full numerical embedding vectors, which can be large. `failure_policy` stays
 independent and controls optional event-write errors (`"warn"` or `"raise"`);
@@ -42,12 +48,21 @@ activation also remain configurable.
 
 ### Project-creation ordering
 
-The engine creates a project before opening its trace/conversation files;
-precreating a trace inside a fresh destination would make that destination
-occupied. Core preparation can use a caller-owned external sink and emits
-preparation events only after reservation. For a later import, create/open
-the project first, start the trace, then call
-`add_project_sources(..., trace=trace)`.
+The core reserves the creation destination before opening its project trace;
+precreating a trace inside a fresh destination would make it occupied. The GUI
+requests this ordinary tracing behavior. Core callers can request it with
+`prepare_sources_workspace(..., trace=kilin.TraceConfig(enabled=True))`.
+The configuration must not specify a path because automatic allocation may
+choose a different destination. The preparation owns and closes this sink.
+Its final completion and closing writes occur before profile publication, so
+strict failures at either point still roll back the new workspace. Warning
+policy allows successful creation while marking the recording incomplete.
+Caller-owned sinks are also supported; omitting the argument preserves
+untraced low-level preparation. A caller-owned sink remains open and receives
+completion after publication; an exception from that diagnostic write cannot
+undo the published workspace. For a later import or synchronization, pass
+the opened project sink to `add_project_sources(..., trace=trace)` or
+`sync_project_sources(..., trace=trace)` respectively.
 
 GUI creation conflicts and preparation failures before session switching
 do not append errors to the previous project's trace. The
@@ -72,6 +87,14 @@ emitted in the `trace.started` event for readers of older files; this is a
 fixed historical metadata value, not a configuration option. Existing JSON
 files with a `"standard"` or `"forensic"` marker remain readable. Previously
 stored events are preserved when reopening, without retroactive filtering.
+
+Managed workspaces use shared event numbering across conversation and project
+traces. Initialization, source operations, indexing and configuration are
+recorded in `project.json`. An enabled RAG session creates its own project
+sink unless the caller supplies a shared `project_trace`; the owner closes
+the sink. The GUI shares one project sink through conversation switches.
+See [Trace architecture](trace_architecture.md) for event contracts, settings
+provenance, sequence scope, ownership, and completeness limitations.
 
 Tracing only captures information that the execution components expose:
 external backends and custom tools may not offer every diagnostic detail.
@@ -149,16 +172,23 @@ The activity list remains saved with the turn when optional tracing is off.
 Activity event writes are throttled like progress updates; normal checkpoint
 writes flush all pending events.
 
-If the window must terminate the engine, the trace retains events already
-written before termination. A mid-turn exit can leave an operation without
+Normal GUI closure requests engine cleanup by ending command input. For a
+completed, idle project, this writes `gui.project.closed` and the closing
+`trace.closed` events for the conversation and project loggers. If cleanup
+fails or the window must forcibly terminate an unresponsive engine, these
+closing events may be absent. The trace retains events already written
+before termination. A mid-turn exit can leave an operation without
 a completion/failure event; reopening numbers later turns above it. Events
 other than throttled progress and answer-activity updates rewrite the file
 as they are emitted,
 but unwritten events cannot be recovered. Do not infer a successful answer
 from the mere presence of a traced turn operation.
 
-An answer that **fails** with an error records the failure in the trace and
-adds no turn; the GUI shows the error and puts the question back. An answer
+An answer that **fails before its checkpoint** records the failure in the trace
+and adds no turn; the GUI shows the error and puts the question back. A final
+GUI notification can fail after the turn is saved: the outer
+`gui.question.request` span may then fail while the checkpoint and successful
+core turn remain authoritative. An answer
 the model could not finish (for example, it reached its token limit) is
 different: the trace records `generation.incomplete`, and the turn **is**
 saved, with an answer explaining that no reliable result was produced and
@@ -197,6 +227,21 @@ standardized-question notebook, see [Performance analysis](performance.md).
 The analysis does not require a new trace mode or change the persistence
 behavior described above. Raw traces remain sensitive project data.
 
+## Operation recording
+
+The shared project trace preserves explicit conversation lifecycle, feedback,
+and manual memory commands independently of conversation selection. The
+conversation trace records each question request and the core turn, including
+persistent checkpoint and turn identifiers and correlated interactive choices.
+Generated titles and automatic memory synchronization are diagnostics rather
+than independent user commands. A proposal and its outcome share an
+interaction ID; option labels are retained alongside numeric indices.
+
+See [Trace architecture](trace_architecture.md#conversation-operations) for
+the command boundaries and the creation-time recording version. Existing
+workspaces remain usable but are not automatically upgraded into complete
+reference experiments.
+
 ## Tests
 
 The tracing contract is tested without network or model dependencies:
@@ -211,6 +256,23 @@ python -m pytest -q \
 The project targets Python 3.12; run these tests under that interpreter and
 verify the OS-specific file-lock behavior on supported platforms.
 
+
+### Project renaming
+
+A successful GUI project rename records `gui.project.rename.requested` in
+its original directory before closing the session and releasing all trace
+leases. After the folder move and successful internal reopening, the same
+project trace records `gui.project.rename.completed`. Both point events
+include the same `rename_id`, `source_directory`, `destination_directory`,
+and `conversation_id`. Paths are historical provenance. Neither a span nor
+an owned trace file is held across the filesystem move. Failed renames do not
+emit a successful completion, even if the old workspace is reopened during
+recovery. A no-op rename emits neither marker.
+
+Shared trace publication uses atomic UTF-8 replacement. Transient Windows
+access-denied or sharing/lock violations during replacement receive a bounded
+one-second retry using the same closed temporary file under the existing
+lease. Persistent failures retain the ordinary diagnostic failure policy.
 
 ### Change impact and verification
 

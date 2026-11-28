@@ -180,9 +180,10 @@ def save_tool_settings(
     parser = ConfigParser(interpolation=None)
     parser.read(path, encoding="utf-8")
     section = f"{TOOL_SECTION_PREFIX}{name}"
+    before = _saved_settings(project.root).get(name, {})
     kept = {
         key: value
-        for key, value in _saved_settings(project.root).get(name, {}).items()
+        for key, value in before.items()
         if key not in values
     }
     parser.remove_section(section)
@@ -196,7 +197,11 @@ def save_tool_settings(
     active_trace.emit(
         "project.tool_settings.saved",
         component="project",
-        data={"tool": name, "changed": {**kept, **changed}},
+        data={
+            "tool": name, "changed": {**kept, **changed},
+            "requested": values, "before": before,
+            "effective": {**type_settings, **kept, **changed},
+        },
     )
     return project_tool_settings(project.root)
 

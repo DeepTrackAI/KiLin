@@ -46,8 +46,47 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from time import monotonic, sleep
+from typing import Final
 
 __all__ = ["atomic_write_text", "atomic_create_text"]
+
+_WINDOWS_REPLACE_TIMEOUT: Final[float] = 1.0
+_WINDOWS_REPLACE_POLL: Final[float] = 0.01
+
+
+def _replace(temporary: Path, path: Path) -> None:
+    """Retry briefly when Windows denies replacement of a closed file.
+
+    Parameters
+    ----------
+    temporary: pathlib.Path
+        Fully written, closed temporary file owned by the caller.
+    path: pathlib.Path
+        Destination to replace atomically.
+
+    Notes
+    -----
+    Windows readers and file scanners can deny a rename even when all
+    cooperating writers obey the application's file lease. Only Windows
+    access-denied, sharing-violation and lock-violation errors are retried.
+    The caller retains its existing lease and the same temporary file;
+    persistent failures propagate without deleting the destination.
+
+    """
+
+    deadline = monotonic() + _WINDOWS_REPLACE_TIMEOUT
+    while True:
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError as error:
+            if getattr(error, "winerror", None) not in (5, 32, 33):
+                raise
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise
+            sleep(min(_WINDOWS_REPLACE_POLL, remaining))
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -71,6 +110,8 @@ def atomic_write_text(path: Path, content: str) -> None:
     conflicts with pre-existing ``.tmp`` files and symbolic links. The
     temporary file is removed even if writing or replacement fails. This
     helper does not acquire a file lock or force data to stable storage.
+    Transient Windows replacement denials are retried for at most one
+    second; other errors and persistent denials propagate to the caller.
 
     """
 
@@ -87,7 +128,7 @@ def atomic_write_text(path: Path, content: str) -> None:
     try:
         with stream:
             stream.write(content)
-        temporary.replace(path)
+        _replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 

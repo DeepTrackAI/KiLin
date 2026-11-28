@@ -53,12 +53,16 @@ This fresh-release convention does not migrate legacy lock filenames.
 
 | Component | Who holds the lock? | When is it released? |
 | --- | --- | --- |
-| `TraceLogger` | Its own `ConversationFileLock` | `close()`, including exceptions during the final write |
+| Conversation `TraceLogger` | Its own `ConversationFileLock` | `close()`, including exceptions during the final write |
 | `RAGSession` with an owned trace | The owned trace logger | Session close or failed initialization |
 | `RAGSession` with a caller-owned trace | The caller's trace logger | The caller must close the logger |
 | `RAGSession` with tracing disabled | An independent session lock | Session close, successful switch away, or failed initialization |
 | `ConversationStore` editing an inactive conversation | A short-lived lock | The operation returns or raises |
 | `ConversationStore` editing the active conversation | A borrowed owner from RAG or the GUI logger | The originating owner releases it |
+
+Shared project traces and the sequence counter use short write leases,
+not conversation-lifetime ownership. See
+[Trace architecture](trace_architecture.md).
 
 Passing an ownership token to a store operation does not transfer the lease.
 The store checks the token and never releases a borrowed lease. GUI metadata
@@ -119,7 +123,8 @@ continues with a fresh conversation under that same path. The GUI's
 `ConversationStore.archive()` borrows the active owner where applicable,
 then moves only the JSON to `logs/traces/.deleted/`. The hidden lock
 companion remains at its original path even while a borrowed writer holds
-the lease. The GUI closes the old logger with `emit_event=False` to release
+the lease. Before archiving an active trace, the GUI flushes only pending
+diagnostics. It then closes the old logger with `emit_event=False` to release
 ownership without rewriting the archived JSON. An inactive conversation is
 locked independently during archival; a competing owner prevents deletion.
 

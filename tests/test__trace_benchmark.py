@@ -195,6 +195,32 @@ class TestTraceBenchmark(unittest.TestCase):
             [1, 2],
         )
 
+    def test_select_project_logger_run_without_double_counting(self):
+        """Include startup diagnostics only for the selected repetition."""
+        root = self.path.parent
+        (root / "profile.ini").touch()
+        path = root / "logs/traces/project.json"
+        path.parent.mkdir(parents=True)
+        trace_ids = []
+        for duration in (10.0, 20.0):
+            logger = kilin.TraceLogger(
+                kilin.TraceConfig(enabled=True, output_path=path),
+                default_directory=path.parent, project_directory=root,
+                scope="project",
+            )
+            try:
+                trace_ids.append(logger.trace_id)
+                logger.emit("session.ready", component="rag",
+                            duration_ms=duration)
+            finally:
+                logger.close()
+        self.assertEqual(len(read_trace_operations(path, "all")), 2)
+        for trace_id, duration in zip(trace_ids, (10.0, 20.0)):
+            rows = read_trace_operations(path, "run", trace_id=trace_id)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["duration_ms"], duration)
+            self.assertNotIn(trace_id, repr(rows))
+
     def test_question_statistics_are_grouped_by_trace_state(self) -> None:
         """Report reproducible observed ranges without false confidence."""
         results = [

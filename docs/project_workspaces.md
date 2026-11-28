@@ -469,6 +469,13 @@ including one that unexpectedly appears during initialization. Filesystems
 that cannot provide this operation fail closed, without an overwrite fallback.
 This is atomic visibility, not a guarantee against power loss.
 
+When source preparation owns an enabled trace, its completion and closing
+writes finish before profile publication. Strict diagnostic failures therefore
+remain inside the creation rollback boundary; warning policy permits creation
+with an incomplete recording. Caller-owned sinks remain open and receive
+completion after publication. A failure in that final caller-owned diagnostic
+write does not undo the published project.
+
 On failure, the journal rolls back resources created by this attempt; it does
 not recursively delete arbitrary contents. A pre-existing empty destination
 is retained. A root created by this attempt is removed only if empty; shared

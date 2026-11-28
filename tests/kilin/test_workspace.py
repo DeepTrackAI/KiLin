@@ -25,6 +25,7 @@ import os
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
+import warnings
 
 from kilin import workspace
 from kilin.project import (
@@ -1861,6 +1862,7 @@ class TestWorkspaceTracing(WorkspaceFixture):
             completion["data"]["project_directory"], str(project.root)
         )
         self.assertGreaterEqual(completion["duration_ms"], 0)
+        trace.close.assert_not_called()
 
     def test_no_sources_emits_only_start_and_completion(self) -> None:
         """A reopened workspace has no source-copy events."""
@@ -1900,6 +1902,366 @@ class TestWorkspaceTracing(WorkspaceFixture):
             [call.args[0] for call in trace.emit.call_args_list],
             ["workspace.prepare.started"],
         )
+
+
+    def test_owned_creation_trace_and_selected_folder_inventory(self):
+        """Record managed destinations and the selected files."""
+        from kilin.trace_logging import TraceConfig
+
+        first = self._file("a/same.py")
+        second = self._file("b/same.py")
+        folder = self._folder("library")
+        self._file("library/one.py")
+        self._file("library/two.py")
+        project = workspace.prepare_sources_workspace(
+            [first, second, folder], "code", self.destination,
+            selected_files={
+                str(first): ["same.py"], str(second): ["same.py"],
+                str(folder): ["one.py"],
+            },
+            trace=TraceConfig(enabled=True, failure_policy="raise"),
+        )
+        path = project.logs / "traces" / "project.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        operations = [
+            node for session in payload["sessions"].values()
+            for node in session.get("operations", {}).values()
+        ]
+        start = next(
+            node["details"] for node in operations
+            if node["event"]["event_type"] == "workspace.prepare.started"
+        )
+        copies = [node["details"] for node in operations if
+                  node["event"]["event_type"] == "workspace.source.copied"]
+        completed = next(node["details"] for node in operations if
+                         node["event"]["event_type"] ==
+                         "workspace.prepare.completed")
+        self.assertEqual(start["operation"], "create")
+        self.assertEqual(start["effective_profile"]["type_id"], "code")
+        self.assertEqual(len(copies), 3)
+        self.assertEqual({copy["batch_id"] for copy in copies},
+                         {start["batch_id"]})
+        self.assertEqual(completed["batch_id"], start["batch_id"])
+        self.assertNotEqual(copies[0]["workspace_path"],
+                            copies[1]["workspace_path"])
+        for copy in copies[:2]:
+            self.assertTrue((project.root / copy["workspace_path"]).is_file())
+            self.assertEqual(copy["kind"], "file")
+        self.assertEqual(copies[2]["kind"], "folder")
+        self.assertEqual(copies[2]["workspace_path"], "sources/library")
+        self.assertEqual(copies[2]["copied_files"], ["one.py"])
+        self.assertFalse((project.source / "library/two.py").exists())
+        self.assertEqual(payload["trace_scope"], "project")
+
+    def test_traced_creation_conflict_keeps_existing_bytes(self):
+        """Never start a trace in an already occupied destination."""
+        from kilin.trace_logging import TraceConfig
+
+        config = TraceConfig(enabled=True, failure_policy="raise")
+        project = self._prepare([self._file("one.py")], trace=config)
+        before = {path.relative_to(project.root): path.read_bytes()
+                  for path in project.root.rglob("*") if path.is_file()}
+        from kilin._project_creation import ProjectAlreadyExistsError
+
+        with self.assertRaises(ProjectAlreadyExistsError):
+            workspace.prepare_sources_workspace(
+                [], "code", project.root, trace=config,
+            )
+        after = {path.relative_to(project.root): path.read_bytes()
+                 for path in project.root.rglob("*") if path.is_file()}
+        self.assertEqual(after, before)
+
+    def test_traced_creation_failure_rolls_back_trace_files(self):
+        """Do not recreate traces when closing a rolled-back logger."""
+        from kilin.trace_logging import TraceConfig
+
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                destination = self.root / f"failed-{existing}"
+                if existing:
+                    destination.mkdir()
+                with self.assertRaisesRegex(ValueError, "empty or exceeds"):
+                    workspace.prepare_sources_workspace(
+                        [self._file("valid.py"), self._file("empty.py", "")],
+                        "code", destination,
+                        trace=TraceConfig(
+                            enabled=True, failure_policy="raise"
+                        ),
+                    )
+                if existing:
+                    self.assertEqual(list(destination.iterdir()), [])
+                else:
+                    self.assertFalse(destination.exists())
+
+    def test_creation_trace_failure_obeys_diagnostic_policy(self):
+        """Warn preserves successful creation; strict failure rolls back."""
+        from kilin.trace_logging import TraceConfig
+
+        source = self._file("one.py")
+        with patch("kilin.trace_logging.write_project_trace",
+                   side_effect=OSError("trace write failed")):
+            # Avoid assertWarns inspecting lazy-loaded optional modules.
+            with warnings.catch_warnings(record=True) as captured:
+                warnings.simplefilter("always", RuntimeWarning)
+                project = self._prepare(
+                    [source], trace=TraceConfig(enabled=True),
+                )
+            self.assertTrue(any(
+                issubclass(item.category, RuntimeWarning)
+                and "trace write failed" in str(item.message)
+                for item in captured
+            ))
+            counter = json.loads((project.logs / "traces/.sequence.json")
+                                 .read_text(encoding="utf-8"))
+            self.assertTrue(counter["incomplete"])
+            self.assertTrue((project.source / source.name).is_file())
+            destination = self.root / "strict"
+            with self.assertRaisesRegex(RuntimeError, "trace write failed"):
+                workspace.prepare_sources_workspace(
+                    [source], "code", destination,
+                    trace=TraceConfig(enabled=True, failure_policy="raise"),
+                )
+            self.assertFalse(destination.exists())
+
+    def test_creation_trace_boundaries_obey_diagnostic_policy(self):
+        """Finalize diagnostics before committing a newly created project."""
+        from kilin.trace_logging import TraceConfig, write_project_trace
+
+        source = self._file("one.py")
+        original = source.read_bytes()
+        for event in (
+            "workspace.prepare.started", "workspace.source.copied",
+            "workspace.prepare.completed", "trace.closed",
+        ):
+            for policy in ("warn", "raise"):
+                for existing in (False, True):
+                    with self.subTest(
+                        event=event, policy=policy, existing=existing
+                    ):
+                        destination = self.root / (
+                            f"{event}-{policy}-{existing}"
+                        )
+                        if existing:
+                            destination.mkdir()
+
+                        def fail_at_boundary(
+                            path, trace_id, sessions, metadata
+                        ):
+                            """Fail only after reaching the chosen event."""
+                            events = {
+                                node["event"]["event_type"]
+                                for session in sessions.values()
+                                for node in session.get(
+                                    "operations", {}
+                                ).values()
+                            }
+                            if event in events:
+                                raise OSError("boundary write failed")
+                            return write_project_trace(
+                                path, trace_id, sessions, metadata
+                            )
+
+                        config = TraceConfig(
+                            enabled=True, failure_policy=policy
+                        )
+                        with patch(
+                            "kilin.trace_logging.write_project_trace",
+                            side_effect=fail_at_boundary,
+                        ):
+                            if policy == "raise":
+                                with self.assertRaisesRegex(
+                                    RuntimeError, "boundary write failed"
+                                ):
+                                    workspace.prepare_sources_workspace(
+                                        [source], "code", destination,
+                                        trace=config,
+                                    )
+                                if existing:
+                                    self.assertEqual(
+                                        list(destination.iterdir()), []
+                                    )
+                                else:
+                                    self.assertFalse(destination.exists())
+                            else:
+                                with warnings.catch_warnings(
+                                    record=True
+                                ) as captured:
+                                    warnings.simplefilter(
+                                        "always", RuntimeWarning
+                                    )
+                                    project = (
+                                        workspace.prepare_sources_workspace(
+                                            [source], "code", destination,
+                                            trace=config,
+                                        )
+                                    )
+                                self.assertTrue(any(
+                                    issubclass(item.category, RuntimeWarning)
+                                    and "boundary write failed"
+                                    in str(item.message)
+                                    for item in captured
+                                ))
+                                self.assertEqual(
+                                    open_project(destination), project
+                                )
+                                self.assertEqual(
+                                    (project.source / source.name)
+                                    .read_bytes(), original,
+                                )
+                                counter = json.loads((
+                                    project.logs / "traces/.sequence.json"
+                                ).read_text(encoding="utf-8"))
+                                self.assertTrue(counter["incomplete"])
+                        self.assertEqual(source.read_bytes(), original)
+
+    def test_failed_creation_keeps_initial_error_if_trace_cleanup_fails(self):
+        """Cleanup must neither replace a copy failure nor restore files."""
+        from kilin.trace_logging import TraceConfig, TraceLogger
+
+        source = self._file("one.py")
+        close = TraceLogger.close
+
+        def fail_cleanup(logger, *, emit_event=True):
+            """Release the logger, then simulate failing cleanup."""
+            close(logger, emit_event=emit_event)
+            if not emit_event:
+                raise OSError("trace cleanup failed")
+
+        with (
+            patch("kilin.workspace._copy_file",
+                  side_effect=OSError("source copy failed")),
+            patch.object(TraceLogger, "close", fail_cleanup),
+        ):
+            with self.assertRaisesRegex(
+                OSError, "source copy failed"
+            ) as caught:
+                workspace.prepare_sources_workspace(
+                    [source], "code", self.destination,
+                    trace=TraceConfig(enabled=True, failure_policy="raise"),
+                )
+        self.assertFalse(self.destination.exists())
+        self.assertTrue(source.is_file())
+        self.assertTrue(any(
+            "trace cleanup failed" in note
+            for note in getattr(caught.exception, "__notes__", ())
+        ))
+
+    def test_import_completion_failure_preserves_copies_and_trace_owner(self):
+        """A late import failure does not roll back an existing project."""
+        first = self._file("one.py")
+        second = self._file("two.py")
+        project = self._prepare([first])
+        profile = (project.root / "profile.ini").read_bytes()
+        trace = MagicMock()
+
+        def fail_completion(event, **kwargs):
+            """Reject the terminal diagnostic after source publication."""
+            if event == "workspace.prepare.completed":
+                raise RuntimeError("completion failed")
+
+        trace.emit.side_effect = fail_completion
+        with self.assertRaisesRegex(RuntimeError, "completion failed"):
+            workspace.add_project_sources(
+                project.root, [second], trace=trace
+            )
+        self.assertEqual((project.root / "profile.ini").read_bytes(), profile)
+        for source in (first, second):
+            self.assertEqual(
+                (project.source / source.name).read_bytes(),
+                source.read_bytes(),
+            )
+        self.assertEqual(
+            {record["original"] for record in self._records()},
+            {str(first), str(second)},
+        )
+        trace.close.assert_not_called()
+
+    def test_profile_publication_failure_preserves_trace_ownership(self):
+        """Rollback owned diagnostics without completing a borrowed sink."""
+        from kilin.trace_logging import TraceConfig
+
+        source = self._file("one.py")
+        for owned in (False, True):
+            with self.subTest(owned=owned):
+                destination = self.root / f"publication-{owned}"
+                trace = (
+                    TraceConfig(enabled=True, failure_policy="raise")
+                    if owned else MagicMock()
+                )
+                with patch(
+                    "kilin.project.atomic_create_text",
+                    side_effect=OSError("profile publication failed"),
+                ):
+                    with self.assertRaisesRegex(
+                        OSError, "profile publication failed"
+                    ):
+                        workspace.prepare_sources_workspace(
+                            [source], "code", destination, trace=trace,
+                        )
+                self.assertFalse(destination.exists())
+                self.assertTrue(source.is_file())
+                if not owned:
+                    self.assertNotIn(
+                        "workspace.prepare.completed",
+                        [call.args[0]
+                         for call in trace.emit.call_args_list],
+                    )
+                    trace.close.assert_not_called()
+
+    def test_disabled_creation_trace_writes_no_diagnostics(self):
+        """Explicitly disabled core tracing does not allocate a sequence."""
+        from kilin.trace_logging import TraceConfig
+
+        project = self._prepare([], trace=TraceConfig(enabled=False))
+        self.assertFalse((project.logs / "traces/project.json").exists())
+        self.assertFalse((project.logs / "traces/.sequence.json").exists())
+
+    def test_traced_allocation_uses_claimed_root(self):
+        """Write diagnostics only in the collision-safe allocated project."""
+        from kilin.trace_logging import TraceConfig
+
+        source = self._file("one.py")
+        config = TraceConfig(enabled=True, failure_policy="raise")
+        occupied = workspace.prepare_sources_workspace(
+            [source], "code", workspace_root=self.root, trace=config,
+        )
+        trace = occupied.logs / "traces" / "project.json"
+        before = trace.read_bytes()
+        allocated = workspace.prepare_sources_workspace(
+            [source], "code", workspace_root=self.root, trace=config,
+        )
+        self.assertNotEqual(allocated.root, occupied.root)
+        self.assertEqual(trace.read_bytes(), before)
+        self.assertTrue((allocated.logs / "traces/project.json").is_file())
+
+    def test_sync_records_exact_imported_file_and_batch(self):
+        """Record the original source identity and selected new snapshot."""
+        folder = self._folder("library")
+        self._file("library/one.py")
+        project = self._prepare([folder])
+        new = self._file("library/nested/two.py")
+        self._file("library/three.py")
+        trace = MagicMock()
+        trace.new_id.return_value = "batch"
+        path = "sources/library/nested/two.py"
+        done = workspace.sync_project_sources(
+            project, decisions={path: "import"}, trace=trace,
+        )
+        self.assertEqual(done["added"], [path])
+        self.assertEqual(
+            [call.args[0] for call in trace.emit.call_args_list],
+            ["workspace.sync.started", "workspace.sync.file",
+             "workspace.sync.completed"],
+        )
+        self.assertEqual(trace.emit.call_args_list[1].kwargs["data"], {
+            "batch_id": "batch", "action": "import", "path": path,
+            "source": str(new), "original": str(folder),
+            "relative": "nested/two.py", "kind": "folder",
+        })
+        self.assertEqual(trace.emit.call_args.kwargs["data"], {
+            "batch_id": "batch", "changes": done,
+        })
+        self.assertFalse((project.source / "library/three.py").exists())
 
 
 if __name__ == "__main__":
