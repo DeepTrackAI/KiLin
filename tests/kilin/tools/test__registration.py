@@ -153,7 +153,9 @@ catalog = registered_tools()
 assert len(catalog) == 16
 assert tuple(catalog)[-1] == tool_choices()[-1] == "z_example"
 tool = catalog["z_example"]
-assert tool.resource_root == Path(sys.argv[1]) / "kilin/tools/z_example"
+# Temporary directories may be reached through a platform alias.
+expected_root = (Path(sys.argv[1]) / "kilin/tools/z_example").resolve()
+assert tool.resource_root == expected_root
 assert tool.model_calls.thinking == "inherit"
 assert tool.internal_defaults == {}
 assert get_tool_settings_info("z_example") == {}
@@ -206,13 +208,15 @@ assert run_tool(use, None, None).answer == "example"
                 resources = tool.workspace_resources(settings)
                 self.assertTrue(resources)
                 for resource in resources:
-                    self.assertTrue(resource.source.is_relative_to(root))
+                    # Compare ownership using resolved filesystem paths.
+                    source = resource.source.resolve()
+                    self.assertTrue(source.is_relative_to(root.resolve()))
                     self.assertEqual(
                         _tool_owned_source(resource.source, tool),
-                        resource.source,
+                        source,
                     )
                     bundled = original.resource_root / (
-                        resource.source.relative_to(root)
+                        source.relative_to(root.resolve())
                     )
                     with self.assertRaisesRegex(ValueError, "outside"):
                         _tool_owned_source(bundled, tool)
