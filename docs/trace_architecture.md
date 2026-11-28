@@ -122,6 +122,44 @@ records the effective profile, effort levels, router models, search depths,
 source-card settings, behavior and tools after saved defaults are established.
 A failed diagnostic snapshot is recorded explicitly. Subsequent saved profile,
 model, tool, behavior and card settings changes are traced in the project.
+
+Each activation retains its own configuration event and global sequence
+number. The first complete configuration, and any configuration that differs
+from the most recent complete observation, retains all seven settings groups.
+An unchanged configuration instead records a direct reference:
+
+```json
+{
+  "configuration_reference": {
+    "sequence": 124,
+    "sha256": "<64 lowercase hexadecimal characters>"
+  }
+}
+```
+
+The digest is SHA-256 of the referenced complete payload encoded as UTF-8
+JSON with sorted object keys, compact separators, unescaped Unicode, and no
+nonfinite numbers. Array ordering and scalar representations are significant.
+The historical workspace path in `behavior.project` is included, so a
+workspace rename creates a new full observation. Restoring an earlier
+configuration after a different full observation also creates a new full
+observation; references never form chains or skip a newer full snapshot.
+
+The configuration event alone selects its payload and reserves its sequence
+under the project publication lease. It uses the project trace already read
+for that publication and requires no separate persistent index or cache.
+The lock order is project publication lease, then short sequence lease;
+ordinary events release the sequence lease before taking the publication
+lease. A failed publication releases the project lease before applying the
+existing recording-health and warning/raise policy. The two files are not a
+multi-file atomic transaction. Do not mix older and newer concurrent writers.
+
+Recording consumers must resolve compact references in global sequence
+order, check the digest and latest-full-snapshot identity, and reject
+invalid references rather than use current configuration settings.
+Existing complete snapshots remain valid; readers of the compact
+representation must support reference resolution. The trace hierarchy
+and counter format remain unchanged.
 `gui.project.closed` records the selected conversation when the GUI releases
 the project. A standalone RAG session similarly records its initialization and
 closure in its project sink; switching its conversation does not change that

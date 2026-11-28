@@ -31,6 +31,12 @@ Module Structure
 - ``write_project_trace``
 
   Update the shared project trace under short-lived ownership.
+- ``project_trace_publication``
+
+  Coordinate a configuration observation with a single publication lease.
+- ``compact_project_configuration``
+
+  Compare a new configuration with the latest persisted full observation.
 
 Examples
 --------
@@ -46,14 +52,20 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 import json
 from pathlib import Path
 from time import monotonic, sleep
-from typing import Final
+from typing import Final, TypeAlias
 
 from kilin.atomic_writes import atomic_write_text
+from kilin._trace_configuration import (
+    CONFIGURATION_EVENT,
+    CONFIGURATION_REFERENCE,
+    configuration_bytes,
+    configuration_reference,
+)
 from kilin.conversation_ownership import (
     ConversationFileLock,
     ConversationLockedError,
@@ -64,6 +76,9 @@ __all__ = [
     "OPERATION_RECORDING_VERSION",
     "ProjectTraceSequence",
     "project_trace_directory",
+    "ProjectTracePublisher",
+    "compact_project_configuration",
+    "project_trace_publication",
     "write_project_trace",
 ]
 
@@ -74,6 +89,10 @@ OPERATION_RECORDING_VERSION: Final[int] = 1
 _SEQUENCE_NAME: Final[str] = ".sequence.json"
 _LOCK_TIMEOUT: Final[float] = 5.0
 _LOCK_POLL: Final[float] = 0.01
+
+ProjectTracePublisher: TypeAlias = Callable[
+    [str, Mapping[str, object], Mapping[str, object]], None
+]
 
 
 def project_trace_directory(
@@ -149,8 +168,10 @@ def _short_ownership(path: Path) -> Iterator[None]:
 
     Notes
     -----
-    Neither this lease nor the sequence lease is held while another trace
-    file is written. The persistent lock companion is never removed.
+    Ordinary publication and sequence allocation take separate leases.
+    Configuration observations may reserve a sequence while holding the
+    project publication lease; no path holds the sequence lease while
+    acquiring the project lease. The lock companion is never removed.
 
     """
 
@@ -366,6 +387,153 @@ class ProjectTraceSequence:
             atomic_write_text(self.path, json.dumps(state) + "\n")
 
 
+def compact_project_configuration(
+    previous: Mapping[str, object], configuration: dict, sequence: int,
+) -> dict:
+    """Compare a configuration with the latest published complete snapshot.
+
+    Parameters
+    ----------
+    previous: mapping of str to object
+        Shared project trace read under the current publication lease.
+    configuration: dict
+        Complete JSON-ready effective configuration for the new event.
+    sequence: int
+        Newly reserved sequence number of the current observation.
+
+    Returns
+    -------
+    dict
+        Original full configuration or a direct reference to the latest
+        equal full configuration. Ineligible or ambiguous history is not
+        used for compaction.
+
+    Notes
+    -----
+    Inspect only project-level operation nodes, not arbitrary event payloads.
+    Session names are not chronological across logger runs, so compare
+    sequence numbers. No disk reads or writes are performed here.
+
+    """
+
+    latest = None
+    seen = set()
+    sessions = previous.get("sessions", {})
+    if not isinstance(sessions, dict):
+        return configuration
+    for session in sessions.values():
+        if (not isinstance(session, dict)
+                or session.get("category") != "project"):
+            continue
+        operations = session.get("operations", {})
+        if not isinstance(operations, dict):
+            return configuration
+        for node in operations.values():
+            if not isinstance(node, dict):
+                continue
+            event = node.get("event")
+            if (not isinstance(event, dict)
+                    or event.get("event_type") != CONFIGURATION_EVENT):
+                continue
+            number = event.get("sequence")
+            details = node.get("details")
+            if (type(number) is not int or not 0 < number < sequence
+                    or number in seen or not isinstance(details, dict)
+                    or event.get("status") != "completed"
+                    or "turn_id" in event):
+                return configuration
+            seen.add(number)
+            if CONFIGURATION_REFERENCE in details:
+                continue
+            if latest is None or number > latest[0]:
+                latest = (number, details)
+    if latest is not None:
+        try:
+            encoded = configuration_bytes(configuration)
+            if encoded == configuration_bytes(latest[1]):
+                return configuration_reference(latest[0], encoded)
+        except (ValueError, TypeError, RecursionError):
+            # Keep full evidence rather than guessing when a configuration
+            # cannot be compared. Inspection still validates the history.
+            pass
+    return configuration
+
+
+@contextmanager
+def project_trace_publication(
+    path: Path,
+) -> Iterator[tuple[dict, ProjectTracePublisher]]:
+    """Read and publish a shared project trace under one ownership lease.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Shared ``project.json`` trace path.
+
+    Yields
+    ------
+    tuple of dict and ProjectTracePublisher
+        Persisted trace (empty on first publication) and a publisher for one
+        logger run. The publisher is used only within this context.
+
+    Notes
+    -----
+    The configuration event reserves its sequence and chooses its payload
+    inside this context. This prevents another configuration writer from
+    publishing an intervening full snapshot. Other operations continue to
+    allocate numbers before separately acquiring the publication lease.
+
+    """
+
+    with _short_ownership(path):
+        previous = {}
+        if path.exists():
+            previous = _read_object(path)
+            if (
+                previous.get("trace_format_version") != TRACE_FORMAT_VERSION
+                or previous.get("trace_scope") != "project"
+                or previous.get("sequence_scope") != "project"
+                or not isinstance(previous.get("sessions"), dict)
+            ):
+                raise OSError("Invalid shared project trace format.")
+
+        def publish(
+            trace_id: str,
+            sessions: Mapping[str, object],
+            metadata: Mapping[str, object],
+        ) -> None:
+            """Merge this run and atomically replace the owned project trace.
+
+            Parameters
+            ----------
+            trace_id: str
+                Unique identifier of the publishing logger run.
+            sessions: mapping of str to object
+                Current hierarchical sessions of that run.
+            metadata: mapping of str to object
+                Trace header and current run's event counts.
+
+            """
+
+            saved = dict(previous.get("sessions", {}))
+            # Preserve other runs, including their configuration snapshots.
+            for key, value in sessions.items():
+                saved[f"{key}_{trace_id}"] = value
+            payload = {
+                **metadata,
+                "trace_incomplete": bool(
+                    metadata.get("trace_incomplete")
+                    or previous.get("trace_incomplete")
+                ),
+                "sessions": dict(sorted(saved.items())),
+            }
+            atomic_write_text(
+                path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+            )
+
+        yield previous, publish
+
+
 def write_project_trace(
     path: Path,
     trace_id: str,
@@ -394,32 +562,5 @@ def write_project_trace(
 
     """
 
-    with _short_ownership(path):
-        previous = {}
-        if path.exists():
-            previous = _read_object(path)
-            if (
-                previous.get("trace_format_version") != TRACE_FORMAT_VERSION
-                or previous.get("trace_scope") != "project"
-                or previous.get("sequence_scope") != "project"
-                or not isinstance(previous.get("sessions"), dict)
-            ):
-                raise OSError("Invalid shared project trace format.")
-            saved = dict(previous["sessions"])
-        else:
-            saved = {}
-        # Session keys have a numbered category prefix, so lexical sorting
-        # retains the existing human-readable category order.
-        for key, value in sessions.items():
-            saved[f"{key}_{trace_id}"] = value
-        payload = {
-            **metadata,
-            "trace_incomplete": bool(
-                metadata.get("trace_incomplete")
-                or previous.get("trace_incomplete")
-            ),
-            "sessions": dict(sorted(saved.items())),
-        }
-        atomic_write_text(
-            path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-        )
+    with project_trace_publication(path) as (_, publish):
+        publish(trace_id, sessions, metadata)

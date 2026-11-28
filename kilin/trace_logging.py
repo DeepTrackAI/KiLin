@@ -124,7 +124,7 @@ Protect trace directories as potentially sensitive project data.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import asdict, dataclass, is_dataclass
@@ -144,10 +144,14 @@ from uuid import uuid4
 import warnings
 
 from kilin.atomic_writes import atomic_write_text
+from kilin._trace_configuration import CONFIGURATION_EVENT
 from kilin._trace_project import (
     TRACE_FORMAT_VERSION,
+    ProjectTracePublisher,
     ProjectTraceSequence,
+    compact_project_configuration,
     project_trace_directory,
+    project_trace_publication,
     write_project_trace,
 )
 from kilin.conversation_ownership import ConversationFileLock
@@ -689,8 +693,10 @@ class TraceLogger:
         Closed or failed loggers return before validation. Enabled tracing
         retains all supplied event types, including token diagnostics. Event
         sequencing is serialized within this logger. Progress and activity
-        updates can be throttled; other events trigger a refresh. Arbitrary
-        payload content is not automatically redacted.
+        updates can be throttled; other events trigger a refresh. Effective
+        project configuration observations may reference an unchanged
+        persisted full snapshot. Arbitrary payload content is not
+        automatically redacted.
 
         """
 
@@ -707,39 +713,59 @@ class TraceLogger:
                 return
             if span_id is None:
                 span_id = self._active_span_id.get()
+            # Only configuration observations need publication ordering
+            # in addition to the ordinary project-wide allocation order.
+            publication = (
+                project_trace_publication(self.readable_path)
+                if self.scope == "project"
+                and normalized_event_type == CONFIGURATION_EVENT
+                and turn_id is None
+                else nullcontext(({}, None))
+            )
             try:
-                if self._project_sequence is None:
-                    self._sequence += 1
-                else:
-                    self._sequence = self._project_sequence.next()
+                with publication as (previous, publish):
+                    if self._project_sequence is None:
+                        self._sequence += 1
+                    else:
+                        self._sequence = self._project_sequence.next()
+                    event: dict[str, object] = {
+                        "sequence": self._sequence,
+                        "timestamp_utc": _utc_timestamp(),
+                        "elapsed_ms": _milliseconds(
+                            perf_counter() - self._started_at
+                        ),
+                        "trace_id": self.trace_id,
+                        "event_id": self.new_id("event"),
+                        "event_type": normalized_event_type,
+                        "component": component.strip(),
+                        "status": status,
+                    }
+                    if turn_id is not None:
+                        event["turn_id"] = turn_id
+                    if span_id is not None:
+                        event["span_id"] = span_id
+                    if parent_span_id is not None:
+                        event["parent_span_id"] = parent_span_id
+                    if started_elapsed_ms is not None:
+                        event["started_elapsed_ms"] = round(
+                            float(started_elapsed_ms),
+                            3,
+                        )
+                    if duration_ms is not None:
+                        event["duration_ms"] = round(float(duration_ms), 3)
+                    event["data"] = _json_value(dict(data or {}))
+                    if publish is not None:
+                        if status == "completed":
+                            event["data"] = compact_project_configuration(
+                                previous, event["data"], self._sequence
+                            )
+                        self._write_event(event, publish_project=publish)
+                    else:
+                        self._write_event(event)
             except OSError as error:
+                # Release the publication lease before marking the recording
+                # incomplete or propagating the configured write failure.
                 self._handle_io_failure(error)
-                return
-            event: dict[str, object] = {
-                "sequence": self._sequence,
-                "timestamp_utc": _utc_timestamp(),
-                "elapsed_ms": _milliseconds(perf_counter() - self._started_at),
-                "trace_id": self.trace_id,
-                "event_id": self.new_id("event"),
-                "event_type": normalized_event_type,
-                "component": component.strip(),
-                "status": status,
-            }
-            if turn_id is not None:
-                event["turn_id"] = turn_id
-            if span_id is not None:
-                event["span_id"] = span_id
-            if parent_span_id is not None:
-                event["parent_span_id"] = parent_span_id
-            if started_elapsed_ms is not None:
-                event["started_elapsed_ms"] = round(
-                    float(started_elapsed_ms),
-                    3,
-                )
-            if duration_ms is not None:
-                event["duration_ms"] = round(float(duration_ms), 3)
-            event["data"] = _json_value(dict(data or {}))
-            self._write_event(event)
 
     def exception(
         self,
@@ -1165,7 +1191,10 @@ class TraceLogger:
                 self._closed = True
             self._file_lock.release()
 
-    def _write_event(self, event: dict[str, object]) -> None:
+    def _write_event(
+        self, event: dict[str, object], *,
+        publish_project: ProjectTracePublisher | None = None,
+    ) -> None:
         """Append an event in memory and conditionally refresh the output file.
 
         Parameters
@@ -1173,35 +1202,47 @@ class TraceLogger:
         event: dict[str, object]
             Structured event dictionary used for storage or readable
             projection.
+        publish_project: ProjectTracePublisher or None, optional
+            Publisher for a configuration observation under an already held
+            project lease. Otherwise the ordinary write path is used.
 
         Notes
         -----
         Progress updates and answer-activity starts share one bounded
         rewrite interval; other events rewrite immediately. The checkpoint
-        flushes all queued events. OSError is passed to
-        _handle_io_failure. The event remains in memory when writing fails.
+        flushes all queued events. OSError propagates to emit, which applies
+        the configured failure policy. The event remains in memory when
+        writing fails.
 
         """
 
-        try:
-            self._events.append(event)
-            self._pending_events = True
-            now = perf_counter()
-            event_type = str(event["event_type"])
-            if (
-                event_type not in (
-                    TRACE_EVENT_PROGRESS_UPDATED,
-                    TRACE_EVENT_ANSWER_ACTIVITY,
-                )
-                or now - self._last_readable_write >= 0.5
-            ):
+        self._events.append(event)
+        self._pending_events = True
+        now = perf_counter()
+        event_type = str(event["event_type"])
+        if (
+            event_type not in (
+                TRACE_EVENT_PROGRESS_UPDATED,
+                TRACE_EVENT_ANSWER_ACTIVITY,
+            )
+            or now - self._last_readable_write >= 0.5
+        ):
+            if publish_project is None:
                 self._write_readable_trace()
-                self._last_readable_write = now
-        except OSError as error:
-            self._handle_io_failure(error)
+            else:
+                self._write_readable_trace(publish_project=publish_project)
+            self._last_readable_write = now
 
-    def _write_readable_trace(self) -> None:
+    def _write_readable_trace(
+        self, *, publish_project: ProjectTracePublisher | None = None,
+    ) -> None:
         """Write a compact, named hierarchy for human inspection.
+
+        Parameters
+        ----------
+        publish_project: ProjectTracePublisher or None, optional
+            Publisher for a configuration observation whose project lease is
+            already held. Ordinary project writes acquire their own lease.
 
         Notes
         -----
@@ -1243,9 +1284,13 @@ class TraceLogger:
             "progress_checkpoint_count": len(progress_checkpoints),
         }
         if self.scope == "project":
-            write_project_trace(
-                self.readable_path, self.trace_id, current_sessions, metadata
-            )
+            if publish_project is None:
+                write_project_trace(
+                    self.readable_path, self.trace_id, current_sessions,
+                    metadata,
+                )
+            else:
+                publish_project(self.trace_id, current_sessions, metadata)
             self._pending_events = False
             return
         sessions = deepcopy(self._previous_sessions)
