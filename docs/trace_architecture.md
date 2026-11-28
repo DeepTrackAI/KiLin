@@ -154,12 +154,13 @@ lease. A failed publication releases the project lease before applying the
 existing recording-health and warning/raise policy. The two files are not a
 multi-file atomic transaction. Do not mix older and newer concurrent writers.
 
-Recording consumers must resolve compact references in global sequence
-order, check the digest and latest-full-snapshot identity, and reject
-invalid references rather than use current configuration settings.
-Existing complete snapshots remain valid; readers of the compact
-representation must support reference resolution. The trace hierarchy
-and counter format remain unchanged.
+System-testing inspection resolves references in global sequence order,
+checks their digest and latest-full-snapshot identity, and supplies independent
+copies of the complete payload to validation, timeline reconstruction, replay
+and comparison. Invalid references are blocking recording issues. Original
+files are not rewritten. Existing full-snapshot recordings remain readable
+without migration; older readers need the updated inspector to interpret new
+compact recordings. The trace hierarchy and counter format remain unchanged.
 `gui.project.closed` records the selected conversation when the GUI releases
 the project. A standalone RAG session similarly records its initialization and
 closure in its project sink; switching its conversation does not change that
@@ -234,6 +235,11 @@ files and identities. An unrecorded change cannot always be detected from
 traces alone. Interrupted or unsuccessful commands are not silently treated
 as completed replay inputs.
 
-These records are the inputs to future timeline reconstruction and replay,
-not a replay implementation. See [Trace recording](trace_recording.md) for
+These records are the inputs to timeline reconstruction and independent replay,
+implemented in the system-testing package. See [Trace recording](trace_recording.md) for
 activation and failure policy.
+
+For offline inspection of a closed workspace, see
+[System testing](system_testing.md). The validator expands compact span
+terminals, checks global event identity, and uses explicit command boundaries
+rather than inferring commands from display titles.

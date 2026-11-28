@@ -114,6 +114,7 @@ include = ["kilin*"]
     "settings_info.json",
     "templates/*.md",
 ]
+"kilin.system_testing" = ["_notebooks/*.ipynb"]
 "kilin.gui" = [
     "defaults.json",
     "terms.txt",
