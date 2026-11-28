@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -30,7 +34,9 @@ True
 
 """
 
-from kilin.tools.batch_review.tool import (
+from kilin.tools import Tool
+
+from .tool import (
     ReviewSettings,
     answer_prompt,
     parse_settings,
@@ -38,8 +44,20 @@ from kilin.tools.batch_review.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "ReviewSettings",
     "answer_prompt",
     "parse_settings",
     "run",
 ]
+
+
+PLUGIN = Tool(
+    name="batch_review",
+    summary="Read one whole document in parts, taking notes with passage "
+    "numbers, then answer from the notes.",
+    parse_settings=parse_settings,
+    run=run,
+    version="1.0.0",
+    api_version=1,
+)

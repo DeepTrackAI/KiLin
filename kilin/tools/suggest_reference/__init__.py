@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -41,7 +45,9 @@ True
 
 """
 
-from kilin.tools.suggest_reference.tool import (
+from kilin.tools import Tool
+
+from .tool import (
     SuggestReferenceSettings,
     candidate_files,
     chat_answer,
@@ -54,6 +60,7 @@ from kilin.tools.suggest_reference.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "SuggestReferenceSettings",
     "candidate_files",
     "chat_answer",
@@ -64,3 +71,14 @@ __all__ = [
     "run",
     "statement_of",
 ]
+
+
+PLUGIN = Tool(
+    name="suggest_reference",
+    summary="Find the papers in the project that could be cited for a "
+    "statement, judging each with a quote from its own passages.",
+    parse_settings=parse_settings,
+    run=run,
+    version="1.0.0",
+    api_version=1,
+)

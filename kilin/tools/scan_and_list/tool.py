@@ -158,7 +158,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from kilin.tools.scan_and_list import _configuration as _config
+from . import _configuration as _config
 from kilin.tools._shared.scan_settings import (
     SCAN_SETTING_NAMES,
     scan_fields as _shared_scan_fields,
@@ -171,7 +171,7 @@ from kilin.tools._shared.mentions import (
     mention_snippet,
 )
 from kilin.tools._shared.paths import short_names
-from kilin.tools._contract import (
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,

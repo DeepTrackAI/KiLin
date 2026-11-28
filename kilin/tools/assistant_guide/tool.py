@@ -67,14 +67,14 @@ import random
 import re
 from typing import Final
 
-from kilin.tools._contract import (
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,
     check_int,
     reject_unknown,
 )
-from kilin.tools.assistant_guide import _configuration as _config
+from . import _configuration as _config
 
 __all__ = [
     "GuideSettings",

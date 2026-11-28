@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -30,7 +34,9 @@ True
 
 """
 
-from kilin.tools.filter_results.tool import (
+from kilin.tools import Tool
+
+from .tool import (
     FilterSettings,
     filter_prompt,
     parse_settings,
@@ -38,8 +44,21 @@ from kilin.tools.filter_results.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "FilterSettings",
     "filter_prompt",
     "parse_settings",
     "run",
 ]
+
+
+PLUGIN = Tool(
+    name="filter_results",
+    summary="Judge each item an earlier answer listed and keep those that "
+    "match a follow-up.",
+    parse_settings=parse_settings,
+    run=run,
+    follows_up=True,
+    version="1.0.0",
+    api_version=1,
+)

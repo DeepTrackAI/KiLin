@@ -56,7 +56,7 @@ Examples
 
 from __future__ import annotations
 
-from kilin.tools._shared.model_results import partial_result
+from kilin.tools import partial_result
 from kilin.tools._shared.citations import inspect_citations
 from kilin.tools._shared.document_notes import (
     NOTHING,
@@ -76,8 +76,8 @@ from kilin.retrievals.document_reading import (
 )
 from kilin.tools._shared.choose_document import choose_document
 from kilin.tools._shared.term_filter import term_hits, term_label
-from kilin.tools.batch_review import _configuration as _config
-from kilin.tools._contract import (
+from . import _configuration as _config
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -85,7 +85,7 @@ from kilin.tools._contract import (
     check_int,
     reject_unknown,
 )
-from kilin.tools._shared.planning import (
+from kilin.tools import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,

@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -30,7 +34,9 @@ True
 
 """
 
-from kilin.tools.paper_overview.tool import (
+from kilin.tools import Tool
+
+from .tool import (
     OverviewSettings,
     overview_prompt,
     parse_settings,
@@ -38,8 +44,20 @@ from kilin.tools.paper_overview.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "OverviewSettings",
     "overview_prompt",
     "parse_settings",
     "run",
 ]
+
+
+PLUGIN = Tool(
+    name="paper_overview",
+    summary="Summarize one paper in the chat; ask which paper when it is "
+    "unclear.",
+    parse_settings=parse_settings,
+    run=run,
+    version="1.0.0",
+    api_version=1,
+)

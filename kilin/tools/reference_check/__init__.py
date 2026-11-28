@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -35,7 +39,9 @@ True
 
 """
 
-from kilin.tools.reference_check.tool import (
+from kilin.tools import Tool
+
+from .tool import (
     ReferenceCheckSettings,
     ReferenceReport,
     chat_answer,
@@ -47,6 +53,7 @@ from kilin.tools.reference_check.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "ReferenceCheckSettings",
     "ReferenceReport",
     "chat_answer",
@@ -56,3 +63,16 @@ __all__ = [
     "report_markdown",
     "run",
 ]
+
+
+PLUGIN = Tool(
+    name="reference_check",
+    summary="Check one paper's reference list against the project's files, "
+    "find where each reference is cited, optionally check claims, "
+    "and give offline or explicitly authorized online links for "
+    "missing works; save the report to outputs/.",
+    parse_settings=parse_settings,
+    run=run,
+    version="1.0.0",
+    api_version=1,
+)

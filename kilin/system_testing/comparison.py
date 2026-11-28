@@ -44,6 +44,7 @@ from ._comparison_metrics import (
 )
 from ._comparison_report import markdown_report, save_reports
 from ._inspection import note_inspection, relocation_event_differences
+from ._plugin_provenance import compare_plugins, plugin_observations
 from .replay import _configuration_differences
 from .reference import inspect_receipt
 from .replay_management import (
@@ -246,6 +247,7 @@ def _workspace(recording: Recording, report: ValidationReport) -> dict:
         "operation_counts": dict(sorted(Counter(
             op.kind for op in report.operations).items())),
         "environments": list(environments.values()), "models": models,
+        "plugin_provenance": plugin_observations(report.events),
         # A title generation occurs outside the outer question span. Retain
         # this diagnostic overhead without inventing a user operation.
         "outside_commands": {
@@ -578,6 +580,7 @@ def _operation(original: TimelineOperation, replayed: TimelineOperation,
            "settings_differences": [asdict(d) for d in
                                     _configuration_differences(
                                         (original,), (replayed,))],
+           "plugin_provenance": compare_plugins(original, replayed),
            "source_manifests": {"original": _source_manifest(original),
                                 "replayed": _source_manifest(replayed)},
            "stages": stage_metrics(original, replayed),

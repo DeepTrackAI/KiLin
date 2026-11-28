@@ -95,7 +95,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Final
 
-from kilin.tools._shared.model_results import partial_result
+from kilin.tools import partial_result
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._shared.citations import inspect_citations
@@ -106,8 +106,8 @@ from kilin.tools._shared.document_notes import (
     take_notes,
 )
 from kilin.tools._shared.choose_document import document_scope
-from kilin.tools.find_fact import _configuration as _config
-from kilin.tools._contract import (
+from . import _configuration as _config
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -115,7 +115,7 @@ from kilin.tools._contract import (
     check_int,
     reject_unknown,
 )
-from kilin.tools._shared.planning import (
+from kilin.tools import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,

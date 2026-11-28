@@ -2,14 +2,16 @@
 
 ## Ownership and boundaries
 
-KíLín's registered tools are Python subpackages under `kilin/tools/`.
-The central registry (`kilin/tools/_registry.py`) connects a stable tool
-identifier from a project type to `parse_settings` and `run`. It can also
-register an optional `workspace_resources` function. Project-type JSON may
+KíLín's bundled tools are Python subpackages under `kilin/tools/`.
+The registry (`kilin/tools/_registry.py`) discovers distribution and user
+packages exposing
+a `PLUGIN` descriptor, validates their contracts and binds each descriptor
+to its observed package root. The descriptor connects a stable tool identifier
+to `parse_settings`, `run` and optional hooks such as `workspace_resources`. Project-type JSON may
 select and configure registered tools, but cannot load arbitrary code.
 
-Each tool owns its implementation, its validated packaged `defaults.json`,
-and its local `README.md`. When a tool needs packaged templates, those
+Each bundled tool owns its implementation, its validated packaged
+`defaults.json`, and its local `README.md`. When a tool needs packaged templates, those
 resources also live in its package. The workspace planner rejects files
 outside their declaring tool package. Only the configured resources are
 installed into new project workspaces. The core always creates the
@@ -33,10 +35,11 @@ but shared infrastructure should not depend on a tool's configuration.
 
 ```text
 kilin/tools/example_tool/
-    __init__.py        # Tool's documented exports
+    __init__.py        # PLUGIN descriptor and documented exports
     tool.py            # Settings dataclass, parser, runner
     _configuration.py  # Strictly validate defaults on import
     defaults.json      # Tool-owned settings and internal parameters
+    settings_info.json # Descriptive metadata for settings
     README.md          # Explanation of every default
     templates/         # Only when this tool ships resources
 ```
@@ -47,7 +50,13 @@ remains an optional private GUI adapter (`kilin/gui/_report_pdf.py`), passed
 to the tool as a callback. The tool does not import the GUI, and it
 saves validated Markdown even without a PDF backend. Other tools can add private
 modules as needed.
-All registered built-in tools use packages, not flat `.py` modules. Use
+All registered built-in tools use packages, not flat `.py` modules. New
+packages are discovered without editing a central implementation list.
+User packages follow the same descriptor contract; see the
+[plugin API](PLUGIN_API.md#user-storage-discovery-and-validation) for their
+storage, validation, trust boundary and restart requirements.
+Use relative imports for package-local modules. The
+[public plugin API](PLUGIN_API.md) defines the descriptor and optional files. Use
 their documented package exports; obsolete flat-file import paths have no
 compatibility aliases.
 
@@ -74,7 +83,7 @@ Markdown report remains available.
 
 ## Tool-owned settings information
 
-Every registered tool supplies a `settings_info.json` next to its
+Every existing bundled tool supplies a `settings_info.json` next to its
 `defaults.json`. The metadata contains the descriptive `title`, `summary`
 and `description` of **each public key in `SETTINGS`**, with lowercase
 keys matching the normalized names returned by the tool-settings API.
@@ -84,7 +93,9 @@ markup. The core resolves this metadata through
 `kilin.get_settings_info()` catalog. Core validation verifies the
 metadata keys against the tool's `defaults.json` without loading a model.
 Unknown or invalid descriptions are not used by tool execution and cannot
-change a tool's behavior. Future interfaces can consume the same metadata.
+change a tool's behavior. Future interfaces can consume the same metadata. A minimal plugin may omit
+the help file; the metadata interface then returns an empty mapping. Supplied
+metadata remains subject to validation.
 
 ## Configuration precedence
 
@@ -157,7 +168,7 @@ that every passage was read or that the source supports the claim.
 ## Creating a tool
 
 Follow the [registration and extension checklist](extension_interfaces.md#implementing-a-built-in-tool)
-for the parser, runner, registry entry, project intent, packaging and tests.
+for the parser, runner, descriptor, project intent, packaging and tests.
 The layout and shared-service boundary above remain part of that contract.
 A tool needing workspace files declares resources; it does not copy them
 from a GUI handler. Tool-specific parameters, outputs and confirmation cost
@@ -184,7 +195,10 @@ that an unsupported model obeys it.
 
 ### Internal thinking policy
 
-Each tool declares one `MODEL_CALLS` section in its packaged `defaults.json`:
+The existing bundled tools declare a `MODEL_CALLS` section in their packaged
+`defaults.json`. A minimal plugin may omit this section or the entire file;
+its internal calls then inherit the active session. When supplied, the section
+must satisfy the same strict validation:
 
 ```json
 {

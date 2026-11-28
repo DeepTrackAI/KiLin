@@ -397,7 +397,7 @@ class TestExperiment(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         path.write_text(text.replace("source = sources", "source = /other"),
                         encoding="utf-8")
-        with patch("kilin.system_testing.validation.open_project") as opener:
+        with patch("kilin.system_testing.validation._read_project") as opener:
             self.assertInvalid("configuration.state")
         opener.assert_not_called()
 

@@ -123,7 +123,7 @@ from kilin.tools._shared.model_results import (
     partial_result,
 )
 from kilin.chunking import Chunk
-from kilin.tools._contract import (
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -137,8 +137,8 @@ from kilin.tools._shared._rating import (
     citation_suitability,
     suitability_stars,
 )
-from kilin.tools._shared.outputs import save_output_file
-from kilin.tools._shared.planning import (
+from kilin.tools import save_output_file
+from kilin.tools import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
@@ -156,15 +156,15 @@ from kilin.tools._shared.references import (
     reference_lists,
 )
 from kilin.tools._shared.sentences import Sentence, split_sentences
-from kilin.tools.reference_check import _configuration as _config
-from kilin.tools.reference_check._resolution import (
+from . import _configuration as _config
+from ._resolution import (
     LookupPermission,
     ReferenceLink,
     offline_link,
     linkable_entry,
     resolve_links,
 )
-from kilin.tools.reference_check._citations import (
+from ._citations import (
     STYLE_AUTHOR_YEAR,
     STYLE_BRACKETS,
     STYLE_NONE,
@@ -175,8 +175,8 @@ from kilin.tools.reference_check._citations import (
     find_citations,
     superscript_runs,
 )
-from kilin.tools.reference_check._latex import latex_references
-from kilin.tools.reference_check._matching import (
+from ._latex import latex_references
+from ._matching import (
     MATCH_FOUND,
     MATCH_MISSING,
     MATCH_PROBABLE,
@@ -205,7 +205,7 @@ from kilin.tools._shared.claims import (
     quote_line_range,
 )
 from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
-from kilin.tools._shared.source_access import (
+from kilin.tools import (
     selected_paths, selected_source_file,
 )
 

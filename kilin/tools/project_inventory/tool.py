@@ -70,8 +70,8 @@ from pathlib import Path
 import re
 from typing import Final
 
-from kilin.tools.project_inventory import _configuration as _config
-from kilin.tools._contract import (
+from . import _configuration as _config
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,

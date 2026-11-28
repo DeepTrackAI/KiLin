@@ -5,12 +5,13 @@ project type names a tool (``"tool": {"name": "scan_and_list", ...}``); the
 name must be in ``TOOL_REGISTRY``, and the tool's own ``parse_settings``
 checks the rest. Configuration never imports arbitrary Python paths, so a
 project type file can choose among these tools but cannot add code.
+The registry is constructed on first access, not during module import.
 A tool may also declare resources to install in newly created projects;
 the core resolves and copies them, not the GUI.
 
-Adding a tool means providing a package with a settings
-dataclass, ``parse_settings(data, where)``, and ``run(settings, request,
-context)`` (see ``kilin.tools._contract``), then adding it here. A tool
+Each distributed or user tool exposes a ``PLUGIN`` descriptor with
+its own settings parser and runner (see ``kilin.tools._contract``).
+Discovery binds the descriptor to the package actually loaded. A tool
 marked ``follows_up`` works on an earlier answer, so routing relates a
 question sent to it to an earlier turn even when the router named none;
 one with ``follows_up_when`` does so only for the questions it accepts.
@@ -20,12 +21,13 @@ Key Features
 
 - **Names**
 
-    The tools that exist, as a ``Literal`` type and ``Final`` constants.
+    Bundled identifiers and an open string type for tool names.
 
 - **Registry**
 
-    One entry per tool with its summary, parser, runner, and optional
-    packaged workspace resources.
+    Discover each public package, validate its descriptor and bind its
+    observed package root before publishing the registry. User failures
+    remain individually inspectable; bundled failures are fatal.
 
 - **Configuration**
 
@@ -60,9 +62,13 @@ Module Structure
 
     An intent's tool with its validated settings.
 
+- ``registered_tools`` and ``tool_choices``
+
+    Explicit accessors for the lazily constructed runtime registry.
+
 - ``TOOL_REGISTRY``
 
-    Map from each tool name to its registered tool.
+    Deferred legacy export of the same registry.
 
 - ``parse_tool``
 
@@ -83,42 +89,35 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from importlib import import_module
+import json
 from pathlib import Path
-from typing import Final, Literal, TypeAlias
+import re
+from threading import RLock
+from types import MappingProxyType, ModuleType
+from typing import Final
 
-from kilin.tools import (
-    assistant_guide,
-    batch_classify,
-    batch_review,
-    filter_results,
-    find_fact,
-    find_passages,
-    generate_paper_summary,
-    paper_overview,
-    project_inventory,
-    project_summary,
-    reference_check,
-    scan_and_list,
-    show_source,
-    suggest_reference,
-    writing_check,
+from kilin.plugins._discovery import (
+    ToolPluginInfo, _check_defaults, _check_package, _discard_user_package,
+    _load_user_package, _package_digest,
 )
+from kilin.plugins._paths import _runtime_directory
+from kilin.tools._defaults import load_tool_defaults, require_section
 from kilin.tools._contract import (
+    PLUGIN_API_VERSION,
+    Tool,
     ToolContext,
+    ToolName,
     ToolRequest,
     ToolResult,
-    ToolRouting,
+    ToolUse,
 )
-from kilin.tools._defaults import load_tool_defaults
-from kilin.tools._model_calls import (
-    ModelCallSettings,
-    load_model_call_settings,
-)
-from kilin.workspace_resources import WorkspaceResource
 
 __all__ = [
+    "registered_tools",
+    "tool_choices",
     "TOOL_ASSISTANT_GUIDE",
     "TOOL_BATCH_CLASSIFY",
     "TOOL_BATCH_REVIEW",
@@ -143,24 +142,7 @@ __all__ = [
     "run_tool",
 ]
 
-# The tools that exist. Project type files name tools by these values.
-ToolName: TypeAlias = Literal[
-    "project_inventory",
-    "scan_and_list",
-    "batch_classify",
-    "batch_review",
-    "filter_results",
-    "find_fact",
-    "find_passages",
-    "generate_paper_summary",
-    "paper_overview",
-    "reference_check",
-    "show_source",
-    "suggest_reference",
-    "writing_check",
-    "project_summary",
-    "assistant_guide",
-]
+# Bundled tools retain their identifiers during the migration.
 TOOL_PROJECT_INVENTORY: Final[ToolName] = "project_inventory"
 TOOL_SCAN_AND_LIST: Final[ToolName] = "scan_and_list"
 TOOL_BATCH_CLASSIFY: Final[ToolName] = "batch_classify"
@@ -176,7 +158,7 @@ TOOL_SUGGEST_REFERENCE: Final[ToolName] = "suggest_reference"
 TOOL_WRITING_CHECK: Final[ToolName] = "writing_check"
 TOOL_PROJECT_SUMMARY: Final[ToolName] = "project_summary"
 TOOL_ASSISTANT_GUIDE: Final[ToolName] = "assistant_guide"
-TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
+_BUILTIN_TOOL_ORDER: Final[tuple[ToolName, ...]] = (
     TOOL_PROJECT_INVENTORY,
     TOOL_SCAN_AND_LIST,
     TOOL_BATCH_CLASSIFY,
@@ -195,225 +177,478 @@ TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
 )
 
 
+# Preserve the historical mapping iteration order separately from chooser
+# order. Neither preference list controls which packages are discovered.
+_BUILTIN_REGISTRY_ORDER: Final[tuple[ToolName, ...]] = (
+    TOOL_PROJECT_INVENTORY,
+    TOOL_SCAN_AND_LIST,
+    TOOL_BATCH_CLASSIFY,
+    TOOL_BATCH_REVIEW,
+    TOOL_FILTER_RESULTS,
+    TOOL_FIND_FACT,
+    TOOL_FIND_PASSAGES,
+    TOOL_PAPER_OVERVIEW,
+    TOOL_REFERENCE_CHECK,
+    TOOL_SUGGEST_REFERENCE,
+    TOOL_WRITING_CHECK,
+    TOOL_ASSISTANT_GUIDE,
+    TOOL_SHOW_SOURCE,
+    TOOL_GENERATE_PAPER_SUMMARY,
+    TOOL_PROJECT_SUMMARY,
+)
+
+
+# Construct the registry only when a consumer explicitly needs it. The lock
+# prevents concurrent first accesses from publishing different registries.
+_REGISTRY_LOCK = RLock()
+_registry: dict[ToolName, Tool] | None = None
+_initializing = False
+_rejected_tools: tuple[ToolPluginInfo, ...] = ()
+
+
 @dataclass(frozen=True, slots=True)
-class Tool:
-    """One registered tool.
+class _RegisteredTool(Tool):
+    """Bind an authoring descriptor to a loader-observed package.
 
     Attributes
     ----------
-    name: ToolName
-        Name used in project types.
-    summary: str
-        What the tool does, for documentation and listings.
-    parse_settings: Callable[[dict, str], object]
-        Validates the tool's settings from a project type.
-    run: Callable[[object, ToolRequest, ToolContext], ToolResult]
-        Runs the tool with validated settings.
-    follows_up: bool
-        True when the tool works on an earlier answer, so a question
-        routed to it always relates to an earlier turn.
-    follows_up_when: Callable[[str], bool] | None
-        For a tool that works on an earlier answer only for some
-        questions: True for those questions, which then relate to an
-        earlier turn like ``follows_up``. They are not ruled out for
-        naming a file.
-    routing: Callable[[object, Path, tuple[object, ...]], ToolRouting | None]
-        Optional ``routing(settings, project_root, others)``: cues and a
-        router description from the project's own files, added to the
-        intent before routing (``with_project_routing``); ``others`` are
-        the settings of the project type's other intents using the same
-        tool, whose cases the routing can leave to them.
-    model_calls: ModelCallSettings
-        Tool-owned policy for internal answering-model calls.
-    workspace_resources: Callable | None
-        Optional declaration of packaged resources for a new project.
+    _package_root: pathlib.Path
+        Resolved directory of the imported package. It is not supplied
+        by the descriptor and is retained when replacing test callbacks.
+    _info: ToolPluginInfo | None
+        Captured identity and nonfatal diagnostics of the loaded package.
 
     """
 
-    name: ToolName
-    summary: str
-    parse_settings: Callable[[dict, str], object]
-    run: Callable[[object, ToolRequest, ToolContext], ToolResult]
-    follows_up: bool = False
-    follows_up_when: Callable[[str], bool] | None = None
-    routing: (
-        Callable[[object, Path, tuple[object, ...]], ToolRouting | None]
-        | None
-    ) = None
-    workspace_resources: (
-        Callable[[object], tuple[WorkspaceResource, ...]] | None
-    ) = None
+    _package_root: Path = field(kw_only=True, repr=False)
+    _info: ToolPluginInfo | None = field(default=None, kw_only=True,
+                                         repr=False)
 
     @property
-    def model_calls(self) -> ModelCallSettings:
-        """Return the registered tool's validated internal thinking policy.
+    def resource_root(self) -> Path:
+        """Return the observed root of the registered package.
 
         Returns
         -------
-        ModelCallSettings
-            Cached policy from this tool's own packaged defaults.
+        pathlib.Path
+            Absolute directory for owned configuration and assets.
 
         """
 
-        return load_model_call_settings(
-            Path(__file__).parent / self.name / "defaults.json"
+        return self._package_root
+
+
+def _validate_descriptor(name: str, tool: object) -> None:
+    """Validate the identity and declared contract of a plugin.
+
+    Parameters
+    ----------
+    name: str
+        Expected tool identifier, from the package directory.
+    tool: object
+        Candidate descriptor exported by the package.
+
+    Raises
+    ------
+    ValueError
+        If its type, identity, version or callable declarations are invalid.
+
+    """
+
+    if not isinstance(tool, Tool):
+        raise ValueError(f"Tool {name!r} must export a Tool as PLUGIN.")
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", name) or tool.name != name:
+        raise ValueError(f"Tool {name!r} has invalid descriptor identity.")
+    if (
+        type(tool.api_version) is not int
+        or tool.api_version != PLUGIN_API_VERSION
+    ):
+        raise ValueError(
+            f"Tool {name!r} declares plugin API version "
+            f"{tool.api_version!r}; supported version is "
+            f"{PLUGIN_API_VERSION}."
         )
-
-    @property
-    def internal_defaults(self) -> dict[str, object]:
-        """Return the tool's packaged defaults other than ``SETTINGS``.
-
-        These sections, such as ``MODEL_CALLS`` or ``ESTIMATES``, belong to
-        the tool: project types and users cannot change them.
-
-        Returns
-        -------
-        dict[str, object]
-            The sections by name, empty when the tool has no defaults file.
-
-        """
-
-        path = Path(__file__).parent / self.name / "defaults.json"
-        if not path.is_file():
-            return {}
-        defaults = load_tool_defaults(path)
-        defaults.pop("SETTINGS", None)
-        return defaults
+    for key in ("summary", "version"):
+        value = getattr(tool, key)
+        if (
+            not isinstance(value, str) or not value.strip()
+            or value != value.strip()
+        ):
+            raise ValueError(f"Tool {name!r} has invalid {key}.")
+    if type(tool.follows_up) is not bool:
+        raise ValueError(f"Tool {name!r} has invalid follows_up.")
+    for key in ("parse_settings", "run"):
+        if not callable(getattr(tool, key)):
+            raise ValueError(f"Tool {name!r} requires callable {key}.")
+    for key in ("follows_up_when", "routing", "workspace_resources"):
+        value = getattr(tool, key)
+        if value is not None and not callable(value):
+            raise ValueError(f"Tool {name!r} has invalid {key}.")
 
 
-@dataclass(frozen=True, slots=True)
-class ToolUse:
-    """An intent's tool with its validated settings.
+def _parse_settings(tool: Tool, data: dict, where: str) -> object:
+    """Validate settings returned by the tool at every configuration boundary.
 
-    Attributes
+    Parameters
     ----------
-    name: ToolName
-        The tool.
-    settings: object
-        The tool's settings dataclass, such as ``ScanSettings``.
+    tool: Tool
+        Descriptor providing the settings parser.
+    data: dict
+        Raw settings supplied to the parser.
+    where: str
+        Diagnostic location of the settings.
+
+    Returns
+    -------
+    object
+        Settings dataclass with JSON-compatible fields.
 
     """
 
-    name: ToolName
-    settings: object
+    try:
+        settings = tool.parse_settings(data, where)
+    except SystemExit as error:
+        raise ValueError(
+            f"Tool {tool.name!r} settings parser attempted to exit: {error}"
+        ) from error
+    if not is_dataclass(settings) or isinstance(settings, type):
+        raise ValueError(f"Tool {tool.name!r} settings must be a dataclass.")
+    try:
+        _check_json(asdict(settings))
+    except (TypeError, ValueError, RecursionError) as error:
+        raise ValueError(
+            f"Tool {tool.name!r} settings must be JSON-compatible."
+        ) from error
+    return settings
 
 
-TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
-    TOOL_PROJECT_INVENTORY: Tool(
-        TOOL_PROJECT_INVENTORY,
-        "Count and list the project's files by type and folder, with "
-        "which have searchable text.",
-        project_inventory.parse_settings,
-        project_inventory.run,
-    ),
-    TOOL_SCAN_AND_LIST: Tool(
-        TOOL_SCAN_AND_LIST,
-        "List and count every exact mention of the question's terms.",
-        scan_and_list.parse_settings,
-        scan_and_list.run,
-    ),
-    TOOL_BATCH_CLASSIFY: Tool(
-        TOOL_BATCH_CLASSIFY,
-        "Sort every exact mention into categories with the answering "
-        "model, and count each category.",
-        batch_classify.parse_settings,
-        batch_classify.run,
-    ),
-    TOOL_BATCH_REVIEW: Tool(
-        TOOL_BATCH_REVIEW,
-        "Read one whole document in parts, taking notes with passage "
-        "numbers, then answer from the notes.",
-        batch_review.parse_settings,
-        batch_review.run,
-    ),
-    TOOL_FILTER_RESULTS: Tool(
-        TOOL_FILTER_RESULTS,
-        "Judge each item an earlier answer listed and keep those that match "
-        "a follow-up.",
-        filter_results.parse_settings,
-        filter_results.run,
-        follows_up=True,
-    ),
-    TOOL_FIND_FACT: Tool(
-        TOOL_FIND_FACT,
-        "Find a specific fact in one paper or every paper by reading every "
-        "passage; the user can choose a quick answer instead.",
-        find_fact.parse_settings,
-        find_fact.run,
-    ),
-    TOOL_FIND_PASSAGES: Tool(
-        TOOL_FIND_PASSAGES,
-        "Read every sentence in scope and list the ones about a topic, "
-        "copied word for word.",
-        find_passages.parse_settings,
-        find_passages.run,
-    ),
-    TOOL_PAPER_OVERVIEW: Tool(
-        TOOL_PAPER_OVERVIEW,
-        "Summarize one paper in the chat; ask which paper when it is "
-        "unclear.",
-        paper_overview.parse_settings,
-        paper_overview.run,
-    ),
-    TOOL_REFERENCE_CHECK: Tool(
-        TOOL_REFERENCE_CHECK,
-        "Check one paper's reference list against the project's files, "
-        "find where each reference is cited, optionally check claims, "
-        "and give offline or explicitly authorized online links for "
-        "missing works; save the report to outputs/.",
-        reference_check.parse_settings,
-        reference_check.run,
-    ),
-    TOOL_SUGGEST_REFERENCE: Tool(
-        TOOL_SUGGEST_REFERENCE,
-        "Find the papers in the project that could be cited for a "
-        "statement, judging each with a quote from its own passages.",
-        suggest_reference.parse_settings,
-        suggest_reference.run,
-    ),
-    TOOL_WRITING_CHECK: Tool(
-        TOOL_WRITING_CHECK,
-        "Check the grammar and style of one document or part of it, "
-        "paragraph by paragraph, and suggest changes without making them; "
-        "save the report to outputs/.",
-        writing_check.parse_settings,
-        writing_check.run,
-        follows_up_when=writing_check.asks_rewrite,
-    ),
-    TOOL_ASSISTANT_GUIDE: Tool(
-        TOOL_ASSISTANT_GUIDE,
-        "Answer what KíLín can do with one ready-to-send example question "
-        "per kind of request, about the project's own files.",
-        assistant_guide.parse_settings,
-        assistant_guide.run,
-    ),
-    TOOL_SHOW_SOURCE: Tool(
-        TOOL_SHOW_SOURCE,
-        "Show the sentence an earlier answer cited, with the sentences "
-        "around it, and explain it without searching again.",
-        show_source.parse_settings,
-        show_source.run,
-        follows_up=True,
-    ),
-    TOOL_GENERATE_PAPER_SUMMARY: Tool(
-        TOOL_GENERATE_PAPER_SUMMARY,
-        "Summarize one paper with a report template, check the structure, "
-        "and save the Markdown to outputs/.",
-        generate_paper_summary.parse_settings,
-        generate_paper_summary.run,
-        routing=generate_paper_summary.routing,
-        workspace_resources=generate_paper_summary.workspace_resources,
-    ),
-    TOOL_PROJECT_SUMMARY: Tool(
-        TOOL_PROJECT_SUMMARY,
-        "Write one report on all the documents of a project with a project "
-        "template, reading every document, and save it to outputs/.",
-        project_summary.parse_settings,
-        project_summary.run,
-        routing=project_summary.routing,
-        workspace_resources=project_summary.workspace_resources,
-    ),
-}
+def _check_json(value: object) -> None:
+    """Require strict JSON data, permitting tuples as array representations.
+
+    Parameters
+    ----------
+    value: object
+        Settings or result payload to validate.
+
+    """
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError("JSON object keys must be strings.")
+            _check_json(item)
+    elif isinstance(value, (tuple, list)):
+        for item in value:
+            _check_json(item)
+    elif value is not None and not isinstance(value, (str, int, float)):
+        raise TypeError("Unsupported JSON value.")
+    # Reject NaN and infinity without serializing every nested object again.
+    if isinstance(value, float):
+        json.dumps(value, allow_nan=False)
+
+
+def _register_tool(
+    module: ModuleType, directory: Path, *, origin: str = "distribution",
+    digest: str | None = None,
+) -> Tool:
+    """Bind and validate a descriptor from an already imported package.
+
+    Parameters
+    ----------
+    module: types.ModuleType
+        Imported trusted Python package exposing ``PLUGIN``.
+    directory: pathlib.Path
+        Candidate package directory selected by the loader, not the plugin.
+    origin: str, optional
+        Distribution or user-level source of the package.
+    digest: str | None, optional
+        Digest captured before importing user code.
+
+    Returns
+    -------
+    Tool
+        A descriptor bound to its actual resource directory.
+
+    Raises
+    ------
+    ValueError
+        If the package origin, descriptor or declared defaults are invalid.
+
+    """
+
+    directory = directory.resolve()
+    location = getattr(module, "__file__", None)
+    if (
+        not location or Path(location).resolve() != directory / "__init__.py"
+    ):
+        raise ValueError(f"Tool {directory.name!r} has unexpected origin.")
+    name = directory.name
+    descriptor = getattr(module, "PLUGIN", None)
+    _validate_descriptor(name, descriptor)
+    # Copy only authoring fields, never ownership supplied by a descriptor.
+    values = {
+        item.name: getattr(descriptor, item.name) for item in fields(Tool)
+    }
+    tool = _RegisteredTool(**values, _package_root=directory)
+    path = directory / "defaults.json"
+    if path.exists():
+        defaults = load_tool_defaults(path)
+        if "SETTINGS" in defaults:
+            data = require_section(defaults, "SETTINGS", name)
+            normalized = {key.lower(): value for key, value in data.items()}
+            if len(normalized) != len(data):
+                raise ValueError(f"Tool {name!r} has duplicate settings.")
+            _parse_settings(tool, normalized, f"{name}.defaults")
+    # An absent policy inherits the session. A supplied policy must be valid.
+    _ = tool.model_calls
+    warnings = ()
+    if origin == "user":
+        from kilin.settings_info import _read_tool_info
+
+        try:
+            _read_tool_info(name, directory)
+        except (OSError, ValueError, TypeError) as error:
+            warnings = (f"Settings help: {error}",)
+    current_digest = _package_digest(directory)
+    if digest is not None and current_digest != digest:
+        raise ValueError(f"Tool {name!r} changed during registration.")
+    info = ToolPluginInfo(
+        name, directory, origin, tool.version, tool.api_version,
+        current_digest, warnings=warnings,
+    )
+    return _RegisteredTool(**values, _package_root=directory, _info=info)
+
+
+def _register_user_tool(directory: Path) -> Tool:
+    """Import and bind a trusted user plugin, cleaning failures from cache.
+
+    Parameters
+    ----------
+    directory: pathlib.Path
+        Candidate source package folder.
+
+    Returns
+    -------
+    Tool
+        Registered descriptor with captured user identity.
+
+    """
+
+    directory = _check_package(directory)
+    digest = _package_digest(directory)
+    _check_defaults(directory)
+    module = _load_user_package(directory)
+    try:
+        return _register_tool(module, directory, origin="user", digest=digest)
+    except BaseException:
+        _discard_user_package(directory.name)
+        raise
+
+
+def _discover_user_tools(
+    entries: dict[ToolName, Tool], directory: Path,
+) -> tuple[ToolPluginInfo, ...]:
+    """Extend the bundled registry and retain rejected user candidates.
+
+    Parameters
+    ----------
+    entries: dict[ToolName, Tool]
+        Registry under construction; distribution names have precedence.
+    directory: pathlib.Path
+        User tools directory, which may be absent.
+
+    Returns
+    -------
+    tuple[ToolPluginInfo, ...]
+        Unavailable candidates with individual diagnostic messages.
+
+    """
+
+    rejected = []
+    try:
+        if directory.is_symlink():
+            raise ValueError("Linked tools directory.")
+        candidates = sorted(directory.iterdir())
+    except FileNotFoundError:
+        return ()
+    except (OSError, ValueError) as error:
+        return (ToolPluginInfo(
+            "<tools directory>", directory, "user", error=str(error),
+            runtime_checked=False,
+        ),)
+    for path in candidates:
+        name = path.name
+        if name.startswith(("_", ".")):
+            continue
+        try:
+            if not (path.is_dir() or path.is_symlink()):
+                continue
+            if name in entries:
+                rejected.append(ToolPluginInfo(
+                    name, path.absolute(), "user",
+                    error=f"Tool ID {name!r} is already registered.",
+                    runtime_checked=False,
+                ))
+                continue
+            entries[name] = _register_user_tool(path)
+        except (Exception, SystemExit) as error:
+            rejected.append(ToolPluginInfo(
+                name, path.absolute(), "user",
+                error=f"{type(error).__name__}: {error}",
+            ))
+    return tuple(rejected)
+
+
+def _tool_plugin_infos() -> tuple[ToolPluginInfo, ...]:
+    """Inspect registered and rejected tool candidates without reimporting."""
+
+    entries = _tool_registry()
+    return tuple(
+        tool._info for tool in entries.values()
+        if isinstance(tool, _RegisteredTool) and tool._info is not None
+    ) + _rejected_tools
+
+
+def _tool_identity(name: str) -> dict[str, object] | None:
+    """Return captured tool provenance, if available for this entry.
+
+    Parameters
+    ----------
+    name: str
+        Registered tool identifier.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Portable identity, or None for a synthetic test descriptor.
+
+    """
+
+    info = getattr(_tool_registry().get(name), "_info", None)
+    return info.identity() if info is not None else None
+
+
+def _build_tool_registry() -> dict[ToolName, Tool]:
+    """Discover bundled and trusted user packages and register descriptors.
+
+    Returns
+    -------
+    dict[ToolName, Tool]
+        Tool definitions in their established registration order, followed
+        by newly distributed and then user packages in alphabetical order.
+
+    Raises
+    ------
+    ValueError
+        If a public bundled package cannot be registered.
+
+    """
+
+    global _rejected_tools
+    entries = {}
+    for directory in sorted(Path(__file__).parent.iterdir()):
+        name = directory.name
+        if name.startswith("_") or not (directory / "__init__.py").is_file():
+            continue
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+            raise ValueError(f"Invalid bundled tool package: {name!r}.")
+        module = import_module(f"kilin.tools.{name}")
+        entries[name] = _register_tool(module, directory)
+    order = (*_BUILTIN_REGISTRY_ORDER, *entries)
+    entries = {name: entries[name] for name in order if name in entries}
+    _rejected_tools = _discover_user_tools(
+        entries, _runtime_directory() / "tools",
+    )
+    return entries
+
+
+def _tool_registry() -> dict[ToolName, Tool]:
+    """Resolve the single process-local registry on first use.
+
+    Returns
+    -------
+    dict[ToolName, Tool]
+        The registry, constructed once on successful access.
+
+    Raises
+    ------
+    RuntimeError
+        If construction recursively requests the registry.
+    ValueError
+        If a bundled tool declares an unsupported plugin API version.
+
+    """
+
+    global _registry, _initializing
+    with _REGISTRY_LOCK:
+        if _registry is None:
+            if _initializing:
+                raise RuntimeError("Recursive tool registry initialization.")
+            _initializing = True
+            try:
+                entries = _build_tool_registry()
+                for name, tool in entries.items():
+                    _validate_descriptor(name, tool)
+                _registry = entries
+            finally:
+                _initializing = False
+        return _registry
+
+
+def registered_tools() -> Mapping[ToolName, Tool]:
+    """Return a read-only view of the process-local tool registry.
+
+    Returns
+    -------
+    Mapping[ToolName, Tool]
+        Registered tools in their established registration order.
+
+    """
+
+    return MappingProxyType(_tool_registry())
+
+
+def tool_choices() -> tuple[ToolName, ...]:
+    """Return the available tool identifiers in their established order.
+
+    Returns
+    -------
+    tuple[ToolName, ...]
+        Registered identifiers, with the original bundled ordering.
+
+    """
+
+    entries = _tool_registry()
+    return tuple(name for name in _BUILTIN_TOOL_ORDER if name in entries) + (
+        tuple(name for name in entries if name not in _BUILTIN_TOOL_ORDER)
+    )
+
+
+def __getattr__(name: str) -> object:
+    """Resolve legacy registry exports without initializing on import.
+
+    Parameters
+    ----------
+    name: str
+        Requested module attribute.
+
+    Returns
+    -------
+    object
+        The requested deferred export.
+
+    Raises
+    ------
+    AttributeError
+        If the module does not provide the requested attribute.
+
+    """
+
+    if name == "TOOL_REGISTRY":
+        return _tool_registry()
+    if name == "TOOL_CHOICES":
+        return tool_choices()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def parse_tool(where: str, data: object) -> ToolUse:
@@ -443,15 +678,16 @@ def parse_tool(where: str, data: object) -> ToolUse:
         raise ValueError(f"Intent {where!r} tool must be an object.")
 
     name = data.get("name")
-    if name not in TOOL_REGISTRY:
+    entries = _tool_registry()
+    if not isinstance(name, str) or name not in entries:
         raise ValueError(
             f"Intent {where!r} tool name must be one of: "
-            f"{', '.join(TOOL_CHOICES)}."
+            f"{', '.join(tool_choices())}."
         )
 
     settings = {key: value for key, value in data.items() if key != "name"}
     return ToolUse(
-        name, TOOL_REGISTRY[name].parse_settings(settings, f"{where}.tool")
+        name, _parse_settings(entries[name], settings, f"{where}.tool")
     )
 
 
@@ -476,4 +712,34 @@ def run_tool(
 
     """
 
-    return TOOL_REGISTRY[use.name].run(use.settings, request, context)
+    tool = _tool_registry()[use.name]
+    try:
+        result = tool.run(use.settings, request, context)
+    except SystemExit as error:
+        raise RuntimeError(
+            f"Tool {tool.name!r} attempted to exit: {error}"
+        ) from error
+    if not isinstance(result, ToolResult):
+        raise ValueError(f"Tool {use.name!r} must return ToolResult.")
+    if (
+        not isinstance(result.answer, str)
+        or not isinstance(result.evidence, tuple)
+        or any(not isinstance(item, dict) for item in result.evidence)
+        or not isinstance(result.summary, dict)
+        or type(result.streamed) is not bool
+    ):
+        raise ValueError(f"Tool {use.name!r} returned an invalid ToolResult.")
+    try:
+        # Evidence uses real pathlib paths until conversation persistence.
+        # Only the summary and the serialized evidence representation are
+        # JSON data; do not reject existing tools for returning Path values.
+        for item in result.evidence:
+            if not isinstance(item.get("path"), Path):
+                raise ValueError("Tool evidence requires a pathlib path.")
+            _check_json({**item, "path": item["path"].as_posix()})
+        _check_json(result.summary)
+    except (TypeError, ValueError, RecursionError) as error:
+        raise ValueError(
+            f"Tool {use.name!r} result must be JSON-compatible."
+        ) from error
+    return result

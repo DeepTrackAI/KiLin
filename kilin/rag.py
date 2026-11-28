@@ -246,6 +246,7 @@ from kilin.project_type import (
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
     RETRIEVAL_STRATEGY_SOURCE_FIRST,
+    _project_type_identity,
     project_type,
     with_project_routing,
 )
@@ -343,7 +344,6 @@ from kilin.sources.extensions.sources_json import (
 )
 from kilin.sources.extensions.sources_pdf import PDF_TEXT_EXTRACTOR
 from kilin.tools import (
-    TOOL_REGISTRY,
     EarlierTurn,
     ToolContext,
     ToolPlan,
@@ -352,6 +352,7 @@ from kilin.tools import (
     ToolUse,
     run_tool,
 )
+from kilin.tools._registry import _tool_identity, registered_tools
 from kilin.tools._shared.model_results import incomplete_notice
 from kilin.tools._shared.planning import _record_choice
 from kilin.tools._shared.choose_document import document_scope
@@ -1939,6 +1940,11 @@ class RAGSession:
                 )
 
             effective = self._parameters(retrieval_count)
+            type_id = effective.get("project_type_id")
+            if isinstance(type_id, str):
+                identity = _project_type_identity(type_id)
+                if identity is not None:
+                    effective["project_type_plugin"] = identity
             previous_retrieval_count = (
                 self.turns[-1].parameters.get(
                     "retrieval_count",
@@ -2072,6 +2078,10 @@ class RAGSession:
             effective["intent_history_policy"] = intent.history_policy
             effective["intent_retrieval_mode"] = intent.retrieval_mode
             effective["intent_tool_used"] = intent.tool is not None
+            if intent.tool is not None:
+                identity = _tool_identity(intent.tool.name)
+                if identity is not None:
+                    effective["tool_plugin"] = identity
             path = Path(self.project.root) / PROJECT_BEHAVIOR_FILE
             if path.is_file():
                 effective["project_behavior_revision"] = sha256(
@@ -5330,7 +5340,7 @@ class RAGSession:
         )
 
         tool_thoughts: list[str] = []
-        model_policy = TOOL_REGISTRY[use.name].model_calls
+        model_policy = registered_tools()[use.name].model_calls
         model_calls: list[dict[str, object]] = []
 
         def ask_model(system: str, prompt: str, tokens: int | None) -> str:
@@ -5538,12 +5548,13 @@ class RAGSession:
             component="tool",
             data={
                 "name": use.name,
+                "plugin": _tool_identity(use.name),
                 "settings": (
                     asdict(use.settings)
                     if is_dataclass(use.settings)
                     else repr(use.settings)
                 ),
-                "internal": TOOL_REGISTRY[use.name].internal_defaults,
+                "internal": registered_tools()[use.name].internal_defaults,
             },
             turn_id=trace_turn_id,
         ):

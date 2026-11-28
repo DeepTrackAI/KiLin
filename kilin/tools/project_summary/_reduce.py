@@ -82,8 +82,8 @@ from kilin.tools._shared.report_templates import (
     ReportTemplate,
     TemplateSection,
 )
-from kilin.tools.project_summary._documents import ProjectDocument
-from kilin.tools.project_summary._mapping import (
+from ._documents import ProjectDocument
+from ._mapping import (
     CHECK_UNCLEAR,
     CHECK_YES,
     DocumentNotes,

@@ -43,7 +43,7 @@ Key Features
 Module Structure
 ----------------
 
-- ``PROJECT_TYPE_IDS``
+- ``project_type_ids`` and ``PROJECT_TYPE_IDS``
 
     All packaged type IDs in deterministic filename order, not an enum.
 
@@ -144,7 +144,9 @@ from kilin.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
-from kilin.project_type import ProjectTypeId, load_project_types
+from kilin.project_type import (
+    _ID_PATTERN, ProjectTypeId, load_project_types, project_type,
+)
 from kilin.project_layout import (
     CORE_PROJECT_FOLDERS,
     ensure_project_folders,
@@ -173,6 +175,7 @@ from kilin.trace_logging import NullTraceLogger, TraceSink
 from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 
 __all__ = [
+    "project_type_ids",
     "PROJECT_TYPE_IDS",
     "ProjectTypeId",
     "ProjectProfile",
@@ -190,22 +193,6 @@ __all__ = [
 
 # Deleted projects are moved here, beside the projects themselves.
 DELETED_PROJECTS_FOLDER: Final[str] = ".deleted"
-
-# Loading rejects an empty or invalid registry before projects can open.
-PROJECT_TYPE_IDS: Final[tuple[ProjectTypeId, ...]] = tuple(
-    load_project_types()
-)
-
-_PROJECT_EXTENSIONS: Final[dict[ProjectTypeId, str]] = {
-    type_id: ", ".join(item.extensions)
-    for type_id, item in load_project_types().items()
-}
-_DEFAULT_FILE_LIMITS: Final[dict[ProjectTypeId, int]] = {
-    type_id: item.max_file_bytes
-    for type_id, item in load_project_types().items()
-}
-# Registered type identifiers as listed in error messages.
-_TYPE_ID_CHOICE_TEXT: Final[str] = ", ".join(PROJECT_TYPE_IDS)
 
 # These defaults are used only when generating a missing project profile;
 # existing ``profile.ini`` values always take precedence.
@@ -337,7 +324,7 @@ def _default_profile_text(
         type_id=type_id,
         source=source,
         extensions=extensions,
-        max_file_bytes=_DEFAULT_FILE_LIMITS[type_id],
+        max_file_bytes=definition.max_file_bytes,
         allow_download=str(_PROFILE_ALLOW_DOWNLOAD).lower(),
         target_tokens=_PROFILE_TARGET_TOKENS,
         max_tokens=_PROFILE_MAX_TOKENS,
@@ -354,6 +341,69 @@ def _default_profile_text(
         embedding_torch=DEFAULT_EMBEDDING_MODEL_TORCH,
         query_format=QUERY_FORMAT_QWEN3,
     )
+
+
+def project_type_ids() -> tuple[ProjectTypeId, ...]:
+    """Return available project identifiers without an import-time snapshot.
+
+    Returns
+    -------
+    tuple[ProjectTypeId, ...]
+        Available project-type identifiers in catalog order.
+
+    """
+
+    return tuple(load_project_types())
+
+
+def __getattr__(name: str) -> object:
+    """Resolve the legacy project identifier export on demand.
+
+    Parameters
+    ----------
+    name: str
+        Requested module attribute.
+
+    Returns
+    -------
+    object
+        The requested deferred export.
+
+    Raises
+    ------
+    AttributeError
+        If the module does not provide the requested attribute.
+
+    """
+
+    if name == "PROJECT_TYPE_IDS":
+        return project_type_ids()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _require_project_type(type_id: ProjectTypeId, field: str) -> None:
+    """Reject unknown or unavailable types before touching a workspace.
+
+    Parameters
+    ----------
+    type_id: ProjectTypeId
+        Type requested for creation or read from a saved profile.
+    field: str
+        Setting name used for validation diagnostics.
+
+    """
+
+    available = project_type_ids()
+    if type_id in available:
+        return
+    try:
+        project_type(type_id)
+    except ValueError as error:
+        raise ValueError(
+            f"{field} must be one of: {', '.join(available) or '<none>'}. "
+            f"{error}"
+        ) from error
+    raise ValueError(f"{field} is not available: {type_id!r}.")
 
 
 def default_project_profile(type_id: ProjectTypeId) -> ProjectProfile:
@@ -381,9 +431,8 @@ def default_project_profile(type_id: ProjectTypeId) -> ProjectProfile:
 
     """
 
-    if type_id not in PROJECT_TYPE_IDS:
-        raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
-    extensions = _PROJECT_EXTENSIONS[type_id]
+    _require_project_type(type_id, "type_id")
+    extensions = ", ".join(load_project_types()[type_id].extensions)
     parser = ConfigParser()
     parser.read_string(
         _default_profile_text(type_id, PROJECT_SOURCES_DIRECTORY, extensions)
@@ -728,8 +777,7 @@ def initialize_project(
 
     """
 
-    if type_id not in PROJECT_TYPE_IDS:
-        raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
+    _require_project_type(type_id, "type_id")
     root = destination_path(directory)
     return _initialize_profile(root, type_id)
 
@@ -827,7 +875,8 @@ def _prepared_profile(
 
     """
 
-    text = _default_profile_text(type_id, source, _PROJECT_EXTENSIONS[type_id])
+    extensions = ", ".join(load_project_types()[type_id].extensions)
+    text = _default_profile_text(type_id, source, extensions)
     parser = ConfigParser()
     parser.read_string(text)
     if settings:
@@ -980,8 +1029,7 @@ def prepare_project_workspace(
 
     """
 
-    if type_id not in PROJECT_TYPE_IDS:
-        raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
+    _require_project_type(type_id, "type_id")
     source = Path(source_directory).expanduser().resolve(strict=True)
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
@@ -1242,6 +1290,31 @@ def open_project(directory: str | Path) -> QAProject:
 
     """
 
+    return _read_project(directory, require_registered_type=True)
+
+
+def _read_project(
+    directory: str | Path, *, require_registered_type: bool,
+) -> QAProject:
+    """Inspect a project with an explicit execution-eligibility policy.
+
+    Parameters
+    ----------
+    directory: str | pathlib.Path
+        Existing workspace containing a saved profile.
+    require_registered_type: bool
+        Require the current runtime's available project type. False is
+        reserved for historical recording inspection; it still validates
+        the identifier syntax, settings and filesystem layout, but must
+        not initialize the current plugin catalogs.
+
+    Returns
+    -------
+    QAProject
+        Resolved paths and validated saved profile, not an active session.
+
+    """
+
     root = Path(directory).expanduser().resolve(strict=True)
     if not root.is_dir():
         raise NotADirectoryError(f"Choose a project folder: {root}")
@@ -1256,7 +1329,9 @@ def open_project(directory: str | Path) -> QAProject:
 
     parser = ConfigParser()
     parser.read(profile_path, encoding="utf-8")
-    profile = _read_profile(parser)
+    profile = _read_profile(
+        parser, require_registered_type=require_registered_type,
+    )
     source = Path(profile.source).expanduser()
     if not source.is_absolute():
         source = root / source
@@ -1417,13 +1492,18 @@ def _remove_empty_directories(root: Path) -> None:
             pass
 
 
-def _read_profile(parser: ConfigParser) -> ProjectProfile:
+def _read_profile(
+    parser: ConfigParser, *, require_registered_type: bool = True,
+) -> ProjectProfile:
     """Read and validate every supported project setting.
 
     Parameters
     ----------
     parser: ConfigParser
         ConfigParser containing the profile sections and values.
+    require_registered_type: bool, optional
+        Validate against the live catalog (default). False checks only the
+        identifier grammar, for offline historical inspection.
 
     Returns
     -------
@@ -1445,10 +1525,10 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
     """
 
     type_id_value = _required(parser, "project", "type_id")
-    if type_id_value not in PROJECT_TYPE_IDS:
-        raise ValueError(
-            f"project.type_id must be one of: {_TYPE_ID_CHOICE_TEXT}."
-        )
+    if require_registered_type:
+        _require_project_type(type_id_value, "project.type_id")
+    elif not _ID_PATTERN.fullmatch(type_id_value):
+        raise ValueError("Invalid project.type_id in saved profile.")
     type_id = cast("ProjectTypeId", type_id_value)
 
     extensions = tuple(

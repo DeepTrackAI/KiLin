@@ -5,7 +5,8 @@ project, workspace, and tracing objects listed in ``__all__``. Examples in
 KíLín documentation use this namespace when an object is exported here.
 Objects exported only by a submodule must be accessed through that submodule.
 
-Importing this package does not construct a model session or start the GUI.
+Importing this package does not construct a tool or project-type catalog,
+construct a model session, or start the GUI.
 Model sessions load their backend dependencies when instantiated; the GUI
 has a separate entry point. Imported submodules may nevertheless require
 non-model dependencies such as NumPy.
@@ -33,7 +34,7 @@ not export every public object from every submodule.
 Examples
 --------
 >>> import kilin
->>> isinstance(kilin.PROJECT_TYPE_IDS, tuple)
+>>> isinstance(kilin.project_type_ids(), tuple)
 True
 
 """
@@ -96,7 +97,7 @@ from .query_formats import (
     format_qwen3_query,
 )
 from .project import (
-    PROJECT_TYPE_IDS,
+    project_type_ids,
     ProjectTypeId,
     ProjectProfile,
     QAProject,
@@ -146,10 +147,14 @@ from .project_type import (
     MemoryIndexingPolicy,
     MemoryQuestionPolicy,
     ProjectType,
+    ProjectTypeInfo,
+    PROJECT_TYPE_SCHEMA_VERSION,
     RetrievalMode,
     RetrievalStrategy,
     load_project_types,
     project_type,
+    project_type_catalog,
+    project_type_raw,
 )
 from .tools import (
     CONFIRMATION_ALWAYS,
@@ -161,7 +166,7 @@ from .tools import (
     PLAN_CHOICE_CONTINUE,
     PLAN_CHOICE_QUICK,
     TOOL_BATCH_CLASSIFY,
-    TOOL_CHOICES,
+    tool_choices,
     TOOL_SCAN_AND_LIST,
     ConfirmationPolicy,
     PlanChoice,
@@ -287,6 +292,8 @@ from .workspace import (
 )
 
 __all__ = [
+    "project_type_ids",
+    "tool_choices",
     "get_setting_info",
     "get_settings_info",
     "get_tool_settings_info",
@@ -480,10 +487,41 @@ __all__ = [
     "MemoryIndexingPolicy",
     "MemoryQuestionPolicy",
     "ProjectType",
+    "ProjectTypeInfo",
+    "PROJECT_TYPE_SCHEMA_VERSION",
     "RetrievalMode",
     "RetrievalStrategy",
     "load_project_types",
     "project_behavior_settings",
     "save_project_behavior",
     "project_type",
+    "project_type_catalog",
+    "project_type_raw",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Resolve legacy catalog exports without constructing them on import.
+
+    Parameters
+    ----------
+    name: str
+        Requested module attribute.
+
+    Returns
+    -------
+    object
+        The requested deferred export.
+
+    Raises
+    ------
+    AttributeError
+        If the module does not provide the requested attribute.
+
+    """
+
+    if name == "PROJECT_TYPE_IDS":
+        return project_type_ids()
+    if name == "TOOL_CHOICES":
+        return tool_choices()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

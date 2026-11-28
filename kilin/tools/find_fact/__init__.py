@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -30,7 +34,9 @@ True
 
 """
 
-from kilin.tools.find_fact.tool import (
+from kilin.tools import Tool
+
+from .tool import (
     FactSettings,
     fact_prompt,
     parse_settings,
@@ -38,8 +44,20 @@ from kilin.tools.find_fact.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "FactSettings",
     "fact_prompt",
     "parse_settings",
     "run",
 ]
+
+
+PLUGIN = Tool(
+    name="find_fact",
+    summary="Find a specific fact in one paper or every paper by reading "
+    "every passage; the user can choose a quick answer instead.",
+    parse_settings=parse_settings,
+    run=run,
+    version="1.0.0",
+    api_version=1,
+)

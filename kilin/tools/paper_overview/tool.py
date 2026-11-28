@@ -76,8 +76,8 @@ from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._shared.citations import inspect_citations
 from kilin.tools._shared.document_notes import answer_citations
 from kilin.tools._shared.choose_document import choose_document
-from kilin.tools.paper_overview import _configuration as _config
-from kilin.tools._contract import (
+from . import _configuration as _config
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,

@@ -175,7 +175,7 @@ from kilin.tools._shared.references import (
     ReferenceLayout,
     reference_entries,
 )
-from kilin.tools._contract import (
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -192,7 +192,7 @@ from kilin.tools._shared.outputs import (
     save_output_file,
     staged_output_file,
 )
-from kilin.tools._shared.planning import (
+from kilin.tools import (
     CONFIRMATION_ALWAYS,
     CONFIRMATION_CHOICES,
     CONFIRMATION_WHEN_LARGE,
@@ -208,7 +208,7 @@ from kilin.workspace_resources import (
     WorkspaceResource,
     templates_folder,
 )
-from kilin.tools.generate_paper_summary._configuration import (
+from ._configuration import (
     BEGINNING_CHARACTERS,
     BEGINNING_PASSAGES,
     CALL_SECONDS,
@@ -239,7 +239,7 @@ from kilin.tools.generate_paper_summary._configuration import (
     SECTION_PROMPT_TOKENS,
 )
 from kilin.tools._shared.report_templates import SCOPE_DOCUMENT
-from kilin.tools.generate_paper_summary._report_template import (
+from ._report_template import (
     SECTION_SOURCE_CITATION,
     SECTION_SOURCE_NOTES,
     SECTION_SOURCE_REFERENCES,

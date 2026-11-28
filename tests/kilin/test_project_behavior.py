@@ -92,7 +92,8 @@ class TestProjectBehavior(ProjectBehaviorFixture):
 
     def test_unedited_projects_use_packaged_configuration(self):
         base = project_type("literature")
-        self.assertIs(effective_project_type(self.first), base)
+        self.assertEqual(effective_project_type(self.first), base)
+        self.assertIsNot(effective_project_type(self.first), base)
         self.assertFalse((self.first / PROJECT_BEHAVIOR_FILE).exists())
         values = project_behavior_settings(self.first)
         self.assertEqual(values["global"]["values"],

@@ -152,6 +152,7 @@ from kilin.workspace import (
     sync_project_sources,
 )
 from kilin.tool_settings import project_tool_settings, save_tool_settings
+from kilin.plugins import _project_plugin_snapshot
 from kilin.settings_info import get_settings_info
 from kilin.project_behavior import (
     PROJECT_BEHAVIOR_FILE,
@@ -179,9 +180,11 @@ from kilin.conversation_memory.persistence import (
 from kilin.conversation_ownership import ConversationFileLock
 from kilin.conversations import ConversationInfo, ConversationStore
 from kilin.huggingface import download_model
-from kilin.project_type import load_project_types, project_type
+from kilin.project_type import (
+    _ID_PATTERN, load_project_types, project_type, project_type_catalog,
+)
 from kilin.project import (
-    PROJECT_TYPE_IDS,
+    project_type_ids,
     ProjectAlreadyExistsError,
     WorkspaceOccupiedError,
     QAProject,
@@ -1078,7 +1081,7 @@ class ChatEngine:
         return perf_counter() - model_started
 
     def list_saved_projects(self, workspace: str) -> None:
-        """Report valid projects of all registered types, newest first.
+        """List recognized projects, including unavailable types, newest first.
 
         Parameters
         ----------
@@ -1087,19 +1090,23 @@ class ChatEngine:
 
         """
 
-        self._send(
-            "projects",
-            projects=[
-                {
-                    "project": str(folder),
-                    "name": folder.name,
-                    "type_id": type_id,
-                    "updated_at": updated_at,
-                }
-                for updated_at, folder, type_id
-                in self._saved_projects(workspace)
-            ],
-        )
+        catalog = project_type_catalog()
+        projects = []
+        for updated_at, folder, type_id in self._saved_projects(workspace):
+            info = catalog.get(type_id)
+            reason = (
+                f"Project type {type_id!r} is not installed."
+                if info is None else info.error
+            )
+            projects.append({
+                "project": str(folder),
+                "name": folder.name,
+                "type_id": type_id,
+                "updated_at": updated_at,
+                "available": reason is None,
+                "unavailable_reason": reason,
+            })
+        self._send("projects", projects=projects)
 
     def find_saved_project(self, type_id: str, workspace: str) -> None:
         """Refresh Resume for the selected type and workspace folder.
@@ -1154,7 +1161,11 @@ class ChatEngine:
 
         """
 
-        projects = self._saved_projects(workspace, type_id)
+        available = set(project_type_ids())
+        projects = [
+            item for item in self._saved_projects(workspace, type_id)
+            if item[2] in available
+        ]
         if not projects:
             return None
         _, folder, saved_type_id = max(
@@ -1165,7 +1176,7 @@ class ChatEngine:
     def _saved_projects(
         self, workspace: str, type_id: str | None = None
     ) -> list[tuple[float, Path, str]]:
-        """Return valid saved projects ordered from newest to oldest.
+        """Recognize saved projects independently of type availability.
 
         Parameters
         ----------
@@ -1177,12 +1188,10 @@ class ChatEngine:
         Returns
         -------
         list[tuple[float, Path, str]]
-            valid saved projects ordered from newest to oldest.
+            Recognized saved projects ordered from newest to oldest.
 
         """
 
-        if type_id is not None and type_id not in PROJECT_TYPE_IDS:
-            return []
         if workspace.strip():
             folders = [Path(workspace).expanduser()]
         elif self.sandbox.is_dir():
@@ -1194,6 +1203,9 @@ class ChatEngine:
         for folder in folders:
             if not folder.is_dir() or folder.is_symlink():
                 continue
+            marker = folder / ".kilin-creating"
+            if marker.exists() or marker.is_symlink():
+                continue
             profile_path = folder / "profile.ini"
             if not profile_path.is_file() or profile_path.is_symlink():
                 continue
@@ -1202,7 +1214,7 @@ class ChatEngine:
                 parser.read(profile_path, encoding="utf-8")
                 saved_type_id = parser.get("project", "type_id")
                 source_text = parser.get("project", "source")
-                if saved_type_id not in PROJECT_TYPE_IDS:
+                if not _ID_PATTERN.fullmatch(saved_type_id):
                     continue
                 if type_id is not None and saved_type_id != type_id:
                     continue
@@ -1460,8 +1472,40 @@ class ChatEngine:
         """
 
         try:
-            # Before the page knows the types, use the first one in the file.
-            type_id = type_id or next(iter(load_project_types()))
+            # Before the page knows the types, use the first available one.
+            types = load_project_types()
+            if not types:
+                self._creation_defaults = None
+                self._send(
+                    "settings", profile=None, project_types=[],
+                    project_type_error="No project types are available. "
+                    "Restore a valid project type and restart KíLín.",
+                )
+                return
+            type_items = [
+                {
+                    "type_id": item.id,
+                    "label": item.display_name,
+                    "intents": {
+                        intent_id: intent_id.replace("_", " ").capitalize()
+                        for intent_id in item.intents
+                    },
+                    "welcome_prompts": list(item.welcome_prompts),
+                    "suggestions": list(item.suggestions),
+                }
+                for item in types.values()
+            ]
+            type_id = type_id or next(iter(types))
+            if not workspace.strip() and type_id not in types:
+                self._creation_defaults = None
+                try:
+                    project_type(type_id)
+                except ValueError as error:
+                    self._send(
+                        "settings", profile=None, project_types=type_items,
+                        project_type_error=str(error),
+                    )
+                    return
             profile_path = Path(workspace).expanduser() / "profile.ini"
             profile = (
                 open_project(profile_path.parent).profile
@@ -1532,19 +1576,7 @@ class ChatEngine:
                     for backend in (BACKEND_MLX, BACKEND_TORCH)
                 },
                 source_cards=cards,
-                project_types=[
-                    {
-                        "type_id": item.id,
-                        "label": item.display_name,
-                        "intents": {
-                            intent_id: intent_id.replace("_", " ").capitalize()
-                            for intent_id in item.intents
-                        },
-                        "welcome_prompts": list(item.welcome_prompts),
-                        "suggestions": list(item.suggestions),
-                    }
-                    for item in load_project_types().values()
-                ],
+                project_types=type_items,
                 backend=choose_backend(BACKEND_AUTO),
                 installed_backends=installed_backends(),
                 supported_extensions=list(DEFAULT_EXTENSIONS),
@@ -2005,8 +2037,10 @@ class ChatEngine:
 
         switched = False
         try:
-            if type_id not in PROJECT_TYPE_IDS:
+            if not type_id:
                 raise ValueError("Choose a project type.")
+            if type_id not in project_type_ids():
+                project_type(type_id)
             settings = dict(settings or {})
             full_snapshot = settings.pop("_gui_full_snapshot", False)
             if type(full_snapshot) is not bool:
@@ -2249,6 +2283,9 @@ class ChatEngine:
                     ),
                     "behavior": project_behavior_settings(project.root),
                     "tools": project_tool_settings(project.root),
+                    "plugins": _project_plugin_snapshot(
+                        project.profile.type_id
+                    ),
                 }
             except (OSError, ValueError, TypeError, KeyError) as error:
                 self.project_trace.exception(

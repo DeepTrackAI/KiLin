@@ -7,15 +7,17 @@ loading arbitrary Python code mentioned in a project JSON. A new reader,
 project type or registered tool must preserve provenance, settings and
 workspace ownership and must not require Qt in the core. This document
 explains the implemented extension points and where modification is needed;
-there is no general-purpose runtime plugin discovery service in this
-snapshot.
+distribution and trusted user tool packages are discovered automatically
+through their descriptors, and project types through JSON definitions.
+See the [plugin API](PLUGIN_API.md#user-storage-discovery-and-validation)
+for storage, trust, and validation. Managed installation is not yet supported.
 
 | Extension | Registration / owner | Main invariant |
 | --- | --- | --- |
-| Project type | `kilin/project_types/<type_id>.json` read by `project_type.py` | Validate all intents, tools, sources and prompts before use. |
+| Project type | Distribution and user `project_types/<type_id>.json` | Validate all intents, tools, sources and prompts before use. |
 | New source format | `sources/extensions/sources_<suffix>.py`, dispatched by `sources.py` | Return well-formed `SourceFile` / `SourceUnit` records with exact provenance. |
 | Code graph language | `retrievals/code_graph/extensions/` | Extract structural hints without executing source code. |
-| Built-in tool | `tools/<name>/` plus `tools/_registry.py` | Validate settings; honor `ToolRequest`, `ToolContext`, `ToolResult`. |
+| Tool plugin | Distribution and user `tools/<name>/__init__.py` exposing `PLUGIN` | Validate settings; honor `ToolRequest`, `ToolContext`, `ToolResult`. |
 | Tool workspace asset | Tool's `workspace_resources(settings)` and `project_layout.py` | Declare safe relative destinations, install in core, preserve user edits. |
 | Model backend | `chat.py`, `embeddings.py`, `runtime.py` | Maintain validated session, tokenizer and vector/generation contracts; not a JSON-only extension. |
 | Retrieval strategy | `retrievals/strategies/` and `rag.py` integration | Preserve chunk alignment, ranking and evidence coordinates; not dynamically registered today. |
@@ -27,9 +29,11 @@ Packaged JSON files serve as examples. A new type is a
 `extensions`, `max_file_bytes`, `retrieval_instruction`, `system_prompt`,
 optional `answer_guidance`, `capabilities`, history settings, optional
 `generation` defaults, a valid `default_intent`, an `intents` object and
-optional empty-chat prompts. The
-loader derives the type ID from the filename, rejects duplicate JSON keys,
-and validates **all** type files on load.
+optional empty-chat prompts. The loader derives the type ID from the
+filename and rejects duplicate JSON keys. `schema_version` is independent of
+both the Python plugin API and the KíLín release: the supported version is
+integer `1`, also assumed when the field is omitted. New definitions should
+declare it explicitly.
 
 `capabilities` accepts `code_graph` (`true`, `false` or `"auto"`) and
 `document_headers` (`true` or `false`, default `false`). With
@@ -39,14 +43,55 @@ policy controls whether eligible scientific papers receive card
 summaries and stored vectors; it is not implied by `document_headers`.
 See [Retrieval pipeline](retrieval_pipeline.md).
 
-The registry requires at least one valid definition, with no mandatory
-type ID. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
-is the filename-derived identifier. The GUI takes its initial selection
-from the first registry entry and derives labels and welcome content from
-each definition. Adding a packaged type needs no built-in-specific branch
-or public Python constant.
-External directories accepted by `load_project_types(directory)` are for
-explicit validation; they are not automatically registered or hot-loaded.
+The runtime catalog captures the raw JSON and validated definition once per
+process, in filename order. Structural validation precedes resolution of
+required tools and validation of their settings. A malformed definition or
+unavailable required tool makes only that type unavailable. A missing or
+empty catalog does not prevent saved-workspace inspection. There is no
+mandatory type ID. `ProjectTypeId` is a string alias; IDs must start with a
+lowercase letter, contain only lowercase letters, digits, hyphens or
+underscores, and be at most 32 characters long.
+
+Use the core API to inspect the catalog:
+
+```python
+import kilin
+
+for type_id, info in kilin.project_type_catalog().items():
+    print(type_id, info.origin, info.schema_version, info.available)
+    if not info.available:
+        print(info.error)
+```
+
+Each immutable information record includes its source path, origin,
+required tool IDs (after successful structural validation), schema version
+and diagnostic. `kilin.project_type_ids()` and `load_project_types()` list
+only available types. `kilin.project_type(type_id)` and
+`kilin.project_type_raw(type_id)` return defensive copies; neither editing
+those copies nor changing the original files affects the runtime snapshot.
+Project-local behavior overrides use the same captured raw definition.
+Restart to activate changes. `load_project_types(directory)` remains a
+strict, separately cached validation operation: it rejects empty folders
+and any invalid definition and does not register them. Clearing its cache
+refreshes explicit validation, not the runtime catalog. Automatic discovery
+loads distribution definitions first and then user definitions in filename
+order. Distribution IDs take precedence. `kilin.plugins.list_project_types()`
+also includes rejected duplicate candidates; `validate_project_type()` can
+check a user JSON candidate without adding it to the runtime catalog.
+
+The GUI selects the first available type for new-project defaults. Saved
+workspaces whose type is missing or unavailable remain listed with their
+original type ID and diagnostic; neither automatic selection nor opening
+substitutes another type. Opening such a workspace fails before models are
+loaded, its files are modified, or the previous active session is released.
+The `projects` event adds `available` (boolean) and `unavailable_reason`
+(string or null) to each saved-project record. When no type is available,
+`settings` returns `profile: null`, `project_types: []`, and a
+`project_type_error` message rather than constructing a creation profile.
+An obsolete new-project selection similarly returns the available list and
+an error, allowing the GUI to request fresh defaults for a valid selection.
+Reinstall or correct the definition or its required tools and restart to
+restore availability; saved workspaces require no migration.
 
 A project type does not name the source folder: every new project uses
 `sources/`. See
@@ -103,13 +148,14 @@ entire pipeline supports its source formats or domain reasoning.
 ## Metadata contract for configurable settings
 
 Shared setting explanations belong to `kilin/settings_info.json`. Each
-registered tool must provide `settings_info.json` with one record per
+existing bundled tool provides `settings_info.json` with one record per
 normalized `SETTINGS` key from its `defaults.json`. Records have only
 `title`, `summary` and `description` and are served through KíLín's
 core `get_settings_info()` interface without importing the GUI. Values,
 validity and precedence remain owned by the existing settings parsers.
 The new metadata resource must be included in the tool package-data table
-and verified in wheel tests. See [configuration metadata](configuration.md#settings-information-explanations-not-configuration).
+and verified in wheel tests. A minimal plugin may omit help metadata. See
+[configuration metadata](configuration.md#settings-information-explanations-not-configuration).
 
 ## Source access by built-in tools
 
@@ -219,10 +265,12 @@ card representation, indexing and persistence. See
 *Figure: The tool registry, request/context contract, optional confirmation callbacks and answer persistence are explicitly owned interfaces.*
 
 The [standard tool layout](tool_packages.md#standard-tool-layout) specifies
-the package, configuration and resource files. `tools/_registry.py` pairs a
-canonical `TOOL_*` identifier with its parser, runner, optional `follows_up`
-or `follows_up_when` behavior, optional `routing` callback and optional
-`workspace_resources` callback. `routing(settings, project_root, others)`
+the package, configuration and resource files. The
+[public plugin API](PLUGIN_API.md) specifies the `Tool` descriptor exported
+as `PLUGIN` by each package. It declares its identity, versions, parser,
+runner, optional `follows_up` or `follows_up_when` behavior, optional
+`routing` callback and optional `workspace_resources` callback. The loader
+binds resources to the actual imported package. `routing(settings, project_root, others)`
 returns a `ToolRouting` (cues and router description) built from the
 project's own files, which `with_project_routing` adds to the intent before
 each question is routed (`generate_paper_summary` describes the project's
@@ -235,8 +283,9 @@ Implement an extension in this order:
    Document every owned default and supported request in its README.
 2. Reuse private shared services where semantics match; do not import an
    executable sibling tool to reuse its policy.
-3. Register the parser/runner and optional resources, then select the tool
-   in an intended project-type intent. Registration and selection differ.
+3. Export the descriptor as `PLUGIN` in the package initializer, then select
+   the tool in an intended project-type intent. Discovery is automatic;
+   registration and selection differ.
 4. Add deterministic tests under `tests/kilin/tools/<name>/test_tool.py`
    for parsing, invalid inputs, results, registry selection and optional
    resource declarations. Shared helpers have their own `_shared/` tests.
@@ -301,7 +350,8 @@ assuming reusable behavior.
 
 ## Workspace resources are declared, not blindly copied
 
-Register `workspace_resources(settings)` when a tool needs packaged files.
+Declare `workspace_resources(settings)` in the descriptor when a tool needs
+packaged files.
 It returns `WorkspaceResource` declarations; the tool does not install them.
 The [resource contract](project_workspaces.md#tool-resource-contract) owns
 package containment, safe destinations, conflict detection and preservation
@@ -353,7 +403,7 @@ an index file format.
 
 ## Tests and review checklist
 
-- Register explicitly; reject unknown tools/settings/intent references.
+- Declare the plugin explicitly; reject unknown tools/settings/intent references.
 - Validate function return types and source provenance; handle malformed
   source/LLM output without hidden retries.
 - Keep model access, source reading and filesystem work in core services.

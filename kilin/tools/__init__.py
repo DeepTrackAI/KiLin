@@ -12,10 +12,10 @@ defines their requests and results. Other shared operations reside in
 ``_shared/``. Tool packages can own their ``defaults.json``, helper
 modules, and templates. Every registered executable tool is a package.
 
-This package re-exports the contract, the planning vocabulary, the
-registry, and the names other modules use from ``batch_classify`` and
-``scan_and_list``. Other tools and helpers are reached through their own
-submodules.
+This package exposes the public tool API and planning vocabulary without
+constructing the registry. Catalog queries and legacy convenience exports
+load their definitions on demand. The plugin API version is independent
+of the application version.
 
 Key Features
 ------------
@@ -86,7 +86,42 @@ Key Features
 Module Structure
 ----------------
 
-- ``EarlierTurn``, ``ToolRequest``, ``ToolContext``, and ``ToolResult``
+- ``PLUGIN_API_VERSION``
+
+    Independent generation of the authoring contract.
+
+- ``registered_tools`` and ``tool_choices``
+
+    Explicit queries for the process-local catalog.
+
+- ``Tool``, ``ToolRouting``, and ``WorkspaceResource``
+
+    Registration, routing, and resource declarations.
+
+- ``ask_choice`` and ``confirm_plan``
+
+    Recorded user interactions.
+
+- ``selected_paths``, ``selected_source_file``, and ``save_output_file``
+
+    Source inventory, contained file lookup, and non-overwriting output.
+
+- ``partial_result``, ``IncompleteModelResponse``, ``GenerationCancelled``
+
+    Explicit model failures and partial results, separate from cancellation.
+
+- ``Chunk``, ``CodeEntity``, ``CodeGraph``, ``CodeRelation``,
+  ``HybridResult``, ``EvidenceLimits``, ``RetrievalRequest``,
+  ``RetrievalResult``, and ``Suggestion``
+
+    Data records exchanged through the tool context.
+
+- ``check_bool``, ``check_choice``, ``check_int``, and ``reject_unknown``
+
+    Settings-validation helpers.
+
+- ``EarlierTurn``, ``ToolRequest``, ``ToolContext``, ``ToolTrace``,
+  and ``ToolResult``
 
     What a tool receives and returns (from ``_contract``).
 
@@ -163,19 +198,37 @@ List and count every exact mention of the question's terms.
 
 """
 
-from kilin.tools.batch_classify import (
-    CANDIDATE_CHOICES,
-    CANDIDATES_MENTIONS,
-    UNCLEAR,
-    CandidateSource,
-    ClassifySettings,
-    Label,
+from importlib import import_module
+
+from kilin._model_completion import (
+    GenerationCancelled,
+    IncompleteModelResponse,
 )
+from kilin.chunking import Chunk
+from kilin.retrievals import CodeEntity, CodeGraph, CodeRelation, HybridResult
+from kilin.retrievals.evidence_budget import EvidenceLimits
+from kilin.retrievals.requests import RetrievalRequest, RetrievalResult
+from kilin.workspace_resources import WorkspaceResource
 from kilin.tools._contract import (
+    PLUGIN_API_VERSION,
     EarlierTurn,
+    Tool,
     ToolContext,
+    ToolName,
     ToolRequest,
+    ToolTrace,
     ToolResult,
+    ToolRouting,
+    ToolUse,
+    check_bool,
+    check_choice,
+    check_int,
+    reject_unknown,
+)
+from kilin.tools._shared.model_results import partial_result
+from kilin.tools._shared.source_access import (
+    selected_paths,
+    selected_source_file,
 )
 from kilin.tools._shared.planning import (
     CONFIRMATION_ALWAYS,
@@ -189,31 +242,50 @@ from kilin.tools._shared.planning import (
     ConfirmationPolicy,
     PlanChoice,
     ToolPlan,
+    ask_choice,
+    confirm_plan,
     needs_confirmation,
 )
 from kilin.tools._registry import (
     TOOL_BATCH_CLASSIFY,
     TOOL_BATCH_REVIEW,
-    TOOL_CHOICES,
     TOOL_GENERATE_PAPER_SUMMARY,
     TOOL_PROJECT_INVENTORY,
-    TOOL_REGISTRY,
     TOOL_SCAN_AND_LIST,
-    Tool,
-    ToolName,
-    ToolUse,
+    _tool_registry,
     parse_tool,
+    registered_tools,
     run_tool,
-)
-from kilin.tools.scan_and_list import (
-    MAX_TERMS,
-    Mention,
-    MentionScan,
-    ScanSettings,
-    scan_mentions,
+    tool_choices,
 )
 
 __all__ = [
+    "PLUGIN_API_VERSION",
+    "Chunk",
+    "CodeEntity",
+    "CodeGraph",
+    "CodeRelation",
+    "EvidenceLimits",
+    "GenerationCancelled",
+    "HybridResult",
+    "IncompleteModelResponse",
+    "RetrievalRequest",
+    "RetrievalResult",
+    "Suggestion",
+    "ToolRouting",
+    "WorkspaceResource",
+    "ask_choice",
+    "check_bool",
+    "check_choice",
+    "check_int",
+    "confirm_plan",
+    "registered_tools",
+    "partial_result",
+    "selected_paths",
+    "selected_source_file",
+    "save_output_file",
+    "reject_unknown",
+    "tool_choices",
     "CANDIDATES_MENTIONS",
     "CANDIDATE_CHOICES",
     "CONFIRMATION_ALWAYS",
@@ -247,6 +319,7 @@ __all__ = [
     "ToolName",
     "ToolPlan",
     "ToolRequest",
+    "ToolTrace",
     "ToolResult",
     "ToolUse",
     "needs_confirmation",
@@ -254,3 +327,51 @@ __all__ = [
     "run_tool",
     "scan_mentions",
 ]
+
+
+# Preserve convenience imports without importing either tool during API import.
+_LEGACY_TOOL_EXPORTS = {
+    "batch_classify": (
+        "CANDIDATE_CHOICES", "CANDIDATES_MENTIONS", "UNCLEAR",
+        "CandidateSource", "ClassifySettings", "Label",
+    ),
+    "scan_and_list": (
+        "MAX_TERMS", "Mention", "MentionScan", "ScanSettings", "scan_mentions",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Resolve catalog and executable-tool exports only on demand.
+
+    Parameters
+    ----------
+    name: str
+        Requested module attribute.
+
+    Returns
+    -------
+    object
+        The requested deferred export.
+
+    Raises
+    ------
+    AttributeError
+        If the module does not provide the requested attribute.
+
+    """
+
+    if name == "Suggestion":
+        return getattr(import_module("kilin.question_suggestions"), name)
+    if name == "save_output_file":
+        return getattr(
+            import_module("kilin.tools._shared.outputs"), name
+        )
+    if name == "TOOL_REGISTRY":
+        return _tool_registry()
+    if name == "TOOL_CHOICES":
+        return tool_choices()
+    for module, names in _LEGACY_TOOL_EXPORTS.items():
+        if name in names:
+            return getattr(import_module(f"kilin.tools.{module}"), name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 
 import kilin
 
+from ._plugin_provenance import preflight_plugins
 from .reference import _prefix_digest
 from .replay import ProgressCallback, ReplayError, ReplayResult
 from .traces import read_json, safe_path
@@ -337,9 +338,15 @@ def run_replay(experiment: Experiment, destination: str | Path | None = None,
                 retained = Experiment(target).validate()
                 return ManagedReplay(target, "retained", None, None, None,
                                      execution_provenance(target, retained))
+        # Do not move an existing replay until plugin eligibility has
+        # been established. Retaining a recording needs no live catalog.
+        try:
+            plugins = preflight_plugins(report.operations)
+        except Exception as error:
+            raise ReplayError(target, None, 0, str(error)) from error
         provenance = {"format_version": 1, "status": "running",
                       "reference": _fingerprint(report),
-                      "environment": _environment(),
+                      "environment": {**_environment(), "plugins": plugins},
                       "started_at_utc": datetime.now(timezone.utc).isoformat()}
         if target.exists():
             directory = (Path(archive_directory).expanduser() if

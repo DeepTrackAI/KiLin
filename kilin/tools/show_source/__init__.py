@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -30,8 +34,10 @@ True
 
 """
 
+from kilin.tools import Tool
+
 from kilin.tools._shared.earlier_turns import newest_listed
-from kilin.tools.show_source.tool import (
+from .tool import (
     SourceSettings,
     explain_prompt,
     parse_settings,
@@ -39,9 +45,22 @@ from kilin.tools.show_source.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "SourceSettings",
     "explain_prompt",
     "newest_listed",
     "parse_settings",
     "run",
 ]
+
+
+PLUGIN = Tool(
+    name="show_source",
+    summary="Show the sentence an earlier answer cited, with the sentences "
+    "around it, and explain it without searching again.",
+    parse_settings=parse_settings,
+    run=run,
+    follows_up=True,
+    version="1.0.0",
+    api_version=1,
+)

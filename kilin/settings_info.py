@@ -57,6 +57,7 @@ from copy import deepcopy
 from functools import lru_cache
 from importlib.resources import files
 import json
+from pathlib import Path
 
 __all__ = [
     "get_setting_info",
@@ -97,13 +98,13 @@ def _unique_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return parsed
 
 
-def _load_resource(package: str, filename: str) -> dict[str, object]:
+def _load_resource(package: str | Path, filename: str) -> dict[str, object]:
     """Parse and strictly validate one packaged settings-information file.
 
     Parameters
     ----------
-    package: str
-        Installed Python package owning the metadata.
+    package: str | pathlib.Path
+        Installed core package name or observed tool resource directory.
     filename: str
         Name of the JSON resource within that package.
 
@@ -119,7 +120,10 @@ def _load_resource(package: str, filename: str) -> dict[str, object]:
 
     """
 
-    location = files(package).joinpath(filename)
+    location = (
+        package / filename if isinstance(package, Path)
+        else files(package).joinpath(filename)
+    )
     raw = location.read_bytes()
     if len(raw) > _MAX_BYTES:
         raise ValueError(f"Settings metadata in {package} is too large.")
@@ -164,39 +168,37 @@ def _core_info() -> dict[str, object]:
 
 
 @lru_cache(maxsize=None)
-def _tool_info(name: str) -> dict[str, object]:
-    """Load one tool's descriptions and check its declared settings.
+def _read_tool_info(name: str, package: Path) -> dict[str, object]:
+    """Validate optional settings help from a specific package location.
 
     Parameters
     ----------
     name: str
-        Registered tool name.
+        Candidate tool identifier.
+    package: pathlib.Path
+        Observed package directory, independent of registry state.
 
     Returns
     -------
     dict[str, object]
-        Cached metadata keyed by normalized tool setting names.
-
-    Raises
-    ------
-    ValueError
-        If the tool is unknown or its metadata disagrees with defaults.
+        Validated descriptions, or an empty mapping when absent.
 
     """
 
-    from kilin.tools._registry import TOOL_CHOICES
-
-    if name not in TOOL_CHOICES:
-        raise ValueError(f"Unknown KíLín tool: {name}.")
-    package = f"kilin.tools.{name}"
+    if not (package / "settings_info.json").exists():
+        return {}
     settings = _load_resource(package, "settings_info.json")
-    raw = files(package).joinpath("defaults.json").read_text(
-        encoding="utf-8"
+    path = package / "defaults.json"
+    if not path.exists():
+        return settings
+    defaults = json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=_unique_pairs
     )
-    defaults = json.loads(raw, object_pairs_hook=_unique_pairs)
-    if not isinstance(defaults, dict) or not isinstance(
-        defaults.get("SETTINGS"), dict
-    ):
+    if not isinstance(defaults, dict):
+        raise ValueError(f"Invalid defaults for tool {name}.")
+    if "SETTINGS" not in defaults:
+        return settings
+    if not isinstance(defaults["SETTINGS"], dict):
         raise ValueError(f"Invalid defaults for tool {name}.")
     expected = {key.lower() for key in defaults["SETTINGS"]}
     if set(settings) != expected:
@@ -206,6 +208,35 @@ def _tool_info(name: str) -> dict[str, object]:
             f"unexpected {sorted(set(settings) - expected)}."
         )
     return settings
+
+
+
+@lru_cache(maxsize=None)
+def _tool_info(name: str) -> dict[str, object]:
+    """Resolve metadata from the registered package.
+
+    Parameters
+    ----------
+    name: str
+        Registered tool identifier.
+
+    Returns
+    -------
+    dict[str, object]
+        Descriptions, empty for absent or rejected optional user help.
+
+    """
+
+    from kilin.tools._registry import registered_tools
+
+    tools = registered_tools()
+    if name not in tools:
+        raise ValueError(f"Unknown KíLín tool: {name}.")
+    tool = tools[name]
+    info = getattr(tool, "_info", None)
+    if info is not None and info.origin == "user" and info.warnings:
+        return {}
+    return _read_tool_info(name, tool.resource_root)
 
 
 def get_tool_settings_info(name: str) -> dict[str, dict[str, str]]:
@@ -242,10 +273,10 @@ def _combined_info() -> dict[str, object]:
 
     """
 
-    from kilin.tools._registry import TOOL_CHOICES
+    from kilin.tools._registry import tool_choices
 
     settings = dict(_core_info())
-    for name in TOOL_CHOICES:
+    for name in tool_choices():
         for key, info in _tool_info(name).items():
             settings[f"tools.{name}.{key}"] = info
     return {"format": _FORMAT, "settings": settings}
@@ -296,9 +327,9 @@ def get_setting_info(key: str) -> dict[str, str] | None:
         parts = key.split(".")
         if len(parts) != 3:
             return None
-        from kilin.tools._registry import TOOL_CHOICES
+        from kilin.tools._registry import tool_choices
 
-        if parts[1] not in TOOL_CHOICES:
+        if parts[1] not in tool_choices():
             return None
         value = _tool_info(parts[1]).get(parts[2])
     else:

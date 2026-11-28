@@ -60,7 +60,7 @@ from kilin.tools._model_calls import (
     ModelCallSettings,
     load_model_call_settings,
 )
-from kilin.tools._shared.planning import CONFIRMATION_CHOICES
+from kilin.tools import CONFIRMATION_CHOICES
 
 __all__ = [
     "CALL_SECONDS",

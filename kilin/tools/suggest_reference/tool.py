@@ -107,11 +107,11 @@ from pathlib import Path
 import re
 from typing import Final
 
-from kilin.tools._shared.model_results import partial_result
+from kilin.tools import partial_result
 from kilin.chunking import Chunk
 from kilin.retrievals.evidence_budget import EvidenceLimits
 from kilin.retrievals.requests import RetrievalRequest
-from kilin.tools._contract import (
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -136,7 +136,7 @@ from kilin.tools._shared.claims import (
     quote_line_range,
     verdict_label,
 )
-from kilin.tools._shared.planning import (
+from kilin.tools import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
@@ -144,7 +144,7 @@ from kilin.tools._shared.planning import (
     ToolPlan,
     confirm_plan,
 )
-from kilin.tools.suggest_reference import _configuration as _config
+from . import _configuration as _config
 from kilin.tools._shared._rating import (
     citation_suitability,
     suitability_stars,

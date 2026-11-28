@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 
 from kilin.conversation_memory.feedback import FeedbackStore
 
+from ._plugin_provenance import compare_plugins, preflight_plugins
 from ._replay_interactions import InteractionReplay
 from ._replay_sources import SourceReplay
 from .timeline import TimelineOperation, build_timeline, one
@@ -314,13 +315,53 @@ def _configuration_differences(
             # path and the behavior editor's project ID are not settings.
             if event_type == "gui.project.configuration.effective":
                 for values in (first, second):
+                    values.pop("plugins", None)
                     if isinstance(values.get("behavior"), dict):
                         values["behavior"].pop("project", None)
             elif event_type == "turn.settings.snapshot":
-                first.pop("source", None)
-                second.pop("source", None)
+                for values in (first, second):
+                    values.pop("source", None)
+                    values.pop("project_type_plugin", None)
             changes.extend(_differences(before.start_sequence, field,
                                         first, second))
+    return changes
+
+
+def _plugin_differences(
+    original: tuple[TimelineOperation, ...],
+    reproduced: tuple[TimelineOperation, ...],
+) -> list[ReplayDifference]:
+    """Report observed identity changes separately from setting changes.
+
+    Parameters
+    ----------
+    original: tuple[TimelineOperation, ...]
+        Reference operations.
+    reproduced: tuple[TimelineOperation, ...]
+        Complete or partial replay operations in command order.
+
+    Returns
+    -------
+    list[ReplayDifference]
+        Known differences in the common command prefix. Missing historical
+        identities are not inferred differences; comparison reports retain
+        their explicit unknown status.
+
+    """
+
+    changes = []
+    for before, after in zip(original, reproduced):
+        if before.kind != after.kind:
+            break
+        for pair in compare_plugins(before, after):
+            if pair["status"] == "changed":
+                field = ".".join(("plugins", pair["scope"], pair["kind"],
+                                  pair["name"]))
+                changes.extend(_differences(
+                    before.start_sequence, field,
+                    pair["original"]["identity"],
+                    pair["replayed"]["identity"],
+                ))
     return changes
 
 
@@ -807,6 +848,7 @@ def replay(experiment: Experiment, destination: str | Path | None = None,
     report.raise_for_errors()
     operations = report.operations
     try:
+        preflight_plugins(operations)
         sources = SourceReplay(root, operations)
         runner = _Runner(target, operations, sources)
     except Exception as error:
@@ -822,6 +864,9 @@ def replay(experiment: Experiment, destination: str | Path | None = None,
                 runner.differences.extend(_configuration_differences(
                     operations, partial
                 ))
+                runner.differences.extend(_plugin_differences(
+                    operations, partial
+                ))
             except Exception as inspection:
                 error.add_note(f"Partial inspection failed: {inspection!r}")
         raise ReplayError(target, runner.sequence, runner.completed,
@@ -830,6 +875,9 @@ def replay(experiment: Experiment, destination: str | Path | None = None,
 
     validation = Experiment(target).validate()
     runner.differences.extend(_configuration_differences(
+        operations, validation.operations
+    ))
+    runner.differences.extend(_plugin_differences(
         operations, validation.operations
     ))
     if (not validation.valid or [op.kind for op in validation.operations] !=

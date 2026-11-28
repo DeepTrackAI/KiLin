@@ -64,7 +64,7 @@ from dataclasses import dataclass
 import re
 from typing import Final
 
-from kilin.tools.writing_check._document import Document, Paragraph, Section
+from ._document import Document, Paragraph, Section
 
 __all__ = [
     "Scope",

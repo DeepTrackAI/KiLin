@@ -58,6 +58,10 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/huggingface.py`](../kilin/huggingface.py) | Inspect and reuse Hugging Face's model cache. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
 | [`kilin/model_defaults.py`](../kilin/model_defaults.py) | Define shared model purposes and default model identifiers. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
 | [`kilin/model_settings.py`](../kilin/model_settings.py) | Resolve and persist auxiliary model settings in the KíLín core. | [Model management](model_management.md) | [Core tests](../tests/kilin/test_model_settings.py) |
+| [`kilin/plugins/__init__.py`](../kilin/plugins/__init__.py) | Expose headless plugin inspection and validation. | [Plugin API](PLUGIN_API.md) | [Plugin tests](../tests/kilin/test__user_plugins.py) |
+| [`kilin/plugins/_discovery.py`](../kilin/plugins/_discovery.py) | Load trusted source packages and capture portable identity. | [Plugin API](PLUGIN_API.md) | [Plugin tests](../tests/kilin/test__user_plugins.py) |
+| [`kilin/plugins/_paths.py`](../kilin/plugins/_paths.py) | Resolve and capture user-level plugin storage. | [Plugin API](PLUGIN_API.md) | [Plugin tests](../tests/kilin/test__user_plugins.py) |
+| [`kilin/plugins/_validation.py`](../kilin/plugins/_validation.py) | Check candidate packages in a disposable interpreter. | [Plugin API](PLUGIN_API.md) | [Plugin tests](../tests/kilin/test__user_plugins.py) |
 | [`kilin/project.py`](../kilin/project.py) | Create and open project workspaces independently of the GUI. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
 | [`kilin/project_files.py`](../kilin/project_files.py) | Manage project-owned outputs and templates independently of the GUI. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
 | [`kilin/settings_info.py`](../kilin/settings_info.py) | Read and validate shared and tool-owned setting descriptions without GUI dependencies. | [Configuration](configuration.md) | [Metadata tests](../tests/kilin/test_settings_info.py) |
@@ -215,6 +219,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tool_settings.py`](../kilin/tool_settings.py) | List and change the tool settings of one KíLín project. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
 | [`kilin/system_testing/__init__.py`](../kilin/system_testing/__init__.py) | Expose experiment inspection, validation, replay, and comparison records. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/experiment.py`](../kilin/system_testing/experiment.py) | Represent, inspect, replay, and compare recorded workspaces. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
+| [`kilin/system_testing/_plugin_provenance.py`](../kilin/system_testing/_plugin_provenance.py) | Decode historical plugin identities and preflight fresh replay requirements. | [Plugin API](PLUGIN_API.md) | [Plugin provenance tests](../tests/kilin/system_testing/test__plugin_provenance.py) |
 | [`kilin/system_testing/replay.py`](../kilin/system_testing/replay.py) | Execute validated chronological commands and map their outcomes. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/_replay_sources.py`](../kilin/system_testing/_replay_sources.py) | Plan historical source selections and verify reproduced inventories. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
 | [`kilin/system_testing/_replay_interactions.py`](../kilin/system_testing/_replay_interactions.py) | Match recorded responses against live prompts without guessing. | [System testing](system_testing.md) | [System tests](../tests/kilin/system_testing/) |
@@ -250,6 +255,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | GUI architecture | 11 |
 | Model management | 8 |
 | Per-tool README | 59 |
+| Plugin API | 5 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 32 |
 | Source pipeline | 23 |
@@ -259,7 +265,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Trace architecture | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 215.**
+**Total production Python modules: 220.**
 
 ## Non-Python resources and UI assets
 

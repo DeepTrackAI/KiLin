@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -30,7 +34,9 @@ True
 
 """
 
-from kilin.tools.batch_classify.tool import (
+from kilin.tools import Tool
+
+from .tool import (
     CANDIDATES_MENTIONS,
     CANDIDATE_CHOICES,
     UNCLEAR,
@@ -51,6 +57,7 @@ from kilin.tools.batch_classify.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "CANDIDATES_MENTIONS",
     "CANDIDATE_CHOICES",
     "UNCLEAR",
@@ -69,3 +76,14 @@ __all__ = [
     "quick_sample",
     "validated_categories",
 ]
+
+
+PLUGIN = Tool(
+    name="batch_classify",
+    summary="Sort every exact mention into categories with the answering "
+    "model, and count each category.",
+    parse_settings=parse_settings,
+    run=run,
+    version="1.0.0",
+    api_version=1,
+)
