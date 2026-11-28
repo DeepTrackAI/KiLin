@@ -61,7 +61,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from kilin.tools.reference_check._matching import first_author
+from ._matching import first_author
 
 __all__ = [
     "LookupPermission",

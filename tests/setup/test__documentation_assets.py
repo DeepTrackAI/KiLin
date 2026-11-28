@@ -447,23 +447,19 @@ class TestDocumentationContracts(unittest.TestCase):
     def test_registered_tools_have_linked_local_references(self) -> None:
         """Check registry keys, package defaults and documentation together."""
 
-        path = ROOT / "kilin/tools/_registry.py"
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        builder = next(
-            node for node in tree.body
-            if isinstance(node, ast.FunctionDef)
-            and node.name == "_build_tool_registry"
-        )
-        returns = [node for node in builder.body
-                   if isinstance(node, ast.Return)]
-        self.assertEqual(len(returns), 1)
-        registry = returns[0].value
-        self.assertIsInstance(registry, ast.Dict)
         document = (DOCS / "module_map.md").read_text(encoding="utf-8")
         names = set()
-        for key in registry.keys:
-            self.assertIsInstance(key, ast.Name)
-            name = ast.literal_eval(_assignment(path, key.id))
+        for path in sorted((ROOT / "kilin/tools").glob("*/__init__.py")):
+            if path.parent.name.startswith("_"):
+                continue
+            descriptor = _assignment(path, "PLUGIN")
+            self.assertIsInstance(descriptor, ast.Call)
+            self.assertIsInstance(descriptor.func, ast.Name)
+            self.assertEqual(descriptor.func.id, "Tool")
+            keywords = {item.arg: item.value for item in descriptor.keywords}
+            name = ast.literal_eval(keywords["name"])
+            self.assertEqual(name, path.parent.name)
+            self.assertNotIn(name, names)
             names.add(name)
             with self.subTest(tool=name):
                 package = ROOT / "kilin/tools" / name

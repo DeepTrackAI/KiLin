@@ -69,7 +69,7 @@ from kilin.tools._shared.report_templates import (
     ReportTemplate,
     TemplateSection,
 )
-from kilin.tools.project_summary._documents import ProjectDocument
+from ._documents import ProjectDocument
 
 __all__ = [
     "CHECK_NO",

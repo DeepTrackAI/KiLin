@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -29,6 +33,8 @@ Examples
 True
 
 """
+
+from kilin.tools import Tool
 
 from kilin.tools._shared.mentions import (
     Mention,
@@ -51,7 +57,7 @@ from kilin.tools._shared.terms import (
     validated_document,
     validated_terms,
 )
-from kilin.tools.scan_and_list.tool import (
+from .tool import (
     ScanSettings,
     mention_report,
     parse_settings,
@@ -60,6 +66,7 @@ from kilin.tools.scan_and_list.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "MAX_TERMS",
     "Mention",
     "MentionCollection",
@@ -83,3 +90,13 @@ __all__ = [
     "validated_document",
     "validated_terms",
 ]
+
+
+PLUGIN = Tool(
+    name="scan_and_list",
+    summary="List and count every exact mention of the question's terms.",
+    parse_settings=parse_settings,
+    run=run,
+    version="1.0.0",
+    api_version=1,
+)

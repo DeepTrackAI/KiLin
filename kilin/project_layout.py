@@ -66,13 +66,12 @@ Examples
 from __future__ import annotations
 
 from dataclasses import dataclass
-from importlib.resources import files
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 from typing import Final
 
 from kilin.project_type import project_type
-from kilin.tools._registry import registered_tools
+from kilin.tools import Tool, registered_tools
 from kilin.workspace_resources import (
     OUTPUTS_FOLDER,
     PROJECT_SOURCES_DIRECTORY,
@@ -181,15 +180,15 @@ def _validated_source(source: Path) -> Path:
     return path.resolve(strict=True)
 
 
-def _tool_owned_source(source: Path, tool_name: str) -> Path:
+def _tool_owned_source(source: Path, tool: Tool) -> Path:
     """Require a declared file to belong to its registered tool package.
 
     Parameters
     ----------
     source: pathlib.Path
         Packaged file declared by the tool.
-    tool_name: str
-        Registered name of the declaring executable tool.
+    tool: Tool
+        Registered declaring tool with its loader-assigned resource root.
 
     Returns
     -------
@@ -204,10 +203,10 @@ def _tool_owned_source(source: Path, tool_name: str) -> Path:
     """
 
     path = _validated_source(source)
-    package = Path(files(f"kilin.tools.{tool_name}")).resolve()
+    package = tool.resource_root
     if not path.is_relative_to(package):
         raise ValueError(
-            f"Tool {tool_name!r} declared a resource outside "
+            f"Tool {tool.name!r} declared a resource outside "
             f"its package: {source}"
         )
     return path
@@ -240,12 +239,13 @@ def plan_project_layout(type_id: str) -> ProjectLayout:
         use = intent.tool
         if use is None:
             continue
-        declaration = registered_tools()[use.name].workspace_resources
+        tool = registered_tools()[use.name]
+        declaration = tool.workspace_resources
         if declaration is None:
             continue
         for resource in declaration(use.settings):
             destination = _safe_destination(resource.destination)
-            source = _tool_owned_source(resource.source, use.name)
+            source = _tool_owned_source(resource.source, tool)
             key = destination.as_posix()
             old = resources.get(key)
             if old is not None and old.source != source:

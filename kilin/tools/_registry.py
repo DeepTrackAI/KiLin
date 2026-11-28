@@ -9,9 +9,9 @@ The registry is constructed on first access, not during module import.
 A tool may also declare resources to install in newly created projects;
 the core resolves and copies them, not the GUI.
 
-Adding a tool means providing a package with a settings
-dataclass, ``parse_settings(data, where)``, and ``run(settings, request,
-context)`` (see ``kilin.tools._contract``), then adding it here. A tool
+Each bundled tool is a package exposing a ``PLUGIN`` descriptor with
+its own settings parser and runner (see ``kilin.tools._contract``).
+Discovery binds the descriptor to the package actually loaded. A tool
 marked ``follows_up`` works on an earlier answer, so routing relates a
 question sent to it to an earlier turn even when the router named none;
 one with ``follows_up_when`` does so only for the questions it accepts.
@@ -25,8 +25,8 @@ Key Features
 
 - **Registry**
 
-    One entry per tool with its summary, parser, runner, and optional
-    packaged workspace resources.
+    Discover each public package, validate its descriptor and bind its
+    observed package root before publishing the registry.
 
 - **Configuration**
 
@@ -89,10 +89,16 @@ Examples
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from importlib import import_module
+import json
+from pathlib import Path
+import re
 from threading import RLock
-from types import MappingProxyType
+from types import MappingProxyType, ModuleType
 from typing import Final
 
+from kilin.tools._defaults import load_tool_defaults, require_section
 from kilin.tools._contract import (
     PLUGIN_API_VERSION,
     Tool,
@@ -165,6 +171,27 @@ _BUILTIN_TOOL_ORDER: Final[tuple[ToolName, ...]] = (
 )
 
 
+# Preserve the historical mapping iteration order separately from chooser
+# order. Neither preference list controls which packages are discovered.
+_BUILTIN_REGISTRY_ORDER: Final[tuple[ToolName, ...]] = (
+    TOOL_PROJECT_INVENTORY,
+    TOOL_SCAN_AND_LIST,
+    TOOL_BATCH_CLASSIFY,
+    TOOL_BATCH_REVIEW,
+    TOOL_FILTER_RESULTS,
+    TOOL_FIND_FACT,
+    TOOL_FIND_PASSAGES,
+    TOOL_PAPER_OVERVIEW,
+    TOOL_REFERENCE_CHECK,
+    TOOL_SUGGEST_REFERENCE,
+    TOOL_WRITING_CHECK,
+    TOOL_ASSISTANT_GUIDE,
+    TOOL_SHOW_SOURCE,
+    TOOL_GENERATE_PAPER_SUMMARY,
+    TOOL_PROJECT_SUMMARY,
+)
+
+
 # Construct the registry only when a consumer explicitly needs it. The lock
 # prevents concurrent first accesses from publishing different registries.
 _REGISTRY_LOCK = RLock()
@@ -172,151 +199,174 @@ _registry: dict[ToolName, Tool] | None = None
 _initializing = False
 
 
+@dataclass(frozen=True, slots=True)
+class _RegisteredTool(Tool):
+    """Bind an authoring descriptor to a loader-observed package.
+
+    Attributes
+    ----------
+    _package_root: pathlib.Path
+        Resolved directory of the imported package. It is not supplied
+        by the descriptor and is retained when replacing test callbacks.
+
+    """
+
+    _package_root: Path = field(kw_only=True, repr=False)
+
+    @property
+    def resource_root(self) -> Path:
+        """Return the observed root of the registered package.
+
+        Returns
+        -------
+        pathlib.Path
+            Absolute directory for owned configuration and assets.
+
+        """
+
+        return self._package_root
+
+
+def _validate_descriptor(name: str, tool: object) -> None:
+    """Validate the identity and declared contract of a plugin.
+
+    Parameters
+    ----------
+    name: str
+        Expected tool identifier, from the package directory.
+    tool: object
+        Candidate descriptor exported by the package.
+
+    Raises
+    ------
+    ValueError
+        If its type, identity, version or callable declarations are invalid.
+
+    """
+
+    if not isinstance(tool, Tool):
+        raise ValueError(f"Tool {name!r} must export a Tool as PLUGIN.")
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", name) or tool.name != name:
+        raise ValueError(f"Tool {name!r} has invalid descriptor identity.")
+    if (
+        type(tool.api_version) is not int
+        or tool.api_version != PLUGIN_API_VERSION
+    ):
+        raise ValueError(
+            f"Tool {name!r} declares plugin API version "
+            f"{tool.api_version!r}; supported version is "
+            f"{PLUGIN_API_VERSION}."
+        )
+    for key in ("summary", "version"):
+        value = getattr(tool, key)
+        if (
+            not isinstance(value, str) or not value.strip()
+            or value != value.strip()
+        ):
+            raise ValueError(f"Tool {name!r} has invalid {key}.")
+    if type(tool.follows_up) is not bool:
+        raise ValueError(f"Tool {name!r} has invalid follows_up.")
+    for key in ("parse_settings", "run"):
+        if not callable(getattr(tool, key)):
+            raise ValueError(f"Tool {name!r} requires callable {key}.")
+    for key in ("follows_up_when", "routing", "workspace_resources"):
+        value = getattr(tool, key)
+        if value is not None and not callable(value):
+            raise ValueError(f"Tool {name!r} has invalid {key}.")
+
+
+def _register_tool(module: ModuleType, directory: Path) -> Tool:
+    """Bind and validate a descriptor from an already imported package.
+
+    Parameters
+    ----------
+    module: types.ModuleType
+        Imported trusted Python package exposing ``PLUGIN``.
+    directory: pathlib.Path
+        Candidate package directory selected by the loader, not the plugin.
+
+    Returns
+    -------
+    Tool
+        A descriptor bound to its actual resource directory.
+
+    Raises
+    ------
+    ValueError
+        If the package origin, descriptor or declared defaults are invalid.
+
+    """
+
+    directory = directory.resolve()
+    location = getattr(module, "__file__", None)
+    if (
+        not location or Path(location).resolve() != directory / "__init__.py"
+    ):
+        raise ValueError(f"Tool {directory.name!r} has unexpected origin.")
+    name = directory.name
+    descriptor = getattr(module, "PLUGIN", None)
+    _validate_descriptor(name, descriptor)
+    # Copy only authoring fields, never ownership supplied by a descriptor.
+    tool = _RegisteredTool(
+        **{
+            item.name: getattr(descriptor, item.name) for item in fields(Tool)
+        },
+        _package_root=directory,
+    )
+    # Validate only declared defaults. A tool with required settings need
+    # not accept an empty mapping before a project type configures it.
+    path = directory / "defaults.json"
+    if path.exists():
+        defaults = load_tool_defaults(path)
+        if "SETTINGS" in defaults:
+            data = require_section(defaults, "SETTINGS", name)
+            normalized = {key.lower(): value for key, value in data.items()}
+            if len(normalized) != len(data):
+                raise ValueError(f"Tool {name!r} has duplicate settings.")
+            settings = tool.parse_settings(normalized, f"{name}.defaults")
+            if not is_dataclass(settings) or isinstance(settings, type):
+                raise ValueError(
+                    f"Tool {name!r} settings must be a dataclass."
+                )
+            try:
+                json.dumps(asdict(settings), allow_nan=False)
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"Tool {name!r} settings must be JSON-compatible."
+                ) from error
+    # Validate supplied model policies at registration, without requiring
+    # a policy or help file for deterministic, settings-free plugins.
+    _ = tool.model_calls
+    return tool
+
+
 def _build_tool_registry() -> dict[ToolName, Tool]:
-    """Build the existing bundled registry without import-time execution.
+    """Discover the bundled tool packages and register their descriptors.
 
     Returns
     -------
     dict[ToolName, Tool]
-        Tool definitions in their established registration order.
+        Tool definitions in their established registration order, followed
+        by newly distributed packages in alphabetical order.
+
+    Raises
+    ------
+    ValueError
+        If a public bundled package cannot be registered.
 
     """
 
-    from kilin.tools import (
-        assistant_guide,
-        batch_classify,
-        batch_review,
-        filter_results,
-        find_fact,
-        find_passages,
-        generate_paper_summary,
-        paper_overview,
-        project_inventory,
-        project_summary,
-        reference_check,
-        scan_and_list,
-        show_source,
-        suggest_reference,
-        writing_check,
-    )
-
-    return {
-        TOOL_PROJECT_INVENTORY: Tool(
-            TOOL_PROJECT_INVENTORY,
-            "Count and list the project's files by type and folder, with "
-            "which have searchable text.",
-            project_inventory.parse_settings,
-            project_inventory.run,
-        ),
-        TOOL_SCAN_AND_LIST: Tool(
-            TOOL_SCAN_AND_LIST,
-            "List and count every exact mention of the question's terms.",
-            scan_and_list.parse_settings,
-            scan_and_list.run,
-        ),
-        TOOL_BATCH_CLASSIFY: Tool(
-            TOOL_BATCH_CLASSIFY,
-            "Sort every exact mention into categories with the answering "
-            "model, and count each category.",
-            batch_classify.parse_settings,
-            batch_classify.run,
-        ),
-        TOOL_BATCH_REVIEW: Tool(
-            TOOL_BATCH_REVIEW,
-            "Read one whole document in parts, taking notes with passage "
-            "numbers, then answer from the notes.",
-            batch_review.parse_settings,
-            batch_review.run,
-        ),
-        TOOL_FILTER_RESULTS: Tool(
-            TOOL_FILTER_RESULTS,
-            "Judge each item an earlier answer listed and keep those that "
-            "match a follow-up.",
-            filter_results.parse_settings,
-            filter_results.run,
-            follows_up=True,
-        ),
-        TOOL_FIND_FACT: Tool(
-            TOOL_FIND_FACT,
-            "Find a specific fact in one paper or every paper by reading "
-            "every passage; the user can choose a quick answer instead.",
-            find_fact.parse_settings,
-            find_fact.run,
-        ),
-        TOOL_FIND_PASSAGES: Tool(
-            TOOL_FIND_PASSAGES,
-            "Read every sentence in scope and list the ones about a topic, "
-            "copied word for word.",
-            find_passages.parse_settings,
-            find_passages.run,
-        ),
-        TOOL_PAPER_OVERVIEW: Tool(
-            TOOL_PAPER_OVERVIEW,
-            "Summarize one paper in the chat; ask which paper when it is "
-            "unclear.",
-            paper_overview.parse_settings,
-            paper_overview.run,
-        ),
-        TOOL_REFERENCE_CHECK: Tool(
-            TOOL_REFERENCE_CHECK,
-            "Check one paper's reference list against the project's files, "
-            "find where each reference is cited, optionally check claims, "
-            "and give offline or explicitly authorized online links for "
-            "missing works; save the report to outputs/.",
-            reference_check.parse_settings,
-            reference_check.run,
-        ),
-        TOOL_SUGGEST_REFERENCE: Tool(
-            TOOL_SUGGEST_REFERENCE,
-            "Find the papers in the project that could be cited for a "
-            "statement, judging each with a quote from its own passages.",
-            suggest_reference.parse_settings,
-            suggest_reference.run,
-        ),
-        TOOL_WRITING_CHECK: Tool(
-            TOOL_WRITING_CHECK,
-            "Check the grammar and style of one document or part of it, "
-            "paragraph by paragraph, and suggest changes without making them; "
-            "save the report to outputs/.",
-            writing_check.parse_settings,
-            writing_check.run,
-            follows_up_when=writing_check.asks_rewrite,
-        ),
-        TOOL_ASSISTANT_GUIDE: Tool(
-            TOOL_ASSISTANT_GUIDE,
-            "Answer what KíLín can do with one ready-to-send example question "
-            "per kind of request, about the project's own files.",
-            assistant_guide.parse_settings,
-            assistant_guide.run,
-        ),
-        TOOL_SHOW_SOURCE: Tool(
-            TOOL_SHOW_SOURCE,
-            "Show the sentence an earlier answer cited, with the sentences "
-            "around it, and explain it without searching again.",
-            show_source.parse_settings,
-            show_source.run,
-            follows_up=True,
-        ),
-        TOOL_GENERATE_PAPER_SUMMARY: Tool(
-            TOOL_GENERATE_PAPER_SUMMARY,
-            "Summarize one paper with a report template, check the structure, "
-            "and save the Markdown to outputs/.",
-            generate_paper_summary.parse_settings,
-            generate_paper_summary.run,
-            routing=generate_paper_summary.routing,
-            workspace_resources=generate_paper_summary.workspace_resources,
-        ),
-        TOOL_PROJECT_SUMMARY: Tool(
-            TOOL_PROJECT_SUMMARY,
-            "Write one report on all the documents of a project with a "
-            "project template, reading every document, and save it to "
-            "outputs/.",
-            project_summary.parse_settings,
-            project_summary.run,
-            routing=project_summary.routing,
-            workspace_resources=project_summary.workspace_resources,
-        ),
-    }
+    entries = {}
+    for directory in sorted(Path(__file__).parent.iterdir()):
+        name = directory.name
+        if name.startswith("_") or not (directory / "__init__.py").is_file():
+            continue
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
+            raise ValueError(f"Invalid bundled tool package: {name!r}.")
+        module = import_module(f"kilin.tools.{name}")
+        entries[name] = _register_tool(module, directory)
+    order = (*_BUILTIN_REGISTRY_ORDER, *entries)
+    return {name: entries[name] for name in order if name in entries}
 
 
 def _tool_registry() -> dict[ToolName, Tool]:
@@ -345,15 +395,7 @@ def _tool_registry() -> dict[ToolName, Tool]:
             try:
                 entries = _build_tool_registry()
                 for name, tool in entries.items():
-                    if (
-                        type(tool.api_version) is not int
-                        or tool.api_version != PLUGIN_API_VERSION
-                    ):
-                        raise ValueError(
-                            f"Tool {name!r} declares plugin API version "
-                            f"{tool.api_version!r}; supported version is "
-                            f"{PLUGIN_API_VERSION}."
-                        )
+                    _validate_descriptor(name, tool)
                 _registry = entries
             finally:
                 _initializing = False

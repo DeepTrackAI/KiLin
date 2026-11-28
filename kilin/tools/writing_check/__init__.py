@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -45,8 +49,10 @@ True
 
 """
 
-from kilin.tools.writing_check._followup import asks_rewrite
-from kilin.tools.writing_check.tool import (
+from kilin.tools import Tool
+
+from ._followup import asks_rewrite
+from .tool import (
     WritingCheckSettings,
     chat_answer,
     parse_settings,
@@ -55,6 +61,7 @@ from kilin.tools.writing_check.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "WritingCheckSettings",
     "asks_rewrite",
     "chat_answer",
@@ -62,3 +69,16 @@ __all__ = [
     "report_markdown",
     "run",
 ]
+
+
+PLUGIN = Tool(
+    name="writing_check",
+    summary="Check the grammar and style of one document or part of it, "
+    "paragraph by paragraph, and suggest changes without making them; "
+    "save the report to outputs/.",
+    parse_settings=parse_settings,
+    run=run,
+    follows_up_when=asks_rewrite,
+    version="1.0.0",
+    api_version=1,
+)

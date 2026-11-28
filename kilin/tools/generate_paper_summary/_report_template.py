@@ -72,7 +72,7 @@ from kilin.tools._shared.report_templates import (
     count_words,
     template_names,
 )
-from kilin.tools.generate_paper_summary._configuration import (
+from ._configuration import (
     LIMIT_TOLERANCE as _CONFIG_LIMIT_TOLERANCE,
     MIN_TOTAL_WORDS,
 )

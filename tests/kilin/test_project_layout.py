@@ -13,6 +13,7 @@ before installation.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -99,7 +100,10 @@ class TestProjectLayout(unittest.TestCase):
 
         """
 
-        tool = SimpleNamespace(workspace_resources=lambda _: resources)
+        tool = replace(
+            TOOL_REGISTRY["generate_paper_summary"],
+            workspace_resources=lambda _: resources,
+        )
         definition = SimpleNamespace(
             intents={
                 "example": SimpleNamespace(

@@ -69,11 +69,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from kilin.tools._shared.model_results import partial_result
+from kilin.tools import partial_result
 from kilin._model_completion import IncompleteModelResponse
 from kilin.retrievals.document_reading import estimate_tokens
-from kilin.tools.filter_results import _configuration as _config
-from kilin.tools._contract import (
+from . import _configuration as _config
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,

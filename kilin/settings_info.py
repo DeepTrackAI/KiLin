@@ -57,6 +57,7 @@ from copy import deepcopy
 from functools import lru_cache
 from importlib.resources import files
 import json
+from pathlib import Path
 
 __all__ = [
     "get_setting_info",
@@ -97,13 +98,13 @@ def _unique_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return parsed
 
 
-def _load_resource(package: str, filename: str) -> dict[str, object]:
+def _load_resource(package: str | Path, filename: str) -> dict[str, object]:
     """Parse and strictly validate one packaged settings-information file.
 
     Parameters
     ----------
-    package: str
-        Installed Python package owning the metadata.
+    package: str | pathlib.Path
+        Installed core package name or observed tool resource directory.
     filename: str
         Name of the JSON resource within that package.
 
@@ -119,7 +120,10 @@ def _load_resource(package: str, filename: str) -> dict[str, object]:
 
     """
 
-    location = files(package).joinpath(filename)
+    location = (
+        package / filename if isinstance(package, Path)
+        else files(package).joinpath(filename)
+    )
     raw = location.read_bytes()
     if len(raw) > _MAX_BYTES:
         raise ValueError(f"Settings metadata in {package} is too large.")
@@ -175,7 +179,8 @@ def _tool_info(name: str) -> dict[str, object]:
     Returns
     -------
     dict[str, object]
-        Cached metadata keyed by normalized tool setting names.
+        Cached metadata keyed by normalized tool setting names, or an
+        empty mapping when the tool supplies no help file.
 
     Raises
     ------
@@ -184,19 +189,26 @@ def _tool_info(name: str) -> dict[str, object]:
 
     """
 
-    from kilin.tools._registry import tool_choices
+    from kilin.tools._registry import registered_tools
 
-    if name not in tool_choices():
+    tools = registered_tools()
+    if name not in tools:
         raise ValueError(f"Unknown KíLín tool: {name}.")
-    package = f"kilin.tools.{name}"
+    package = tools[name].resource_root
+    if not (package / "settings_info.json").exists():
+        return {}
     settings = _load_resource(package, "settings_info.json")
-    raw = files(package).joinpath("defaults.json").read_text(
-        encoding="utf-8"
+    path = package / "defaults.json"
+    if not path.exists():
+        return settings
+    defaults = json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=_unique_pairs
     )
-    defaults = json.loads(raw, object_pairs_hook=_unique_pairs)
-    if not isinstance(defaults, dict) or not isinstance(
-        defaults.get("SETTINGS"), dict
-    ):
+    if not isinstance(defaults, dict):
+        raise ValueError(f"Invalid defaults for tool {name}.")
+    if "SETTINGS" not in defaults:
+        return settings
+    if not isinstance(defaults["SETTINGS"], dict):
         raise ValueError(f"Invalid defaults for tool {name}.")
     expected = {key.lower() for key in defaults["SETTINGS"]}
     if set(settings) != expected:

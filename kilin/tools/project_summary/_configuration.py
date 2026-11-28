@@ -66,7 +66,7 @@ from kilin.tools._model_calls import (
     ModelCallSettings,
     load_model_call_settings,
 )
-from kilin.tools._shared.planning import CONFIRMATION_CHOICES
+from kilin.tools import CONFIRMATION_CHOICES
 from kilin.tools._shared.report_templates import TemplateRules
 
 __all__ = [

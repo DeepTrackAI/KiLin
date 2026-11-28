@@ -110,7 +110,7 @@ from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 from kilin.tools._defaults import load_tool_defaults
 from kilin.tools._model_calls import (
     ModelCallSettings,
-    load_model_call_settings,
+    load_optional_model_call_settings,
 )
 from kilin.workspace_resources import WorkspaceResource
 
@@ -504,12 +504,15 @@ class Tool:
         the settings of the project type's other intents using the same
         tool, whose cases the routing can leave to them.
     model_calls: ModelCallSettings
-        Tool-owned policy for internal answering-model calls.
+        Tool-owned policy for internal answering-model calls, available
+        after registration. Absent policies inherit the session.
+    resource_root: pathlib.Path
+        Package directory assigned by the registry, not by the author.
     workspace_resources: Callable | None
         Optional declaration of packaged resources for a new project.
     version: str
-        Independent version of the tool. Defaults to ``"1.0.0"`` for
-        the existing bundled tools during their migration.
+        Independent version of the tool. Declare it explicitly in a plugin;
+        the constructor default is ``"1.0.0"``.
     api_version: int
         Plugin API generation implemented by the tool. Defaults to
         ``1``; this declaration is checked during registration.
@@ -533,6 +536,24 @@ class Tool:
     api_version: int = field(default=1, kw_only=True)
 
     @property
+    def resource_root(self) -> Path:
+        """Return the package root assigned by the registry.
+
+        Returns
+        -------
+        pathlib.Path
+            Absolute directory containing this registered tool's resources.
+
+        Raises
+        ------
+        RuntimeError
+            If the descriptor has not been bound to an installed package.
+
+        """
+
+        raise RuntimeError(f"Tool {self.name!r} is not registered.")
+
+    @property
     def model_calls(self) -> ModelCallSettings:
         """Return the registered tool's validated internal thinking policy.
 
@@ -543,8 +564,8 @@ class Tool:
 
         """
 
-        return load_model_call_settings(
-            Path(__file__).parent / self.name / "defaults.json"
+        return load_optional_model_call_settings(
+            self.resource_root / "defaults.json"
         )
 
     @property
@@ -561,7 +582,7 @@ class Tool:
 
         """
 
-        path = Path(__file__).parent / self.name / "defaults.json"
+        path = self.resource_root / "defaults.json"
         if not path.is_file():
             return {}
         defaults = load_tool_defaults(path)

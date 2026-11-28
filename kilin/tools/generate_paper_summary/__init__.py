@@ -24,6 +24,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``SummarySettings``, ``parse_settings``, ``run`` and
   ``workspace_resources``
 
@@ -46,7 +50,9 @@ Examples
 
 """
 
-from kilin.tools.generate_paper_summary._report_template import (
+from kilin.tools import Tool
+
+from ._report_template import (
     LIMIT_TOLERANCE,
     SECTION_SOURCE_CHOICES,
     SECTION_SOURCE_CITATION,
@@ -65,7 +71,7 @@ from kilin.tools.generate_paper_summary._report_template import (
     section_problem,
     template_names,
 )
-from kilin.tools.generate_paper_summary.tool import (
+from .tool import (
     REFERENCE_LAYOUT,
     TEMPLATE_CHOOSE,
     SummarySettings,
@@ -86,6 +92,7 @@ from kilin.tools.generate_paper_summary.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "LIMIT_TOLERANCE",
     "REFERENCE_LAYOUT",
     "SECTION_SOURCE_CHOICES",
@@ -121,3 +128,16 @@ __all__ = [
     "templates_answer",
     "workspace_resources",
 ]
+
+
+PLUGIN = Tool(
+    name="generate_paper_summary",
+    summary="Summarize one paper with a report template, check the structure, "
+    "and save the Markdown to outputs/.",
+    parse_settings=parse_settings,
+    run=run,
+    routing=routing,
+    workspace_resources=workspace_resources,
+    version="1.0.0",
+    api_version=1,
+)

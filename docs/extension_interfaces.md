@@ -7,15 +7,15 @@ loading arbitrary Python code mentioned in a project JSON. A new reader,
 project type or registered tool must preserve provenance, settings and
 workspace ownership and must not require Qt in the core. This document
 explains the implemented extension points and where modification is needed;
-there is no general-purpose runtime plugin discovery service in this
-snapshot.
+bundled tool packages are discovered automatically through their descriptors.
+User-directory discovery and installation are not yet supported.
 
 | Extension | Registration / owner | Main invariant |
 | --- | --- | --- |
 | Project type | `kilin/project_types/<type_id>.json` read by `project_type.py` | Validate all intents, tools, sources and prompts before use. |
 | New source format | `sources/extensions/sources_<suffix>.py`, dispatched by `sources.py` | Return well-formed `SourceFile` / `SourceUnit` records with exact provenance. |
 | Code graph language | `retrievals/code_graph/extensions/` | Extract structural hints without executing source code. |
-| Built-in tool | `tools/<name>/` plus `tools/_registry.py` | Validate settings; honor `ToolRequest`, `ToolContext`, `ToolResult`. |
+| Built-in tool | `tools/<name>/__init__.py` exposing `PLUGIN` | Validate settings; honor `ToolRequest`, `ToolContext`, `ToolResult`. |
 | Tool workspace asset | Tool's `workspace_resources(settings)` and `project_layout.py` | Declare safe relative destinations, install in core, preserve user edits. |
 | Model backend | `chat.py`, `embeddings.py`, `runtime.py` | Maintain validated session, tokenizer and vector/generation contracts; not a JSON-only extension. |
 | Retrieval strategy | `retrievals/strategies/` and `rag.py` integration | Preserve chunk alignment, ranking and evidence coordinates; not dynamically registered today. |
@@ -103,13 +103,14 @@ entire pipeline supports its source formats or domain reasoning.
 ## Metadata contract for configurable settings
 
 Shared setting explanations belong to `kilin/settings_info.json`. Each
-registered tool must provide `settings_info.json` with one record per
+existing bundled tool provides `settings_info.json` with one record per
 normalized `SETTINGS` key from its `defaults.json`. Records have only
 `title`, `summary` and `description` and are served through KíLín's
 core `get_settings_info()` interface without importing the GUI. Values,
 validity and precedence remain owned by the existing settings parsers.
 The new metadata resource must be included in the tool package-data table
-and verified in wheel tests. See [configuration metadata](configuration.md#settings-information-explanations-not-configuration).
+and verified in wheel tests. A minimal plugin may omit help metadata. See
+[configuration metadata](configuration.md#settings-information-explanations-not-configuration).
 
 ## Source access by built-in tools
 
@@ -219,10 +220,12 @@ card representation, indexing and persistence. See
 *Figure: The tool registry, request/context contract, optional confirmation callbacks and answer persistence are explicitly owned interfaces.*
 
 The [standard tool layout](tool_packages.md#standard-tool-layout) specifies
-the package, configuration and resource files. `tools/_registry.py` pairs a
-canonical `TOOL_*` identifier with its parser, runner, optional `follows_up`
-or `follows_up_when` behavior, optional `routing` callback and optional
-`workspace_resources` callback. `routing(settings, project_root, others)`
+the package, configuration and resource files. The
+[public plugin API](PLUGIN_API.md) specifies the `Tool` descriptor exported
+as `PLUGIN` by each package. It declares its identity, versions, parser,
+runner, optional `follows_up` or `follows_up_when` behavior, optional
+`routing` callback and optional `workspace_resources` callback. The loader
+binds resources to the actual imported package. `routing(settings, project_root, others)`
 returns a `ToolRouting` (cues and router description) built from the
 project's own files, which `with_project_routing` adds to the intent before
 each question is routed (`generate_paper_summary` describes the project's
@@ -235,8 +238,9 @@ Implement an extension in this order:
    Document every owned default and supported request in its README.
 2. Reuse private shared services where semantics match; do not import an
    executable sibling tool to reuse its policy.
-3. Register the parser/runner and optional resources, then select the tool
-   in an intended project-type intent. Registration and selection differ.
+3. Export the descriptor as `PLUGIN` in the package initializer, then select
+   the tool in an intended project-type intent. Discovery is automatic;
+   registration and selection differ.
 4. Add deterministic tests under `tests/kilin/tools/<name>/test_tool.py`
    for parsing, invalid inputs, results, registry selection and optional
    resource declarations. Shared helpers have their own `_shared/` tests.
@@ -301,7 +305,8 @@ assuming reusable behavior.
 
 ## Workspace resources are declared, not blindly copied
 
-Register `workspace_resources(settings)` when a tool needs packaged files.
+Declare `workspace_resources(settings)` in the descriptor when a tool needs
+packaged files.
 It returns `WorkspaceResource` declarations; the tool does not install them.
 The [resource contract](project_workspaces.md#tool-resource-contract) owns
 package containment, safe destinations, conflict detection and preservation
@@ -353,7 +358,7 @@ an index file format.
 
 ## Tests and review checklist
 
-- Register explicitly; reject unknown tools/settings/intent references.
+- Declare the plugin explicitly; reject unknown tools/settings/intent references.
 - Validate function return types and source provenance; handle malformed
   source/LLM output without hidden retries.
 - Keep model access, source reading and filesystem work in core services.

@@ -48,7 +48,7 @@ from kilin.tools._defaults import (
     require_section,
     require_string,
 )
-from kilin.tools._shared.planning import CONFIRMATION_CHOICES
+from kilin.tools import CONFIRMATION_CHOICES
 
 from kilin.tools._model_calls import (
     ModelCallSettings,

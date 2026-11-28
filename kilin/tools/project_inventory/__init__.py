@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -30,7 +34,9 @@ True
 
 """
 
-from kilin.tools.project_inventory.tool import (
+from kilin.tools import Tool
+
+from .tool import (
     InventorySettings,
     file_types_in,
     parse_settings,
@@ -38,8 +44,20 @@ from kilin.tools.project_inventory.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "InventorySettings",
     "file_types_in",
     "parse_settings",
     "run",
 ]
+
+
+PLUGIN = Tool(
+    name="project_inventory",
+    summary="Count and list the project's files by type and folder, with "
+    "which have searchable text.",
+    parse_settings=parse_settings,
+    run=run,
+    version="1.0.0",
+    api_version=1,
+)

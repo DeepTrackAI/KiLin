@@ -64,11 +64,11 @@ import re
 from time import perf_counter
 from typing import Final, Literal, TypeAlias
 
-from kilin.tools._shared.model_results import partial_result
+from kilin.tools import partial_result
 from kilin._model_completion import IncompleteModelResponse
 from kilin.retrievals.document_reading import estimate_tokens
-from kilin.tools.batch_classify import _configuration as _config
-from kilin.tools._contract import (
+from . import _configuration as _config
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -76,7 +76,7 @@ from kilin.tools._contract import (
     check_int,
     reject_unknown,
 )
-from kilin.tools._shared.planning import (
+from kilin.tools import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,

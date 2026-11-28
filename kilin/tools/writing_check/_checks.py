@@ -67,8 +67,8 @@ from dataclasses import dataclass, field
 import re
 from typing import Final
 
-from kilin.tools.writing_check import _configuration as _config
-from kilin.tools.writing_check._document import Document, Paragraph
+from . import _configuration as _config
+from ._document import Document, Paragraph
 
 __all__ = [
     "LEVEL_CONSISTENCY",

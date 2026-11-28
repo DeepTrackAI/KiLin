@@ -59,6 +59,7 @@ __all__ = [
     "ModelCallSettings",
     "ThinkingPolicy",
     "load_model_call_settings",
+    "load_optional_model_call_settings",
 ]
 
 ThinkingPolicy: TypeAlias = Literal["inherit", "on", "off"]
@@ -135,3 +136,33 @@ def load_model_call_settings(path: Path) -> ModelCallSettings:
     data = require_section(load_tool_defaults(path), "MODEL_CALLS", where)
     require_keys(data, {"THINKING"}, where)
     return ModelCallSettings(thinking=require_string(data, "THINKING", where))
+
+
+@lru_cache(maxsize=None)
+def load_optional_model_call_settings(path: Path) -> ModelCallSettings:
+    """Resolve a tool policy, inheriting when no policy is declared.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Path to the tool-owned ``defaults.json``.
+
+    Returns
+    -------
+    ModelCallSettings
+        Validated declared policy, or the session-inheritance policy.
+
+    Raises
+    ------
+    ValueError
+        If a supplied defaults document or policy is invalid.
+    OSError
+        If a supplied defaults file cannot be read.
+
+    """
+
+    if not path.exists():
+        return ModelCallSettings()
+    if "MODEL_CALLS" not in load_tool_defaults(path):
+        return ModelCallSettings()
+    return load_model_call_settings(path)

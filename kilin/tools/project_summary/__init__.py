@@ -19,6 +19,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``PLUGIN``
+
+    Versioned descriptor discovered by the tool registry.
+
 - ``parse_settings`` and ``run``
 
     The registry entry points for this tool.
@@ -41,7 +45,9 @@ True
 
 """
 
-from kilin.tools.project_summary.tool import (
+from kilin.tools import Tool
+
+from .tool import (
     SHIPPED_TEMPLATES_DIR,
     TEMPLATE_CHOOSE,
     ProjectSummarySettings,
@@ -54,6 +60,7 @@ from kilin.tools.project_summary.tool import (
 )
 
 __all__ = [
+    "PLUGIN",
     "SHIPPED_TEMPLATES_DIR",
     "TEMPLATE_CHOOSE",
     "ProjectSummarySettings",
@@ -64,3 +71,17 @@ __all__ = [
     "run",
     "workspace_resources",
 ]
+
+
+PLUGIN = Tool(
+    name="project_summary",
+    summary="Write one report on all the documents of a project with a "
+    "project template, reading every document, and save it to "
+    "outputs/.",
+    parse_settings=parse_settings,
+    run=run,
+    routing=routing,
+    workspace_resources=workspace_resources,
+    version="1.0.0",
+    api_version=1,
+)

@@ -110,14 +110,14 @@ from pathlib import Path
 import re
 from typing import Final
 
-from kilin.tools._shared.model_results import partial_result
+from kilin.tools import partial_result
 from kilin._model_completion import IncompleteModelResponse
 from kilin.retrievals.document_reading import estimate_tokens, named_paths
 from kilin.tools._shared.choose_document import document_scope
-from kilin.tools.find_passages import _configuration as _config
+from . import _configuration as _config
 from kilin.tools._shared.model_results import selected_numbers
 from kilin.tools._shared.sentences import Sentence, split_sentences
-from kilin.tools._contract import (
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -130,7 +130,7 @@ from kilin.tools._shared.long_lists import (
     file_name,
     offer_export,
 )
-from kilin.tools._shared.planning import (
+from kilin.tools import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,

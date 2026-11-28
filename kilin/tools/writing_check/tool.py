@@ -69,7 +69,7 @@ from pathlib import Path
 import re
 from typing import Final
 
-from kilin.tools._contract import (
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -82,8 +82,8 @@ from kilin.tools._shared.model_results import (
     incomplete_notice,
     partial_result,
 )
-from kilin.tools._shared.outputs import save_output_file
-from kilin.tools._shared.planning import (
+from kilin.tools import save_output_file
+from kilin.tools import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
@@ -91,25 +91,25 @@ from kilin.tools._shared.planning import (
     ToolPlan,
     confirm_plan,
 )
-from kilin.tools._shared.source_access import (
+from kilin.tools import (
     selected_paths,
     selected_source_file,
 )
-from kilin.tools.writing_check import _configuration as _config
-from kilin.tools.writing_check._checks import (
+from . import _configuration as _config
+from ._checks import (
     LEVEL_CONSISTENCY,
     LEVEL_GRAMMAR,
     LEVEL_STYLE,
     Finding,
     check_document,
 )
-from kilin.tools.writing_check._document import (
+from ._document import (
     LATEX_SUFFIXES,
     MARKDOWN_SUFFIXES,
     Document,
     read_document,
 )
-from kilin.tools.writing_check._followup import (
+from ._followup import (
     ShownFinding,
     option_rejection,
     parse_options,
@@ -118,14 +118,14 @@ from kilin.tools.writing_check._followup import (
     shown_findings,
     target_text,
 )
-from kilin.tools.writing_check._review import (
+from ._review import (
     CONTEXT_QUOTED,
     Dropped,
     document_brief,
     document_context,
     review_paragraph,
 )
-from kilin.tools.writing_check._scope import (
+from ._scope import (
     Scope,
     ScopeProblem,
     choose_scope,

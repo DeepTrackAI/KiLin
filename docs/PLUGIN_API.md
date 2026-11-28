@@ -10,10 +10,10 @@ of the wrong type or an unsupported generation are rejected. An incompatible
 contract change requires a new API generation. Additions must preserve
 existing documented behavior within a generation.
 
-The current registry still registers only bundled tools. Defining a descriptor
-does not install or activate it. User-folder discovery and installation are
-not yet supported. Tool versions default to `1.0.0` for the bundled migration;
-new descriptors should declare their individual version and API explicitly.
+The current registry automatically discovers only bundled tool packages.
+Defining a descriptor outside the distribution does not install or activate it. User-folder discovery and installation are
+not yet supported. Each bundled descriptor declares its individual version and API explicitly.
+New descriptors should do the same.
 
 Tool Python code is trusted, in-process code. An API check establishes
 compatibility, not safety. The supplied services and filesystem helpers
@@ -30,7 +30,6 @@ signatures and attribute documentation.
 from dataclasses import dataclass
 
 from kilin.tools import (
-    PLUGIN_API_VERSION,
     Tool,
     ToolContext,
     ToolRequest,
@@ -64,15 +63,18 @@ PLUGIN = Tool(
     name="repeat_question",
     summary="Repeat a question a specified number of times.",
     version="1.0.0",
-    api_version=PLUGIN_API_VERSION,
+    api_version=1,
     parse_settings=parse_settings,
     run=run,
 )
 ```
 
-This is an executable descriptor example, not an installed tool. During the
-bundled-only stage the central registry still owns registration and packaged
-resource resolution. The descriptor has the following fields:
+Place this example in `kilin/tools/repeat_question/__init__.py` to include it
+in a development distribution. Discovery requires no central registry edit.
+The descriptor name must match the package directory and match
+`[a-z][a-z0-9_]*`. Declare the API generation the code implements as a literal
+integer, not the current host constant: otherwise an incompatible future host
+could appear compatible. The descriptor has the following fields:
 
 | Field | Contract |
 | --- | --- |
@@ -94,8 +96,13 @@ unknown keys, inappropriate types and out-of-range values. The supported
 helpers are `reject_unknown`, `check_bool`, `check_int`, and `check_choice`.
 Project-type intent values and workspace overrides are validated by the same
 parser. Do not treat a required but missing setting as a successful default.
-The current bundled tools own `defaults.json` and `settings_info.json`; the
-existing resource and model-call requirements still apply. See
+Bundled tools retain their `defaults.json` and `settings_info.json`. A minimal
+plugin may omit either file. If `defaults.json` declares `SETTINGS`, registration
+validates those defaults with the parser and checks dataclass/JSON compatibility.
+Required settings without declared defaults are validated when configured.
+An absent model-call policy inherits the active session; a supplied policy
+must be valid. Missing help returns an empty mapping. Malformed supplied help
+is rejected by the metadata interface, not by tool execution. See
 [tool packages](tool_packages.md) and [configuration](configuration.md).
 
 ## Execution context and data records
@@ -196,8 +203,12 @@ it does not search arbitrary folders or accept symlink traversal. Handle an
 absent `source_root` explicitly. These helpers are not a security sandbox.
 `save_output_file(project_root, name, text)` writes a text output under a safe,
 unique filename in the workspace's outputs folder without overwriting an
-existing file. The core validates and copies declared `WorkspaceResource`
-files when creating a workspace. Refer to the
+existing file. Use relative imports for package-local code and locate owned assets relative
+to `Path(__file__).parent`. The loader binds the actual package directory, not
+a path claimed by the descriptor. Registered tools expose `resource_root`;
+`model_calls` and `internal_defaults` resolve against it. These properties
+require a registered descriptor. The core validates and copies declared
+`WorkspaceResource` files when creating a workspace. Refer to the
 [workspace contract](project_workspaces.md) for ownership and safe publication.
 
 ## Catalog access and initialization
@@ -207,7 +218,10 @@ tool definitions. `kilin.tools.tool_choices()` returns available identifiers
 in their established order. `kilin.project_type_ids()` returns the project
 catalog's identifiers. Catalog queries initialize the needed definitions on
 first use; ordinary contract imports do not. The bundled registry is created
-once per process after a successful compatibility check. A failed initialization
+once per process after successful descriptor and defaults checks. Public
+package directories with `__init__.py` are discovered automatically; private
+packages are excluded. Existing iteration and chooser orderings are retained,
+with additional bundled names appended alphabetically. A failed initialization
 is not published; recursive initialization fails explicitly. Project-type
 validation remains strict and uses the existing cached directory loader.
 
@@ -228,7 +242,9 @@ The authoring boundary has fresh-interpreter tests in
 [the plugin API regression suite](../tests/test__plugin_api.py). They check
 import order, absence of catalog reads, one-time concurrent construction,
 failed and recursive initialization, identifier validation, and descriptor
-execution using the public interface.
+execution using the public interface. The
+[registration tests](../tests/kilin/tools/test__registration.py) additionally
+check bundled descriptors, optional resources, discovery and relocation.
 
 For a stacked feature branch, run both complete repository test runners
 (`python -m pytest` and `python -m tests`) against the exact head. Run the

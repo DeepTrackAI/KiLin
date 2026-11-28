@@ -50,10 +50,10 @@ from kilin.tools._defaults import (
     require_string,
     require_words,
 )
-from kilin.tools._shared.planning import CONFIRMATION_CHOICES
+from kilin.tools import CONFIRMATION_CHOICES
 from kilin.tools._shared.references import ReferenceLayout
-from kilin.tools.reference_check._citations import CitationRules
-from kilin.tools.reference_check._matching import MatchRules
+from ._citations import CitationRules
+from ._matching import MatchRules
 
 from kilin.tools._model_calls import (
     ModelCallSettings,

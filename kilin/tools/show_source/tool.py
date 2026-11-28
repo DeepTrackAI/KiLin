@@ -83,12 +83,12 @@ from pathlib import Path
 import re
 from typing import Final
 
-from kilin.tools._shared.model_results import partial_result
+from kilin.tools import partial_result
 from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
-from kilin.tools.show_source import _configuration as _config
+from . import _configuration as _config
 from kilin.tools._shared.earlier_turns import newest_listed
-from kilin.tools._contract import (
+from kilin.tools import (
     EarlierTurn,
     ToolContext,
     ToolRequest,

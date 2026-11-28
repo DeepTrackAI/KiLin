@@ -73,7 +73,7 @@ from typing import Final
 from kilin._model_completion import strip_thinking
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
-from kilin.tools._contract import (
+from kilin.tools import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -82,8 +82,8 @@ from kilin.tools._contract import (
     check_int,
     reject_unknown,
 )
-from kilin.tools._shared.outputs import save_output_file
-from kilin.tools._shared.planning import (
+from kilin.tools import save_output_file
+from kilin.tools import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
@@ -104,14 +104,14 @@ from kilin.tools._shared.report_templates import (
     section_problem,
     template_names,
 )
-from kilin.tools.project_summary import _configuration as _config
-from kilin.tools.project_summary._documents import (
+from . import _configuration as _config
+from ._documents import (
     ProjectDocument,
     document_excerpt,
     project_documents,
     query_words,
 )
-from kilin.tools.project_summary._mapping import (
+from ._mapping import (
     CHECK_NO,
     CHECK_UNCLEAR,
     CHECK_YES,
@@ -122,7 +122,7 @@ from kilin.tools.project_summary._mapping import (
     template_texts,
     topics,
 )
-from kilin.tools.project_summary._reduce import (
+from ._reduce import (
     agreement_problem,
     chosen_numbers,
     citation_problem,

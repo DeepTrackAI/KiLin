@@ -81,14 +81,14 @@ from typing import Final
 
 from kilin._model_completion import IncompleteModelResponse, strip_thinking
 from kilin.tools._shared.author_year import find_markers
-from kilin.tools.writing_check._checks import (
+from ._checks import (
     LEVEL_GRAMMAR,
     LEVEL_STYLE,
     Finding,
     Glossary,
     make_finding,
 )
-from kilin.tools.writing_check._document import Document
+from ._document import Document
 
 __all__ = [
     "CONTEXT_QUOTED",

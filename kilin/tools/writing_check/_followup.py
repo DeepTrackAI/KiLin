@@ -61,9 +61,9 @@ import re
 from typing import Final
 
 from kilin._model_completion import strip_thinking
-from kilin.tools.writing_check._checks import Glossary, sentences
-from kilin.tools.writing_check._document import Document
-from kilin.tools.writing_check._review import locate, meaning_change
+from ._checks import Glossary, sentences
+from ._document import Document
+from ._review import locate, meaning_change
 
 __all__ = [
     "ShownFinding",
